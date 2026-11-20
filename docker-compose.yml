@@ -1,0 +1,164 @@
+# Velydock – production stack.
+#
+#   ./scripts/install.sh        creates .env with random secrets
+#   docker compose up -d        starts everything
+#
+# Services: traefik (TLS, routing) · velydock (UI + API) · keycloak (sign-in) · postgres.
+# Only traefik publishes ports. Bring your own reverse proxy by removing "proxy" from
+# COMPOSE_PROFILES in .env (see docs/deployment.md).
+
+name: velydock
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  traefik:
+    <<: *hardening
+    image: traefik:v3.7.19
+    profiles: ["proxy"]
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+      - --global.sendanonymoususage=false
+    environment:
+      VELYDOCK_HOST: ${VELYDOCK_HOST:?set VELYDOCK_HOST in .env}
+      KEYCLOAK_HOST: ${KEYCLOAK_HOST:?set KEYCLOAK_HOST in .env}
+      SANDBOX_HOST: ${SANDBOX_HOST:?set SANDBOX_HOST in .env}
+      KEYCLOAK_REALM: velydock
+      # Empty: Traefik serves its self-signed default certificate (local testing only).
+      TLS_RESOLVER: ${TLS_RESOLVER-letsencrypt}
+    ports:
+      - "${HTTP_BIND:-0.0.0.0:80}:80"
+      - "${HTTPS_BIND:-0.0.0.0:443}:443"
+    volumes:
+      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-acme:/acme
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    depends_on:
+      - velydock
+      - keycloak
+    networks: [edge]
+
+  velydock:
+    <<: *hardening
+    image: ${VELYDOCK_IMAGE:-ghcr.io/admincave/velydock:latest}
+    environment:
+      VELYDOCK_PUBLIC_URL: https://${VELYDOCK_HOST}${PUBLIC_PORT_SUFFIX:-}
+      VELYDOCK_SANDBOX_URL: https://${SANDBOX_HOST}${PUBLIC_PORT_SUFFIX:-}
+      VELYDOCK_KEYCLOAK_PUBLIC_URL: https://${KEYCLOAK_HOST}${PUBLIC_PORT_SUFFIX:-}
+      VELYDOCK_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      VELYDOCK_BACKCHANNEL_BASE_URL: http://velydock:8000
+      VELYDOCK_DATABASE_URL: postgresql+asyncpg://velydock:${VELYDOCK_DB_PASSWORD:?}@postgres:5432/velydock
+      VELYDOCK_SECRET_KEY: ${VELYDOCK_SECRET_KEY:?}
+      VELYDOCK_OIDC_CLIENT_SECRET: ${VELYDOCK_OIDC_CLIENT_SECRET:?}
+      VELYDOCK_IDP_ADMIN_CLIENT_SECRET: ${VELYDOCK_IDP_ADMIN_CLIENT_SECRET:?}
+      VELYDOCK_IDP_BOOTSTRAP_CLIENT_ID: velydock-bootstrap
+      VELYDOCK_IDP_BOOTSTRAP_CLIENT_SECRET: ${KEYCLOAK_BOOTSTRAP_SECRET:-}
+      VELYDOCK_REQUIRE_ADMIN_2FA: ${VELYDOCK_REQUIRE_ADMIN_2FA:-true}
+      VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE: ${VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE:-false}
+      VELYDOCK_SESSION_IDLE_MINUTES: ${VELYDOCK_SESSION_IDLE_MINUTES:-120}
+      VELYDOCK_SESSION_MAX_HOURS: ${VELYDOCK_SESSION_MAX_HOURS:-12}
+      VELYDOCK_LOG_LEVEL: ${VELYDOCK_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks: [edge, internal]
+
+  # Copies the Velydock login theme into the volume Keycloak reads its themes from.
+  theme:
+    image: ${VELYDOCK_IMAGE:-ghcr.io/admincave/velydock:latest}
+    restart: "no"
+    command: ["install-theme", "/themes"]
+    user: "0:0"
+    volumes:
+      - keycloak-themes:/themes
+    network_mode: none
+
+  keycloak:
+    <<: *hardening
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: ["start"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
+      # Public address as browsers see it. Velydock itself talks to Keycloak over the internal
+      # network; tokens still carry the public address as issuer.
+      KC_HOSTNAME: https://${KEYCLOAK_HOST}${PUBLIC_PORT_SUFFIX:-}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      # Used once, on the very first start, to let Velydock create its realm.
+      KC_BOOTSTRAP_ADMIN_CLIENT_ID: velydock-bootstrap
+      KC_BOOTSTRAP_ADMIN_CLIENT_SECRET: ${KEYCLOAK_BOOTSTRAP_SECRET:-}
+    healthcheck:
+      # The image ships neither curl nor wget; talk HTTP to the management port with bash.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    volumes:
+      - keycloak-themes:/opt/keycloak/themes:ro
+    cap_drop: [ALL]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      theme:
+        condition: service_completed_successfully
+        # A new Velydock version may bring a new login theme; Keycloak only reads themes at start.
+        restart: true
+    networks: [edge, internal]
+
+  postgres:
+    <<: *hardening
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      VELYDOCK_DB_PASSWORD: ${VELYDOCK_DB_PASSWORD:?}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d velydock"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./deploy/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    networks: [internal]
+
+volumes:
+  postgres-data:
+  keycloak-themes:
+  traefik-acme:
+
+networks:
+  edge:
+  internal:
+    internal: true

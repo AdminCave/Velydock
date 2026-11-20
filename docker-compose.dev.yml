@@ -1,0 +1,32 @@
+# Local development and test stack. Use together with the main file:
+#
+#   docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Differences to production: the image is built from this checkout, TLS uses Traefik's
+# self-signed certificate, and PostgreSQL and Keycloak are reachable on localhost for tests.
+
+services:
+  traefik:
+    ports: !override
+      - "127.0.0.1:${DEV_HTTPS_PORT:-8443}:443"
+
+  velydock:
+    build: .
+    image: velydock:dev
+    environment:
+      VELYDOCK_ENVIRONMENT: development
+
+  theme:
+    build: .
+    image: velydock:dev
+
+  keycloak:
+    ports:
+      - "127.0.0.1:${DEV_KEYCLOAK_PORT:-18080}:8080"
+
+  postgres:
+    ports:
+      - "127.0.0.1:${DEV_POSTGRES_PORT:-15432}:5432"
+    networks: !override
+      - internal
+      - edge

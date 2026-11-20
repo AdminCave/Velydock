@@ -1,0 +1,51 @@
+# Traefik routing for Velydock (file provider – no access to the Docker socket needed).
+# Values come from the environment of the traefik container; see docker-compose.yml.
+
+http:
+  routers:
+    velydock:
+      # The main host and the sandbox host end up in the same container, which tells them apart
+      # by host name. Custom apps are only ever served on the sandbox host.
+      rule: "Host(`{{ env "VELYDOCK_HOST" }}`) || Host(`{{ env "SANDBOX_HOST" }}`)"
+      entryPoints: [websecure]
+      service: velydock
+      middlewares: [compress]
+      tls:
+{{- if env "TLS_RESOLVER" }}
+        certResolver: {{ env "TLS_RESOLVER" }}
+{{- else }}
+        {}
+{{- end }}
+
+    keycloak:
+      # Only what browsers need: the Velydock realm and static resources. The admin console, the
+      # admin API and the master realm stay unreachable from outside.
+      rule: "Host(`{{ env "KEYCLOAK_HOST" }}`) && (PathPrefix(`/realms/{{ env "KEYCLOAK_REALM" }}/`) || PathPrefix(`/resources/`))"
+      entryPoints: [websecure]
+      service: keycloak
+      middlewares: [compress]
+      tls:
+{{- if env "TLS_RESOLVER" }}
+        certResolver: {{ env "TLS_RESOLVER" }}
+{{- else }}
+        {}
+{{- end }}
+
+  middlewares:
+    compress:
+      compress: {}
+
+  services:
+    velydock:
+      loadBalancer:
+        servers:
+          - url: "http://velydock:8000"
+    keycloak:
+      loadBalancer:
+        servers:
+          - url: "http://keycloak:8080"
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
