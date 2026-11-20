@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # The embeddability check fetches admin-supplied URLs; private networks stay off-limits by default.
     embed_check_allow_private: bool = False
 
+    # Addresses and networks whose X-Forwarded-For entries are believed. The default covers the
+    # reverse proxy in front of Velydock wherever it sits in a private or container network; a
+    # client address that such a proxy merely passes on is not believed.
+    trusted_proxies: str = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+
     static_dir: str = "/app/static"
     theme_source_dir: str = "/opt/velydock/keycloak-theme"
 
@@ -60,7 +65,9 @@ class Settings(BaseSettings):
         parts = urlsplit(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
             raise ValueError("must be an absolute http(s) URL")
-        return value
+        # Host names are case-insensitive, but browsers send them in lower case (Origin header)
+        # and everything here is compared exactly.
+        return parts._replace(netloc=parts.netloc.lower()).geturl()
 
     @model_validator(mode="after")
     def _check_hosts(self) -> Settings:

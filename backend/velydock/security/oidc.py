@@ -172,7 +172,10 @@ class OidcClient:
             raise OidcError(f"token endpoint unreachable: {exc}") from exc
         if resp.status_code != 200:
             raise OidcError(f"code exchange rejected ({resp.status_code})")
-        id_token = resp.json().get("id_token")
+        try:
+            id_token = resp.json().get("id_token")
+        except (ValueError, AttributeError) as exc:
+            raise OidcError("token response is not a JSON object") from exc
         if not isinstance(id_token, str):
             raise OidcError("token response has no id_token")
         return id_token
@@ -195,7 +198,9 @@ class OidcClient:
                 leeway=_CLOCK_LEEWAY,
                 options={"require": required},
             )
-        except jwt.PyJWTError as exc:
+        except (jwt.PyJWTError, TypeError, ValueError) as exc:
+            # TypeError/ValueError: the header names an algorithm that does not fit the key
+            # (an RSA key id with "ES256"); PyJWT reports that outside its own exception tree.
             raise OidcError(f"token rejected: {exc}") from exc
         aud = claims.get("aud")
         if isinstance(aud, list) and len(aud) > 1 and claims.get("azp") != self._settings.oidc_client_id:
@@ -204,7 +209,7 @@ class OidcClient:
 
     async def validate_id_token(self, id_token: str, *, nonce: str) -> IdTokenClaims:
         claims = await self._decode(id_token, ["exp", "iat", "iss", "aud", "sub"])
-        if not secrets.compare_digest(str(claims.get("nonce", "")), nonce):
+        if not secrets.compare_digest(str(claims.get("nonce", "")).encode(), nonce.encode()):
             raise OidcError("nonce mismatch")
         username = claims.get("preferred_username")
         if not isinstance(username, str) or not username:
@@ -236,7 +241,7 @@ class OidcClient:
             raise OidcError("logout token names neither subject nor session")
         return LogoutClaims(sub=sub, sid=sid)
 
-    async def end_session_url(self, *, id_token_hint: str, post_logout_redirect_uri: str) -> str:
+    async def end_session_url(self, *, id_token_hint: str | None, post_logout_redirect_uri: str) -> str:
         meta = await self.metadata()
         params = {
             "client_id": self._settings.oidc_client_id,

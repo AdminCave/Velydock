@@ -29,6 +29,14 @@ class IdpNotFound(IdpError):
     pass
 
 
+class IdpInvalid(IdpError):
+    """The provider's own validation refused a value (``field`` is our name of the field)."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 @dataclass(frozen=True)
 class SmtpConfig:
     host: str = ""
@@ -81,6 +89,12 @@ class IdentityProvider(Protocol):
     async def update_organization(self, org_id: str, *, name: str, enabled: bool) -> None: ...
 
     async def delete_organization(self, org_id: str) -> None: ...
+
+    async def find_organization(self, alias: str) -> str | None:
+        """The id of the organization with this alias, if there is one."""
+        ...
+
+    async def list_organization_members(self, org_id: str) -> set[str]: ...
 
     async def add_organization_member(self, org_id: str, idp_id: str) -> None: ...
 

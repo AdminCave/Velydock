@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -27,7 +27,7 @@ from velydock.errors import install_error_handlers
 from velydock.idp.base import IdentityProvider
 from velydock.idp.keycloak import KeycloakIdp
 from velydock.sandbox import create_sandbox_app
-from velydock.security.http import SecurityHeadersMiddleware
+from velydock.security.http import RequestGuardMiddleware, SecurityHeadersMiddleware
 from velydock.security.oidc import OidcClient
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,9 @@ class HostDispatch:
                 break
         if not self._by_port:
             host = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+            # "sandbox.example.com." is the same host; a proxy matching it must not get the
+            # main application under the sandbox name.
+            host = host.rstrip(".")
         return host == self._sandbox
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -82,7 +85,9 @@ def create_main_app(
         title="Velydock API",
         version=__version__,
         lifespan=lifespan,
-        docs_url="/api/docs" if settings.environment != "production" else None,
+        # No interactive documentation page: it would need scripts from a CDN, which the
+        # Content Security Policy rightly blocks. The description itself is available as JSON.
+        docs_url=None,
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
@@ -91,9 +96,8 @@ def create_main_app(
     app.state.idp = idp
     app.state.oidc = oidc
     install_error_handlers(app)
-    app.add_middleware(SecurityHeadersMiddleware, settings=settings)
 
-    @app.get("/api/health", include_in_schema=False)
+    @app.api_route("/api/health", methods=["GET", "HEAD"], include_in_schema=False)
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
@@ -116,13 +120,20 @@ def create_main_app(
         if (static / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=static / "assets"), name="assets")
 
-        @app.get("/{path:path}", include_in_schema=False)
-        def spa(path: str, request: Request) -> Response:
+        root = static.resolve()
+
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+        def spa(path: str) -> Response:
             # Runs in the thread pool (plain def): it touches the file system.
             # Real files (favicon, theme bootstrap script) are served as they are; every other
             # path is a client-side route and gets the application shell.
-            candidate = (static / path).resolve()
-            if path and candidate.is_file() and static.resolve() in candidate.parents:
+            try:
+                candidate = (static / path).resolve()
+                is_file = bool(path) and candidate.is_file() and root in candidate.parents
+            except (OSError, ValueError):
+                # Over-long or otherwise impossible file names are simply not files.
+                is_file = False
+            if is_file:
                 return FileResponse(candidate)
             return FileResponse(index, headers={"Cache-Control": "no-cache"})
     else:
@@ -140,5 +151,7 @@ def create_app(
     settings = settings or get_settings()
     if not engine_initialized():
         init_engine(settings.database_url)
-    main = create_main_app(settings, idp=idp, oidc=oidc)
-    return HostDispatch(main, create_sandbox_app(settings), settings)
+    # The security headers wrap the whole main application, so they are also on the answer to
+    # an unexpected error. The request guard comes first for both applications.
+    main = SecurityHeadersMiddleware(create_main_app(settings, idp=idp, oidc=oidc), settings)
+    return RequestGuardMiddleware(HostDispatch(main, create_sandbox_app(settings), settings))

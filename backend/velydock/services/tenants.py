@@ -74,31 +74,46 @@ async def create_tenant(
 ) -> TenantOut:
     async with system_scope(db):
         await _ensure_free(db, slug=data.slug, name=data.name)
+        created_here = True
         try:
-            org_id = await idp.create_organization(name=data.name, alias=data.slug)
+            try:
+                org_id = await idp.create_organization(name=data.name, alias=data.slug)
+            except IdpConflict:
+                # No tenant uses this short name (checked above), so an organization with this
+                # alias is left over from an attempt that failed halfway. Take it over instead
+                # of blocking the name forever - without the members it may still have.
+                leftover = await idp.find_organization(data.slug)
+                if leftover is None:
+                    raise
+                for member in await idp.list_organization_members(leftover):
+                    await idp.remove_organization_member(leftover, member)
+                await idp.update_organization(leftover, name=data.name, enabled=True)
+                org_id, created_here = leftover, False
         except IdpError as exc:
             raise _idp_failure(exc) from exc
         try:
             tenant = Tenant(slug=data.slug, name=data.name, idp_org_id=org_id)
             db.add(tenant)
             await db.flush()
+            await audit.record(
+                db,
+                principal,
+                "tenant.create",
+                target_type="tenant",
+                target_id=tenant.id,
+                target_label=tenant.name,
+                tenant_id=None,
+            )
+            await db.refresh(tenant)
+            out = await _out(db, tenant)
         except Exception:
-            try:
-                await idp.delete_organization(org_id)
-            except IdpError:
-                log.exception("could not roll back organization %s", org_id)
+            if created_here:
+                try:
+                    await idp.delete_organization(org_id)
+                except IdpError:
+                    log.exception("could not roll back organization %s", org_id)
             raise
-        await audit.record(
-            db,
-            principal,
-            "tenant.create",
-            target_type="tenant",
-            target_id=tenant.id,
-            target_label=tenant.name,
-            tenant_id=None,
-        )
-        await db.refresh(tenant)
-        return await _out(db, tenant)
+        return out
 
 
 async def _home_of_system_admin(db: AsyncSession, tenant_id: uuid.UUID) -> bool:

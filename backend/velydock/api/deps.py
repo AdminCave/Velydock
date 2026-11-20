@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from velydock.config import Settings
 from velydock.db import Scope, get_sessionmaker, set_rls_context
@@ -137,7 +138,12 @@ async def get_principal(
     verify_csrf(request, settings)
 
     tenant, role = await resolve_tenant(db, user, session)
-    await db.flush()
+    try:
+        await db.flush()
+    except StaleDataError:
+        # The session was removed while this request was looking at it (a sign-out, an
+        # administrator ending the sessions): it is over, which is not an error of ours.
+        raise not_authenticated() from None
     # From here on the request sees only its own tenant.
     await set_rls_context(
         db,
@@ -157,10 +163,30 @@ async def get_principal(
     )
 
 
+TENANT_HEADER = "x-velydock-tenant"
+
+
+def verify_expected_tenant(request: Request, principal: Principal) -> None:
+    """Refuse a request that was meant for another organization than the session's active one.
+
+    The active organization belongs to the session, not to a browser tab. If it changes in one
+    tab (or on the server), another tab still shows the old organization, and a change saved
+    there would silently land in the new one. The client therefore states which organization
+    it is showing. The header never selects an organization - it can only make a request fail.
+    """
+    expected = request.headers.get(TENANT_HEADER)
+    if expected is None:
+        return
+    actual = str(principal.tenant.id) if principal.tenant else ""
+    if expected.strip().lower() != actual:
+        raise ApiError(409, "tenant_changed", "The active organization of this session has changed.")
+
+
 def require(*permissions: Permission) -> Callable[..., Awaitable[Principal]]:
     """Dependency: the principal must hold all given permissions in the active tenant."""
 
-    async def dependency(principal: Principal = Depends(get_principal)) -> Principal:
+    async def dependency(request: Request, principal: Principal = Depends(get_principal)) -> Principal:
+        verify_expected_tenant(request, principal)
         if any(p not in principal.permissions for p in permissions):
             raise forbidden()
         return principal

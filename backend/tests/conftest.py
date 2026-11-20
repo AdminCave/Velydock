@@ -16,7 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import asyncpg
 import httpx
@@ -71,6 +71,17 @@ def _admin_parts() -> tuple[str, int]:
     return parts.hostname or "127.0.0.1", parts.port or 5432
 
 
+def unavailable(reason: str) -> NoReturn:
+    """A service the tests need is missing: skip on a developer machine, fail in CI.
+
+    A skipped suite looks like a passed one. In CI that would silently switch off the database
+    and Keycloak tests - tenant isolation among them - the day someone changes a port.
+    """
+    if os.environ.get("CI"):
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
     """Create a throw-away database owned by a role without superuser or BYPASSRLS rights."""
@@ -99,7 +110,7 @@ def database_url() -> Iterator[str]:
     try:
         asyncio.run(create())
     except (OSError, asyncpg.PostgresError) as exc:
-        pytest.skip(
+        unavailable(
             f"PostgreSQL for tests not reachable ({exc}); start the dev stack or set VELYDOCK_TEST_PG_ADMIN_URL"
         )
     host, port = _admin_parts()

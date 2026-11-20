@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from velydock.api.auth import safe_return_path
 from velydock.config import Settings
-from velydock.schemas import TenantCreate, UserCreate
+from velydock.schemas import AppCreate, GroupCreate, SystemSettingsUpdate, TenantCreate, UserCreate
 from velydock.security.tokens import TokenError, hash_token, sign, temporary_password, verify
 
 SECRET = "s" * 40
@@ -67,7 +67,7 @@ class TestInputValidation:
     def user(self, **fields: object) -> UserCreate:
         return UserCreate(**{"username": "anna", "first_name": "Anna", "last_name": "A", **fields})  # type: ignore[arg-type]
 
-    @pytest.mark.parametrize("username", ["anna", "anna.admin", "a1", "user_01", "x-y"])
+    @pytest.mark.parametrize("username", ["anna", "anna.admin", "a12", "user_01", "x-y"])
     def test_valid_usernames(self, username: str) -> None:
         assert self.user(username=username).username == username
 
@@ -76,11 +76,49 @@ class TestInputValidation:
 
     @pytest.mark.parametrize(
         "username",
-        ["", "a", ".anna", "anna.", "an na", "anna@acme", "<script>", "a" * 65, "anna/../root", "ünicode"],
+        # "ab": Keycloak refuses user names with fewer than three characters.
+        [
+            "",
+            "a",
+            "ab",
+            ".anna",
+            "anna.",
+            "an na",
+            "anna@acme",
+            "<script>",
+            "a" * 65,
+            "anna/../root",
+            "ünicode",
+        ],
     )
     def test_invalid_usernames(self, username: str) -> None:
         with pytest.raises(ValidationError):
             self.user(username=username)
+
+    @pytest.mark.parametrize(
+        "name", ["Anna", "Müller-Lüdenscheidt", "O'Brien", "Jean Luc", "Åsa", "D. J.", "李"]
+    )
+    def test_person_names(self, name: str) -> None:
+        assert self.user(first_name=name, last_name=name).first_name == name
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Müller (extern)", "A/B", "Tom & Jerry", "<b>x</b>", "a;b", "x=y", "50%", "tab\there", "a\x00b"],
+    )
+    def test_person_names_keycloak_would_refuse(self, name: str) -> None:
+        with pytest.raises(ValidationError):
+            self.user(first_name=name)
+        with pytest.raises(ValidationError):
+            self.user(last_name=name)
+
+    def test_nul_characters_are_refused_anywhere(self) -> None:
+        """PostgreSQL cannot store them; they must not get as far as a statement."""
+        with pytest.raises(ValidationError):
+            GroupCreate(name="Büro\x00")
+        with pytest.raises(ValidationError):
+            AppCreate(name="Notizen", type="custom", custom_html="<p>a\x00b</p>")
+        with pytest.raises(ValidationError):
+            SystemSettingsUpdate(smtp={"host": "mail\x00.example"})  # nested
 
     @pytest.mark.parametrize("email", ["anna@acme.example", "A.B+c@Sub.Example.ORG"])
     def test_valid_emails_are_normalised(self, email: str) -> None:
@@ -110,6 +148,19 @@ class TestInputValidation:
     def test_invalid_or_reserved_slugs(self, slug: str) -> None:
         with pytest.raises(ValidationError):
             TenantCreate(slug=slug, name="Acme")
+
+
+class TestSetupAdminCommand:
+    def test_invalid_input_ends_with_a_message_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from velydock import cli
+
+        monkeypatch.setattr(cli, "get_settings", lambda: Settings(**TestConfiguration.base))  # type: ignore[arg-type]
+        monkeypatch.setattr(cli, "_configure_logging", lambda level: None)
+        assert cli.main(["setup-admin", "--username", "ab"]) == 1
+        captured = capsys.readouterr()
+        assert captured.err.startswith("error: username:") and "Traceback" not in captured.err
 
 
 class TestReturnPath:

@@ -11,6 +11,8 @@ Velydock's real callback handler. The realm is deleted afterwards.
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -26,16 +28,17 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 import jwt
 import pytest
+from sqlalchemy import select
 
-from tests.conftest import World
+from tests.conftest import World, unavailable
 from tests.support.fake_idp import FakeIdp
 from tests.support.mini_idp import MiniIdp
 from velydock.app import create_app
 from velydock.config import Settings
 from velydock.db import Scope, transaction
-from velydock.idp.base import IdpConflict, IdpNotFound, SmtpConfig
+from velydock.idp.base import IdpConflict, IdpInvalid, IdpNotFound, SmtpConfig
 from velydock.idp.keycloak import PASSWORD_POLICY, SERVICE_ACCOUNT_ROLES, KeycloakIdp, ensure_realm
-from velydock.models import Role, User
+from velydock.models import AuditLog, Role, Tenant, User
 from velydock.security.oidc import OidcClient
 
 pytestmark = pytest.mark.keycloak
@@ -72,7 +75,7 @@ async def kc_settings(database_url: str) -> AsyncIterator[Settings]:
         try:
             await http.get(f"{INTERNAL}/realms/master/.well-known/openid-configuration")
         except httpx.HTTPError as exc:
-            pytest.skip(f"Keycloak not reachable at {INTERNAL} ({exc})")
+            unavailable(f"Keycloak not reachable at {INTERNAL} ({exc})")
         await ensure_realm(settings, http)
         yield settings
         token = (
@@ -712,3 +715,264 @@ class TestOrganizationClaim:
         foreign = await organizations(f"openid organization:{globex}")
         assert not foreign, foreign
         assert await organizations("openid") is None
+
+
+async def admin_put(settings: Settings, http: httpx.AsyncClient, path: str, body: dict[str, object]) -> None:
+    token = await service_token(settings, http)
+    response = await http.put(
+        f"{INTERNAL}/admin/realms/{settings.keycloak_realm}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        json=body,
+    )
+    response.raise_for_status()
+
+
+class TestWhatOperatorsChangeInKeycloak:
+    async def test_a_stricter_password_policy_survives_the_next_start(
+        self, kc_settings: Settings, http: httpx.AsyncClient
+    ) -> None:
+        """The documentation tells operators to raise the policy in Keycloak. Provisioning runs
+        at every start of Velydock and must leave their choice alone."""
+        stricter = "length(16) and upperCase(1) and digits(1) and notUsername and notEmail"
+        await admin_put(kc_settings, http, "", {"passwordPolicy": stricter, "failureFactor": 3})
+        try:
+            await ensure_realm(kc_settings, http)
+            realm = (await admin_get(kc_settings, http, "")).json()
+            assert realm["passwordPolicy"] == stricter
+            assert realm["failureFactor"] == 3
+            # What Velydock depends on is still enforced.
+            assert realm["bruteForceProtected"] is True and realm["registrationAllowed"] is False
+        finally:
+            await admin_put(kc_settings, http, "", {"passwordPolicy": PASSWORD_POLICY, "failureFactor": 8})
+
+
+class TestRulesVelydockMirrors:
+    """Velydock validates input before it calls Keycloak. Where Keycloak is stricter, the user
+    would get "the identity provider rejected the request" instead of a marked field."""
+
+    async def test_the_rule_for_names_is_keycloaks_rule(self, idp: KeycloakIdp) -> None:
+        import string
+
+        from pydantic import ValidationError
+
+        from velydock.schemas import UserCreate
+
+        disagreements: list[str] = []
+        for char in [*string.punctuation, "§", "ä", "é", " "]:
+            name = f"A{char}b"
+            try:
+                UserCreate(username="probe", first_name=name, last_name=name)
+                ours = True
+            except ValidationError:
+                ours = False
+            try:
+                created = await idp.create_user(
+                    username=unique("name"),
+                    email=None,
+                    first_name=name,
+                    last_name=name,
+                    temporary_password=PASSWORD + secrets.token_hex(2),
+                )
+                await idp.delete_user(created)
+                theirs = True
+            except IdpInvalid:
+                theirs = False
+            if ours != theirs:
+                disagreements.append(
+                    f"{char!r}: Velydock {'accepts' if ours else 'refuses'}, Keycloak does not"
+                )
+        assert disagreements == []
+
+    async def test_user_names_need_three_characters(self, idp: KeycloakIdp) -> None:
+        from pydantic import ValidationError
+
+        from velydock.schemas import UserCreate
+
+        short = "z" + secrets.choice("abcdefghijkmnpqrstuvwxyz")
+        with pytest.raises(IdpInvalid) as refused:
+            await idp.create_user(
+                username=short, email=None, first_name="Zoe", last_name="Q", temporary_password=PASSWORD
+            )
+        assert refused.value.field == "username"
+        with pytest.raises(ValidationError):
+            UserCreate(username=short, first_name="Zoe", last_name="Q")
+        three = "z" + secrets.token_hex(1)
+        created = await idp.create_user(
+            username=three, email=None, first_name="Zoe", last_name="Q", temporary_password=PASSWORD
+        )
+        await idp.delete_user(created)
+        assert UserCreate(username=three, first_name="Zoe", last_name="Q").username == three
+
+
+class TestSetupAdmin:
+    """``velydock setup-admin`` against the real identity provider."""
+
+    @pytest.fixture
+    def arguments(self, monkeypatch: pytest.MonkeyPatch) -> argparse.Namespace:
+        from velydock import cli
+
+        async def keep_engine() -> None:
+            return None
+
+        # The command closes the database engine when it is done; the tests share one.
+        monkeypatch.setattr(cli, "dispose_engine", keep_engine)
+        slug = unique("main")
+        return argparse.Namespace(
+            username=unique("admin"),
+            email=None,
+            first_name="System",
+            last_name="Administrator",
+            tenant_name=f"Haupt {slug}",
+            tenant_slug=slug,
+        )
+
+    async def state(self) -> tuple[list[Tenant], list[User], list[AuditLog]]:
+        async with transaction(Scope.SYSTEM) as db:
+            return (
+                list((await db.execute(select(Tenant))).scalars()),
+                list((await db.execute(select(User))).scalars()),
+                list((await db.execute(select(AuditLog).order_by(AuditLog.id))).scalars()),
+            )
+
+    async def test_creates_the_first_administrator_and_records_it(
+        self, kc_settings: Settings, idp: KeycloakIdp, clean_db: None, arguments: argparse.Namespace
+    ) -> None:
+        from velydock import cli
+
+        assert await cli.setup_admin(kc_settings, arguments) == 0
+        tenants, users, audit = await self.state()
+        assert [t.slug for t in tenants] == [arguments.tenant_slug]
+        assert [(u.username, u.is_system_admin) for u in users] == [(arguments.username, True)]
+        assert await idp.list_organization_members(str(tenants[0].idp_org_id)) == {users[0].idp_id}
+        granted = [a for a in audit if a.action == "user.set_system_admin"]
+        assert len(granted) == 1 and granted[0].target_label == arguments.username
+        assert granted[0].tenant_id is None, "it belongs in the system log"
+
+        # Run again for the same account: access is restored, and that is recorded too.
+        assert await cli.setup_admin(kc_settings, arguments) == 0
+        _, users, audit = await self.state()
+        assert len(users) == 1
+        assert len([a for a in audit if a.action == "user.set_system_admin"]) == 2
+
+    async def test_a_failed_first_attempt_does_not_block_the_next_one(
+        self,
+        kc_settings: Settings,
+        idp: KeycloakIdp,
+        clean_db: None,
+        arguments: argparse.Namespace,
+    ) -> None:
+        """A failed run used to leave the organization behind in Keycloak while the database
+        rolled back - and every later run then failed on the existing organization."""
+        from velydock import cli
+
+        # What a half-failed run leaves behind: the organization exists, the tenant does not.
+        leftover = await idp.create_organization(name=arguments.tenant_name, alias=arguments.tenant_slug)
+        assert await cli.setup_admin(kc_settings, arguments) == 0
+        tenants, users, _ = await self.state()
+        assert [t.idp_org_id for t in tenants] == [leftover]
+        assert [u.username for u in users] == [arguments.username]
+
+
+MAIL_API = os.environ.get("VELYDOCK_TEST_MAIL_URL", "http://127.0.0.1:18025")
+# How Keycloak reaches the mail catcher of the development stack.
+MAIL_SMTP_HOST = os.environ.get("VELYDOCK_TEST_MAIL_SMTP_HOST", "mail")
+
+
+class TestInvitationEmail:
+    """The link with which a new user sets the first password - sent through a real SMTP server
+    (the mail catcher of the development stack) and followed like the recipient would."""
+
+    @pytest.fixture
+    async def mail(self, idp: KeycloakIdp, http: httpx.AsyncClient) -> AsyncIterator[None]:
+        try:
+            (await http.get(f"{MAIL_API}/api/v1/info")).raise_for_status()
+        except httpx.HTTPError as exc:
+            unavailable(
+                f"mail catcher not reachable at {MAIL_API} ({exc}); start the dev stack's 'mail' service"
+            )
+        await idp.set_smtp(
+            SmtpConfig(
+                host=MAIL_SMTP_HOST,
+                port=1025,
+                from_address="velydock@velydock.test",
+                from_name="Velydock",
+                encryption="none",
+            )
+        )
+        yield
+        await idp.set_smtp(SmtpConfig())
+
+    async def received(self, http: httpx.AsyncClient, address: str) -> str:
+        """The text of the e-mail sent to ``address`` (waits for it)."""
+        for _ in range(40):
+            found = (await http.get(f"{MAIL_API}/api/v1/search", params={"query": f"to:{address}"})).json()
+            if found["messages"]:
+                message = await http.get(f"{MAIL_API}/api/v1/message/{found['messages'][0]['ID']}")
+                return str(message.json()["Text"])
+            await asyncio.sleep(0.25)
+        raise AssertionError(f"no e-mail for {address} arrived")
+
+    async def test_the_invited_user_sets_a_password_through_the_link_and_signs_in(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, mail: None
+    ) -> None:
+        from velydock.models import Membership, Tenant
+
+        slug = unique("mailtenant")
+        org_id = await idp.create_organization(name=f"Tenant {slug}", alias=slug)
+        async with transaction(Scope.SYSTEM) as db:
+            tenant = Tenant(slug=slug, name=f"Tenant {slug}", idp_org_id=org_id)
+            db.add(tenant)
+            await db.flush()
+            admin = User(
+                idp_id=unique("admin-not-in-keycloak"), username=unique("chef"), home_tenant_id=tenant.id
+            )
+            db.add(admin)
+            await db.flush()
+            db.add(Membership(tenant_id=tenant.id, user_id=admin.id, role=Role.TENANT_ADMIN.value))
+            await db.flush()
+            await db.refresh(admin)
+
+        name = unique("neu")
+        address = f"{name}@acme.example"
+        async with await stack.login(admin) as client:
+            created = await client.post(
+                "/api/v1/admin/users",
+                json={
+                    "username": name,
+                    "first_name": "Nora",
+                    "last_name": "Neuling",
+                    "email": address,
+                    "send_email": True,
+                },
+            )
+        assert created.status_code == 201, created.text
+        assert created.json()["email_sent"] is True and created.json()["temporary_password"] is None
+
+        text = await self.received(http, address)
+        link = re.search(r"https?://\S+/login-actions/action-token\?\S+", text)
+        assert link, text
+        # The recipient opens the link: Keycloak names what is about to happen, then asks for
+        # the new password.
+        browser = Browser(http)
+        await browser.follow(await browser.request("GET", link.group(0)), stop_at="https://dock.test")
+        assert browser.page_id() == "login-info", browser.page[:800]
+        proceed = re.search(r'<a[^>]*href="([^"]+)"', browser.page.split("<main", 1)[-1])
+        assert proceed, "the page offers a link to go on"
+        target = urljoin(PUBLIC, html.unescape(proceed.group(1)))
+        await browser.follow(await browser.request("GET", target), stop_at="https://dock.test")
+        assert browser.page_id() == "login-login-update-password", browser.page[:800]
+        done = await browser.submit(
+            {"password-new": PASSWORD, "password-confirm": PASSWORD}, stop_at="https://dock.test"
+        )
+        assert done.status_code == 200 and browser.page_id() == "login-info", browser.page[:800]
+        # From there a link leads back to Velydock (the address registered for the client).
+        assert 'href="https://dock.test/"' in browser.page
+
+        # The password works, and the one-time password of a plain creation was never needed.
+        async with stack.client() as client:
+            redirect = await sign_in_through_keycloak(stack, Browser(http), client, name)
+            assert redirect.status_code == 302, "signed in without any further required action"
+            assert redirect.headers["location"].startswith("https://dock.test/api/auth/callback")
+            assert (await client.get(redirect.headers["location"])).headers["location"] == "/"
+            me = (await client.get("/api/v1/me")).json()
+        assert me["user"]["username"] == name and me["user"]["email"] == address

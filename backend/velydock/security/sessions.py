@@ -7,11 +7,12 @@ All functions expect the caller to run in system scope.
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request, Response
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.config import Settings
@@ -26,7 +27,16 @@ def now() -> datetime:
 
 
 def client_ip(request: Request) -> str:
-    return request.client.host if request.client else ""
+    """The client address for the audit log and the session list, or "" if it is not an address.
+
+    Behind a proxy the value comes from ``X-Forwarded-For``; whatever arrives there must not
+    reach a database column unchecked.
+    """
+    host = request.client.host if request.client else ""
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return ""
 
 
 async def create_session(
@@ -59,7 +69,11 @@ async def create_session(
 
 
 async def resolve_session(db: AsyncSession, settings: Settings, cookie_value: str) -> AuthSession | None:
-    """Return the live session for a cookie value, or ``None`` (expired sessions are removed)."""
+    """Return the live session for a cookie value, or ``None``.
+
+    An expired row is not deleted here: the request is about to fail with 401 and its
+    transaction is rolled back. Expired rows are removed at the next sign-in (``purge_expired``).
+    """
     if not cookie_value or len(cookie_value) > 200:
         return None
     session = await db.get(AuthSession, hash_token(cookie_value))
@@ -68,11 +82,16 @@ async def resolve_session(db: AsyncSession, settings: Settings, cookie_value: st
     current = now()
     idle_deadline = session.last_seen_at + timedelta(minutes=settings.session_idle_minutes)
     if current >= session.expires_at or current >= idle_deadline:
-        await db.delete(session)
-        await db.flush()
         return None
     if current - session.last_seen_at >= _TOUCH_INTERVAL:
-        session.last_seen_at = current
+        # A plain UPDATE on purpose: if a sign-out removes the row at this very moment, it
+        # matches nothing instead of failing the request as a stale object would.
+        await db.execute(
+            update(AuthSession)
+            .where(AuthSession.id_hash == session.id_hash)
+            .values(last_seen_at=current)
+            .execution_options(synchronize_session=False)
+        )
     return session
 
 

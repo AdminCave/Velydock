@@ -9,18 +9,20 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from velydock.api.deps import Principal, get_db, get_idp, get_oidc, get_principal, get_settings
+from velydock.api.deps import get_db, get_idp, get_oidc, get_settings
 from velydock.config import Settings
-from velydock.db import Scope, set_rls_context, system_scope, transaction
+from velydock.db import Scope, set_rls_context, transaction
 from velydock.idp.base import IdentityProvider, IdpError
-from velydock.models import Membership, Role, User
+from velydock.models import AuthSession, Membership, Role, User
 from velydock.schemas import LogoutOut
 from velydock.security import sessions
+from velydock.security.http import verify_csrf
 from velydock.security.oidc import IdTokenClaims, OidcClient, OidcError, new_pkce_pair
-from velydock.security.tokens import TokenError, random_token, sign, verify
+from velydock.security.tokens import TokenError, hash_token, random_token, sign, verify
 from velydock.services import settings as settings_service
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,10 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _LOGIN_PURPOSE = "login-state"
 _LOGIN_TTL = 600
 _MAX_LOGOUT_BODY = 64 * 1024
+# Column sizes of the users table.
+_USERNAME_MAX = 150
+_EMAIL_MAX = 254
+_NAME_MAX = 100
 
 
 def safe_return_path(value: str | None) -> str:
@@ -98,46 +104,78 @@ async def login(
     return await _start_login(settings, oidc, safe_return_path(return_to))
 
 
+def _fit(value: str | None, limit: int) -> str:
+    """Token claims are not bound by our column sizes; cut instead of failing the sign-in."""
+    return (value or "").replace("\x00", "")[:limit]
+
+
 async def _find_or_provision(db: AsyncSession, claims: IdTokenClaims) -> User | None:
     """Map the authenticated identity to a Velydock user. Runs in system scope.
 
     Unknown identities (created directly in Keycloak or coming from a directory) are added on
     first sign-in without any organization; an administrator assigns them afterwards.
+    Returns ``None`` when the identity cannot be mapped without touching another account.
     """
+    username = claims.username.replace("\x00", "")
+    if not username or len(username) > _USERNAME_MAX:
+        return None
+    # An account without an e-mail address is normal (directories, accounts made in Keycloak).
+    email = _fit(claims.email, _EMAIL_MAX + 1) or None
+    if email is not None and len(email) > _EMAIL_MAX:
+        email = None
+    first_name = _fit(claims.first_name, _NAME_MAX)
+    last_name = _fit(claims.last_name, _NAME_MAX)
+
     user = (await db.execute(select(User).where(User.idp_id == claims.sub))).scalar_one_or_none()
     if user is None:
-        clash = await db.execute(
-            select(User.id).where(
-                (func.lower(User.username) == claims.username.lower())
-                | ((User.email.is_not(None)) & (func.lower(User.email) == (claims.email or "\x00").lower()))
-            )
-        )
-        if clash.first():
+        same_name = func.lower(User.username) == username.lower()
+        same = same_name if email is None else or_(same_name, func.lower(User.email) == email.lower())
+        if (await db.execute(select(User.id).where(same).limit(1))).first():
             # Same name, different identity: never link silently, that would hand over the
             # existing account's access.
             return None
         user = User(
-            idp_id=claims.sub,
-            username=claims.username,
-            email=claims.email,
-            first_name=claims.first_name,
-            last_name=claims.last_name,
+            idp_id=claims.sub, username=username, email=email, first_name=first_name, last_name=last_name
         )
-        db.add(user)
-        await db.flush()
+        try:
+            async with db.begin_nested():
+                db.add(user)
+                await db.flush()
+        except IntegrityError:
+            # A parallel first sign-in of the same identity won the race: use its row. Anything
+            # else that collides is a conflict like the one above.
+            return (await db.execute(select(User).where(User.idp_id == claims.sub))).scalar_one_or_none()
         return user
-    user.username = claims.username
-    user.first_name = claims.first_name or user.first_name
-    user.last_name = claims.last_name or user.last_name
-    if claims.email != user.email:
+
+    # A known identity: take over what Keycloak says, but never at the price of a failed
+    # sign-in. A name or address still held by another (stale) row stays as it was here.
+    if username.lower() != user.username.lower():
         taken = await db.execute(
-            select(User.id).where(
-                func.lower(User.email) == (claims.email or "\x00").lower(), User.id != user.id
-            )
+            select(User.id).where(func.lower(User.username) == username.lower(), User.id != user.id).limit(1)
+        )
+        if taken.first():
+            log.warning("user name of %s not updated: another account still holds it", user.id)
+        else:
+            user.username = username
+    else:
+        user.username = username
+    user.first_name = first_name or user.first_name
+    user.last_name = last_name or user.last_name
+    if email is None:
+        user.email = None
+    elif email != user.email:
+        taken = await db.execute(
+            select(User.id).where(func.lower(User.email) == email.lower(), User.id != user.id).limit(1)
         )
         if not taken.first():
-            user.email = claims.email
-    await db.flush()
+            user.email = email
+    try:
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        # Lost a race for the new name or address; keep the stored profile for this sign-in.
+        log.warning("profile of %s not updated from the token: conflict", user.id)
+        await db.refresh(user)
     return user
 
 
@@ -181,7 +219,8 @@ async def callback(
         return _login_failed(settings, "expired")
     if error or not code or not state:
         return _login_failed(settings, "cancelled")
-    if not secrets.compare_digest(state, str(pending.get("state", ""))):
+    # Compared as bytes: compare_digest refuses non-ASCII text, and ``state`` is client input.
+    if not secrets.compare_digest(state.encode(), str(pending.get("state", "")).encode()):
         return _login_failed(settings, "state")
 
     try:
@@ -235,16 +274,28 @@ async def callback(
 
 @router.post("/logout", response_model=LogoutOut)
 async def logout(
-    principal: Principal = Depends(get_principal),
+    request: Request,
     db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     oidc: OidcClient = Depends(get_oidc),
 ) -> Response:
-    """End the Velydock session and return the address that also ends the Keycloak session."""
-    id_token = principal.session.id_token
-    async with system_scope(db):
-        await sessions.delete_session(db, principal.session.id_hash)
+    """End the Velydock session and return the address that also ends the Keycloak session.
+
+    Deliberately works without a live session: someone who clicks "sign out" after the Velydock
+    session idled out still has a Keycloak session, and that is the one that must end. The row
+    is therefore looked up without the expiry check, and the answer is the same either way.
+    """
+    verify_csrf(request, settings)
+    id_token: str | None = None
+    cookie = request.cookies.get(settings.session_cookie, "")
+    if cookie and len(cookie) <= 200:
+        await set_rls_context(db, scope=Scope.SYSTEM)
+        row = await db.get(AuthSession, hash_token(cookie))
+        if row is not None:
+            id_token = row.id_token
+            await sessions.delete_session(db, row.id_hash)
     try:
+        # Without the token Keycloak asks the user to confirm, then ends its session all the same.
         redirect_url = await oidc.end_session_url(
             id_token_hint=id_token, post_logout_redirect_uri=f"{settings.public_url}/login?signed_out=1"
         )

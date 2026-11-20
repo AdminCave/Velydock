@@ -6,7 +6,6 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +23,7 @@ from velydock.schemas import (
     MembershipOut,
     MeOut,
     MeUser,
+    Model,
     ProfileUpdate,
     PublicInfo,
     SettingsUpdate,
@@ -192,7 +192,7 @@ async def workspace_apps(
     return [apps_service.workspace_view(app) for app in await apps_service.visible_apps(db, principal)]
 
 
-class LaunchIn(BaseModel):
+class LaunchIn(Model):
     theme: Literal["light", "dark"] = "light"
     language: Literal["de", "en"] = "de"
 

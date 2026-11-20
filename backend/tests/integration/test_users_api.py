@@ -161,7 +161,7 @@ class TestRoles:
             assert (await client.post("/api/v1/admin/users", json=NEW_USER)).status_code == 201
             for role in ("user_manager", "tenant_admin"):
                 response = await client.post(
-                    "/api/v1/admin/users", json={**NEW_USER, "username": "x1", "email": None, "role": role}
+                    "/api/v1/admin/users", json={**NEW_USER, "username": "xx1", "email": None, "role": role}
                 )
                 assert response.status_code == 403, role
 

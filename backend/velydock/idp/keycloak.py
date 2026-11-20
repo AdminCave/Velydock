@@ -13,7 +13,14 @@ from typing import Any
 import httpx
 
 from velydock.config import Settings
-from velydock.idp.base import IdpConflict, IdpError, IdpNotFound, IdpUnavailable, SmtpConfig
+from velydock.idp.base import (
+    IdpConflict,
+    IdpError,
+    IdpInvalid,
+    IdpNotFound,
+    IdpUnavailable,
+    SmtpConfig,
+)
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +109,9 @@ class _AdminApi:
             raise IdpConflict(field, message)
         if resp.status_code >= 500:
             raise IdpUnavailable(f"identity provider error {resp.status_code}: {message}")
+        refused = _invalid_field(resp)
+        if refused:
+            raise IdpInvalid(refused, f"identity provider refused {refused}: {message}")
         raise IdpError(f"identity provider rejected the request ({resp.status_code}): {message}")
 
     async def json(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -118,6 +128,33 @@ def _error_message(resp: httpx.Response) -> str:
             :300
         ]
     return str(data)[:300]
+
+
+# Keycloak's user-profile validation names the attribute it refused.
+_PROFILE_FIELDS = {
+    "username": "username",
+    "email": "email",
+    "firstName": "first_name",
+    "lastName": "last_name",
+}
+
+
+def _invalid_field(resp: httpx.Response) -> str | None:
+    if resp.status_code != 400:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # One refused attribute comes as {"field": …}, several as {"errors": [{"field": …}, …]}.
+    several = data.get("errors")
+    problems: list[Any] = several if isinstance(several, list) else [data]
+    for problem in problems:
+        if isinstance(problem, dict) and str(problem.get("field", "")) in _PROFILE_FIELDS:
+            return _PROFILE_FIELDS[str(problem["field"])]
+    return None
 
 
 def _created_id(resp: httpx.Response) -> str:
@@ -226,11 +263,10 @@ class KeycloakIdp:
         await self._api.request(
             "PUT",
             f"/users/{idp_id}/execute-actions-email",
-            params={
-                "lifespan": 3 * 24 * 3600,
-                "client_id": self._settings.oidc_client_id,
-                "redirect_uri": f"{self._settings.public_url}/",
-            },
+            # No redirect_uri: Keycloak only accepts registered ones, and the only registered
+            # address is the OIDC callback. With the client alone, the page after setting the
+            # password links back to Velydock (the client's base address).
+            params={"lifespan": 3 * 24 * 3600, "client_id": self._settings.oidc_client_id},
             json=["UPDATE_PASSWORD"],
         )
 
@@ -337,8 +373,17 @@ class KeycloakIdp:
 # ---------------------------------------------------------------------------------------------
 
 
+def realm_defaults() -> dict[str, Any]:
+    """Starting values, set once when the realm is created.
+
+    Operators may tighten them in Keycloak; they are not touched again, or every restart would
+    silently weaken what the operator chose.
+    """
+    return {"failureFactor": 8, "passwordPolicy": PASSWORD_POLICY}
+
+
 def realm_settings(settings: Settings) -> dict[str, Any]:
-    """Realm options Velydock owns and re-applies on every start."""
+    """Realm options Velydock depends on and re-applies on every start."""
     return {
         "enabled": True,
         "organizationsEnabled": True,
@@ -351,8 +396,6 @@ def realm_settings(settings: Settings) -> dict[str, Any]:
         "editUsernameAllowed": False,
         "rememberMe": False,
         "bruteForceProtected": True,
-        "failureFactor": 8,
-        "passwordPolicy": PASSWORD_POLICY,
         # Keep the single-sign-on session alive as long as a Velydock session can last, so apps
         # opened later in the day still sign in silently.
         "ssoSessionIdleTimeout": settings.session_max_hours * 3600,
@@ -494,7 +537,14 @@ async def ensure_realm(settings: Settings, http: httpx.AsyncClient) -> None:
         if resp.status_code == 404:
             log.info("creating Keycloak realm %s", realm)
             await master.request(
-                "POST", "", json={"realm": realm, "displayName": "Velydock", **realm_settings(settings)}
+                "POST",
+                "",
+                json={
+                    "realm": realm,
+                    "displayName": "Velydock",
+                    **realm_defaults(),
+                    **realm_settings(settings),
+                },
             )
         bootstrap_api = _AdminApi(http, realm_api, master_tokens)
         client_uuid = await _upsert_client(bootstrap_api, admin_client(settings))

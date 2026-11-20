@@ -81,7 +81,9 @@ async def update_system(
     async with system_scope(db):
         row = await db.get(SystemSetting, _KEY)
         values = dict(row.value) if row else {}
-        changed = data.model_dump(exclude_unset=True, exclude={"smtp"}, mode="json")
+        # An explicit null means "leave as it is", like a field that was not sent: none of
+        # these settings can be empty.
+        changed = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"smtp"}, mode="json")
         values.update(changed)
         if row is None:
             db.add(SystemSetting(key=_KEY, value=values))

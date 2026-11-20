@@ -910,6 +910,7 @@
         "type": "object"
       },
       "LaunchIn": {
+        "additionalProperties": false,
         "properties": {
           "language": {
             "default": "de",
@@ -2314,7 +2315,7 @@
   "paths": {
     "/api/auth/logout": {
       "post": {
-        "description": "End the Velydock session and return the address that also ends the Keycloak session.",
+        "description": "End the Velydock session and return the address that also ends the Keycloak session.\n\nDeliberately works without a live session: someone who clicks \"sign out\" after the Velydock\nsession idled out still has a Keycloak session, and that is the one that must end. The row\nis therefore looked up without the expiry check, and the answer is the same either way.",
         "operationId": "logout_api_auth_logout_post",
         "responses": {
           "200": {

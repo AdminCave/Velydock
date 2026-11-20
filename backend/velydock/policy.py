@@ -125,11 +125,12 @@ def can_manage_identity(actor: Actor, target: Target) -> bool:
 
 def can_assign_role(actor: Actor, target: Target, new_role: Role) -> bool:
     """Grant or change a membership role. Nobody raises anyone above their own rank."""
+    # Nobody changes their own role, system administrators included.
+    if actor.user_id == target.user_id:
+        return False
     if actor.is_system_admin:
         return True
     if Permission.ROLES_ASSIGN not in _actor_perms(actor):
-        return False
-    if actor.user_id == target.user_id:
         return False
     if not _outranks_or_equals(actor, target):
         return False

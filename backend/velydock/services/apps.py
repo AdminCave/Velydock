@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -67,13 +68,31 @@ def decode_icon(data_url: str) -> tuple[bytes, str]:
     return data, _detect_image(data, header[5:].lower())
 
 
+# A host name in its ASCII form. Underscores are tolerated: internal names often have them.
+_HOST_NAME = re.compile(
+    r"[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*\.?", re.IGNORECASE
+)
+
+
 def validate_url(url: str | None, app_type: AppType, settings: Settings) -> str | None:
     if app_type == AppType.CUSTOM:
         return None
     if not url:
         raise invalid("An address (URL) is required.", "url_required")
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    not_an_address = invalid("The address is not valid.", "url_invalid")
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in url):
+        raise not_an_address
+    try:
+        parts = urlsplit(url)
+        hostname = parts.hostname
+        # Both raise ValueError for what is not an address: a port that is no number, an empty
+        # label ("example..com"), an unclosed IPv6 bracket.
+        _ = parts.port
+        if hostname and ":" not in hostname and not _HOST_NAME.fullmatch(hostname.encode("idna").decode()):
+            raise not_an_address
+    except ValueError:
+        raise not_an_address from None
+    if parts.scheme not in ("http", "https") or not hostname:
         raise invalid("The address must start with https:// or http://.", "url_invalid")
     if parts.username or parts.password:
         raise invalid("The address must not contain credentials.", "url_invalid")

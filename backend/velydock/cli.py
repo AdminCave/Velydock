@@ -17,16 +17,19 @@ import time
 from pathlib import Path
 
 import httpx
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from velydock import __version__
 from velydock.config import Settings, get_settings
 from velydock.db import Scope, dispose_engine, transaction
+from velydock.errors import ApiError
 from velydock.idp.base import IdpError, IdpUnavailable
 from velydock.idp.keycloak import KeycloakIdp, ensure_realm, set_console_access
 from velydock.models import Membership, Role, Tenant, User
 from velydock.schemas import TenantCreate, UserCreate
 from velydock.security.tokens import temporary_password
+from velydock.services import audit
 from velydock.services import tenants as tenants_service
 
 log = logging.getLogger("velydock")
@@ -124,6 +127,7 @@ async def setup_admin(settings: Settings, args: argparse.Namespace) -> int:
                 await idp.set_temporary_password(existing.idp_id, password)
                 existing.active = True
                 existing.is_system_admin = True
+                user = existing
                 action = "System administrator access restored for"
             else:
                 tenant = (await db.execute(select(Tenant).order_by(Tenant.created_at))).scalars().first()
@@ -159,6 +163,17 @@ async def setup_admin(settings: Settings, args: argparse.Namespace) -> int:
                 if tenant.idp_org_id:
                     await idp.add_organization_member(tenant.idp_org_id, idp_id)
                 action = "System administrator created:"
+            # Granting the highest right belongs in the system log, also when it happens here.
+            await audit.record(
+                db,
+                None,
+                "user.set_system_admin",
+                target_type="user",
+                target_id=user.id,
+                target_label=user.username,
+                details={"is_system_admin": True, "via": "setup-admin", "password_reset": True},
+                tenant_id=None,
+            )
     await dispose_engine()
     print()
     print(f"  {action} {data.username}")
@@ -269,7 +284,7 @@ def serve(settings: Settings) -> None:
         host="0.0.0.0",  # noqa: S104 - inside the container; only the reverse proxy reaches it
         port=8000,
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        forwarded_allow_ips=settings.trusted_proxies,
         log_level=settings.log_level.lower(),
         access_log=settings.environment != "production",
     )
@@ -324,7 +339,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "setup-admin":
         try:
             return asyncio.run(setup_admin(settings, args))
-        except IdpError as exc:
+        except ValidationError as exc:
+            for problem in exc.errors():
+                print(f"error: {'.'.join(str(p) for p in problem['loc'])}: {problem['msg']}", file=sys.stderr)
+            return 1
+        except (IdpError, ApiError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
     if args.command == "keycloak-admin":

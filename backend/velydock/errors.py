@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -73,6 +74,18 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             _body("validation", "The request is invalid.", {"fields": fields}), status_code=422
         )
+
+    @app.exception_handler(DBAPIError)
+    async def _database(_: Request, exc: DBAPIError) -> JSONResponse:
+        # Two changes that got in each other's way (PostgreSQL ended one of them to resolve a
+        # deadlock, or could not serialize them). Nothing was changed; repeating the request works.
+        state = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        if state in ("40P01", "40001"):
+            return JSONResponse(
+                _body("try_again", "Another change happened at the same moment. Please try again."),
+                status_code=409,
+            )
+        raise exc
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_: Request, exc: StarletteHTTPException) -> JSONResponse:

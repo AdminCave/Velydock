@@ -1,6 +1,8 @@
-"""HTTP-level protections: CSRF check and security headers."""
+"""HTTP-level protections: CSRF check, security headers and limits on what a request may carry."""
 
 from __future__ import annotations
+
+import json
 
 from fastapi import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -84,3 +86,92 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+# The largest legitimate request is a custom app (HTML, CSS and JavaScript at their limits plus
+# an icon), a little over one megabyte as JSON.
+MAX_BODY_BYTES = 4 * 1024 * 1024
+
+
+class RequestGuardMiddleware:
+    """Turns away requests no legitimate client sends, before any handler reads them.
+
+    * Bodies over ``MAX_BODY_BYTES``: without a limit an anonymous client could make the process
+      buffer gigabytes, because bodies are read before authentication is checked.
+    * NUL bytes in path or query: PostgreSQL cannot store them, so they could only end in an error.
+    """
+
+    def __init__(self, app: ASGIApp, limit: int = MAX_BODY_BYTES) -> None:
+        self.app = app
+        self.limit = limit
+
+    @staticmethod
+    async def _refuse(send: Send, status: int, code: str, message: str) -> None:
+        body = json.dumps({"error": {"code": code, "message": message, "details": {}}}).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"cache-control", b"no-store"),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"connection", b"close"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if "\x00" in scope.get("path", "") or b"%00" in scope.get("query_string", b""):
+            await self._refuse(send, 400, "bad_request", "The address contains a NUL byte.")
+            return
+        declared = next((v for k, v in scope.get("headers", []) if k == b"content-length"), None)
+        if declared is not None:
+            try:
+                too_large = int(declared) > self.limit
+            except ValueError:
+                await self._refuse(send, 400, "bad_request", "Invalid Content-Length.")
+                return
+            if too_large:
+                await self._refuse(send, 413, "too_large", "The request is too large.")
+                return
+
+        # Without a declared length (chunked upload) the bytes are counted as they arrive. Past
+        # the limit the application is told the client went away, and whatever it answers is
+        # replaced by the refusal.
+        received = 0
+        exceeded = False
+        refused = False
+
+        async def counting_receive() -> Message:
+            nonlocal received, exceeded
+            if exceeded:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.limit:
+                    exceeded = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal refused
+            if not exceeded:
+                await send(message)
+            elif not refused:
+                refused = True
+                await self._refuse(send, 413, "too_large", "The request is too large.")
+
+        try:
+            await self.app(scope, counting_receive, guarded_send)
+        except Exception:
+            if not exceeded:
+                raise
+        if exceeded and not refused:
+            await self._refuse(send, 413, "too_large", "The request is too large.")

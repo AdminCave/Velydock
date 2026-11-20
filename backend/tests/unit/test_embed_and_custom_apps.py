@@ -71,6 +71,46 @@ class TestFramingHeaders:
         }
         assert verdict(headers) == EmbedStatus.OK
 
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            # Every policy must allow: one that forbids is enough, whatever comes after it.
+            [
+                ("Content-Security-Policy", "frame-ancestors 'none'"),
+                ("Content-Security-Policy", "frame-ancestors *"),
+            ],
+            [
+                ("Content-Security-Policy", "frame-ancestors *"),
+                ("Content-Security-Policy", "frame-ancestors 'none'"),
+            ],
+            # Two policies in one header, separated by a comma.
+            [("Content-Security-Policy", "frame-ancestors 'self', frame-ancestors *")],
+            # Within one policy the first directive counts; later repetitions are ignored.
+            [("Content-Security-Policy", "frame-ancestors 'none'; frame-ancestors *")],
+        ],
+    )
+    def test_several_policies_must_all_allow(self, headers: list[tuple[str, str]]) -> None:
+        assert verdict(headers) == EmbedStatus.BLOCKED
+
+    def test_a_policy_without_frame_ancestors_does_not_restrict(self) -> None:
+        headers = [
+            ("Content-Security-Policy", "default-src 'self'"),
+            ("Content-Security-Policy", f"frame-ancestors {ORIGIN}"),
+        ]
+        assert verdict(headers) == EmbedStatus.OK
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            [("X-Frame-Options", "SAMEORIGIN"), ("X-Frame-Options", "DENY")],
+            [("X-Frame-Options", "ALLOWALL, DENY")],
+            [("X-Frame-Options", "ALLOWALL"), ("X-Frame-Options", "SAMEORIGIN")],
+        ],
+    )
+    def test_every_x_frame_options_value_counts(self, headers: list[tuple[str, str]]) -> None:
+        # Same origin on purpose: SAMEORIGIN alone would allow, the second value must not be lost.
+        assert verdict(headers, target=f"{ORIGIN}/app") == EmbedStatus.BLOCKED
+
     def test_wildcard_does_not_match_the_bare_domain(self) -> None:
         result = evaluate_headers(
             httpx.Headers({"Content-Security-Policy": "frame-ancestors https://*.example.com"}),
@@ -221,6 +261,9 @@ class TestEmbedCheckOverHttp:
             "/self-only": (200, {"Content-Security-Policy": "frame-ancestors 'self'"}),
             "/login-redirect": (302, {"Location": "https://sso.example.org/auth"}),
             "/local-redirect": (302, {"Location": "/deny"}),
+            "/to-open": (301, {"Location": "open?x=1"}),
+            "/open?x=1": (200, {}),
+            "/loop": (302, {"Location": "/loop"}),
             "/error": (500, {"X-Frame-Options": "DENY"}),
         }
         seen: list[tuple[str, str]] = []
@@ -232,6 +275,19 @@ class TestEmbedCheckOverHttp:
                 line.split(": ", 1)[1] for line in request.split("\r\n") if line.lower().startswith("host:")
             )
             seen.append((path, host))
+            if path == "/drip":
+                # Never finishes its headers, but keeps the connection busy: one byte at a time,
+                # each well within the read timeout.
+                writer.write(b"HTTP/1.1 200 X\r\nX-Slow: ")
+                try:
+                    for _ in range(200):
+                        writer.write(b"a")
+                        await writer.drain()
+                        await asyncio.sleep(0.2)
+                except (ConnectionError, asyncio.CancelledError):
+                    pass
+                writer.close()
+                return
             status, headers = responses.get(path, (404, {}))
             head = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
             # A large body that the check must not wait for.
@@ -262,11 +318,76 @@ class TestEmbedCheckOverHttp:
         await self.check(f"{site}/open")
         assert self.seen == [("/open", site.removeprefix("http://"))]
 
-    async def test_redirects_are_reported_not_followed(self, site: str) -> None:
+    async def test_a_redirect_to_another_host_is_reported_not_followed(self, site: str) -> None:
         status, http_status, detail = await self.check(f"{site}/login-redirect")
         assert (status, http_status) == (EmbedStatus.UNKNOWN, 302)
         assert "sso.example.org" in detail
         assert [path for path, _ in self.seen] == ["/login-redirect"], "no second request was made"
+
+    async def test_a_redirect_within_the_host_is_followed_to_the_page_that_is_shown(self, site: str) -> None:
+        """The usual case: the base address redirects to a sign-in page that forbids framing."""
+        status, http_status, _ = await self.check(f"{site}/local-redirect")
+        assert (status, http_status) == (EmbedStatus.BLOCKED, 200)
+        host = site.removeprefix("http://")
+        assert self.seen == [("/local-redirect", host), ("/deny", host)]
+
+    async def test_relative_redirect_targets_are_resolved(self, site: str) -> None:
+        assert (await self.check(f"{site}/to-open"))[:2] == (EmbedStatus.OK, 200)
+        assert [path for path, _ in self.seen] == ["/to-open", "/open?x=1"]
+
+    async def test_a_redirect_loop_ends(self, site: str) -> None:
+        status, http_status, detail = await self.check(f"{site}/loop")
+        assert (status, http_status) == (EmbedStatus.UNKNOWN, 302)
+        assert "too many redirects" in detail
+        assert len(self.seen) == 4, "the first request and three redirects, then it stops"
+
+    async def test_a_site_that_drips_its_headers_cannot_hold_the_check(
+        self, site: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        from velydock.services import embedcheck
+
+        monkeypatch.setattr(embedcheck, "_DEADLINE", 1.0)
+        started = time.monotonic()
+        status, http_status, detail = await self.check(f"{site}/drip")
+        assert (status, http_status) == (EmbedStatus.UNKNOWN, None)
+        assert "in time" in detail
+        assert time.monotonic() - started < 3, "ended by the overall deadline, not by the site"
+
+    async def test_only_a_few_checks_run_at_the_same_time(
+        self, site: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from velydock.services import embedcheck
+
+        monkeypatch.setattr(embedcheck, "_DEADLINE", 1.5)
+        monkeypatch.setattr(embedcheck, "_MAX_PARALLEL", 2)
+        slow = [asyncio.create_task(self.check(f"{site}/drip")) for _ in range(2)]
+        await asyncio.sleep(0.3)
+        status, _, detail = await self.check(f"{site}/open")
+        assert status == EmbedStatus.UNKNOWN and "too many checks" in detail
+        assert [path for path, _ in self.seen] == ["/drip", "/drip"], "the third check never left the server"
+        await asyncio.gather(*slow)
+        # The slots are free again afterwards.
+        assert (await self.check(f"{site}/open"))[0] == EmbedStatus.OK
+        assert embedcheck._running == 0
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example..com/",
+            "https://example.com:99999/",
+            "https://[::1/",
+            "https://exa mple.com/",
+            "https://b\u00fccher.invalid/",
+            "https://" + "a" * 70 + ".example/",
+        ],
+    )
+    async def test_addresses_that_are_none_end_in_a_verdict_not_an_error(self, url: str) -> None:
+        result = await check_embeddable(url, embedder_origin=ORIGIN, allow_private=False)
+        assert result.status == EmbedStatus.UNKNOWN
 
     async def test_private_addresses_stay_off_limits_by_default(self, site: str) -> None:
         result = await check_embeddable(f"{site}/open", embedder_origin=ORIGIN, allow_private=False)

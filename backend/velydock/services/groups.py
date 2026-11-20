@@ -9,8 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.api.deps import Principal
-from velydock.errors import conflict, invalid, not_found
-from velydock.models import AppGroupGrant, Group, GroupMember, Membership
+from velydock.errors import conflict, forbidden, invalid, not_found
+from velydock.models import AppGroupGrant, Group, GroupMember, Membership, Role, User
+from velydock.policy import Target, can_manage_membership
 from velydock.schemas import GroupCreate, GroupDetail, GroupOut, GroupUpdate
 from velydock.services import audit
 
@@ -80,6 +81,29 @@ async def _validated_member_ids(
     return unique
 
 
+async def _check_member_changes(
+    db: AsyncSession, principal: Principal, tenant_id: uuid.UUID, changed: set[uuid.UUID]
+) -> None:
+    """Group assignments are part of managing an account, so the rank rule applies here too.
+
+    Without it a user manager could change through a group what user administration refuses:
+    the groups of an administrator.
+    """
+    if not changed or principal.actor.is_system_admin:
+        return
+    rows = await db.execute(
+        select(User.id, User.is_system_admin, User.home_tenant_id, Membership.role)
+        .join(Membership, Membership.user_id == User.id)
+        .where(Membership.tenant_id == tenant_id, User.id.in_(changed))
+    )
+    for user_id, is_system_admin, home_tenant_id, role in rows.all():
+        target = Target(
+            user_id=user_id, is_system_admin=is_system_admin, home_tenant_id=home_tenant_id, role=Role(role)
+        )
+        if not can_manage_membership(principal.actor, target):
+            raise forbidden("You may not change the groups of an account that outranks you.")
+
+
 async def _set_members(db: AsyncSession, group: Group, user_ids: list[uuid.UUID]) -> None:
     await db.execute(
         delete(GroupMember).where(GroupMember.group_id == group.id, GroupMember.tenant_id == group.tenant_id)
@@ -108,6 +132,7 @@ async def get_group(db: AsyncSession, principal: Principal, group_id: uuid.UUID)
 async def create_group(db: AsyncSession, principal: Principal, data: GroupCreate) -> GroupDetail:
     tenant = principal.require_tenant()
     member_ids = await _validated_member_ids(db, tenant.id, data.member_ids)
+    await _check_member_changes(db, principal, tenant.id, set(member_ids))
     group = Group(tenant_id=tenant.id, name=data.name, description=data.description)
     db.add(group)
     try:
@@ -146,6 +171,8 @@ async def update_group(
         raise conflict("group_name_taken", "A group with this name already exists.") from exc
     if data.member_ids is not None:
         member_ids = await _validated_member_ids(db, tenant.id, data.member_ids)
+        current = set(await _member_ids(db, group))
+        await _check_member_changes(db, principal, tenant.id, current ^ set(member_ids))
         await _set_members(db, group, member_ids)
         details["members"] = len(member_ids)
     await audit.record(

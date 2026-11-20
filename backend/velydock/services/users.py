@@ -17,7 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from velydock.api.deps import Principal
 from velydock.db import system_scope
 from velydock.errors import ApiError, conflict, forbidden, idp_unavailable, invalid, not_found
-from velydock.idp.base import IdentityProvider, IdpConflict, IdpError, IdpNotFound, IdpUnavailable
+from velydock.idp.base import (
+    IdentityProvider,
+    IdpConflict,
+    IdpError,
+    IdpInvalid,
+    IdpNotFound,
+    IdpUnavailable,
+)
 from velydock.models import AppUserGrant, Group, GroupMember, Membership, Role, Tenant, User
 from velydock.policy import (
     Permission,
@@ -26,6 +33,7 @@ from velydock.policy import (
     can_create_with_role,
     can_manage_identity,
     can_manage_membership,
+    rank,
 )
 from velydock.schemas import (
     GroupRef,
@@ -58,10 +66,51 @@ def _idp_failure(exc: IdpError) -> ApiError:
         if exc.field == "email":
             return conflict("email_taken", "This e-mail address is already in use.")
         return conflict("username_taken", "This username is already in use.")
+    if isinstance(exc, IdpInvalid):
+        # A rule of the identity provider that our own validation does not know: still the
+        # user's input, so it is reported against the field like any other validation error.
+        return invalid(
+            "The identity provider does not accept this value.",
+            details={"fields": [{"field": exc.field, "message": "is not accepted by the identity provider"}]},
+        )
     log.warning("identity provider rejected a request: %s", exc)
     return ApiError(
         502, "idp_error", "The identity provider rejected the request.", {"reason": str(exc)[:200]}
     )
+
+
+_ELEVATED_ROLES = {Role.USER_MANAGER.value, Role.TENANT_ADMIN.value}
+# Advisory lock that puts changes to the set of active system administrators in a queue.
+_SYSTEM_ADMIN_LOCK = 0x56454C59
+
+
+async def _require_fresh_sign_in(db: AsyncSession, user: User) -> None:
+    """New administrative rights only take effect in a new session.
+
+    The second-factor rule is enforced at sign-in. A session that began as a plain member must
+    therefore not simply carry the new rights; ending it sends the account through sign-in again.
+    """
+    async with system_scope(db):
+        await sessions.delete_user_sessions(db, user.id)
+
+
+async def _ensure_a_system_admin_remains(db: AsyncSession, excluding: uuid.UUID) -> None:
+    """Refuse to take the last active system administrator away.
+
+    Counting and changing are two steps; the lock makes concurrent requests take them one after
+    the other, so two administrators cannot remove each other at the same moment.
+    """
+    async with system_scope(db):
+        await db.execute(select(func.pg_advisory_xact_lock(_SYSTEM_ADMIN_LOCK)))
+        remaining = (
+            await db.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.is_system_admin.is_(True), User.active.is_(True), User.id != excluding)
+            )
+        ).scalar_one()
+    if remaining == 0:
+        raise invalid("At least one active system administrator must remain.", "last_system_admin")
 
 
 def _target(user: User, membership: Membership | None) -> Target:
@@ -284,8 +333,26 @@ async def create_user(
         if data.send_email:
             await idp.send_password_setup_email(idp_id)
             email_sent = True
+        await audit.record(
+            db,
+            principal,
+            "user.create",
+            target_type="user",
+            target_id=user.id,
+            target_label=user.username,
+            details={"role": data.role.value, "groups": len(group_ids), "invited_by_email": email_sent},
+        )
+        await db.refresh(user)
+        await db.refresh(membership)
+        groups = await _groups_of(db, tenant.id, [user.id])
+        created = UserCreated(
+            user=_serialize(principal, user, membership, groups[user.id]),
+            temporary_password=None if email_sent else password,
+            email_sent=email_sent,
+        )
     except Exception as exc:
-        # Do not leave an orphaned account behind in the identity provider.
+        # Do not leave an orphaned account behind in the identity provider: its user name and
+        # address would be blocked for everyone while no such user is visible anywhere.
         try:
             await idp.delete_user(idp_id)
         except IdpError:
@@ -295,24 +362,7 @@ async def create_user(
         if isinstance(exc, IntegrityError):
             raise conflict("username_taken", "This username or e-mail address is already in use.") from exc
         raise
-
-    await audit.record(
-        db,
-        principal,
-        "user.create",
-        target_type="user",
-        target_id=user.id,
-        target_label=user.username,
-        details={"role": data.role.value, "groups": len(group_ids), "invited_by_email": email_sent},
-    )
-    await db.refresh(user)
-    await db.refresh(membership)
-    groups = await _groups_of(db, tenant.id, [user.id])
-    return UserCreated(
-        user=_serialize(principal, user, membership, groups[user.id]),
-        temporary_password=None if email_sent else password,
-        email_sent=email_sent,
-    )
+    return created
 
 
 async def update_user(
@@ -335,9 +385,13 @@ async def update_user(
     if active_changed and user.id == principal.user.id:
         raise invalid("You cannot deactivate your own account.", "self_action")
 
+    promoted = False
     if data.role is not None and data.role.value != membership.role:
         if not can_assign_role(actor, target, data.role):
             raise forbidden("You may not assign this role.")
+        promoted = data.role.value in _ELEVATED_ROLES and rank(is_system_admin=False, role=data.role) > rank(
+            is_system_admin=False, role=Role(membership.role)
+        )
         changes["role"] = {"from": membership.role, "to": data.role.value}
         membership.role = data.role.value
 
@@ -348,6 +402,10 @@ async def update_user(
         await _set_groups(db, tenant.id, user.id, group_ids)
         changes["groups"] = len(group_ids)
 
+    if active_changed and not data.active and user.is_system_admin:
+        await _ensure_a_system_admin_remains(db, user.id)
+
+    previous = (user.email, user.first_name, user.last_name)
     if identity_changed:
         if new_email != user.email:
             await _ensure_unique(db, username=None, email=new_email, exclude=user.id)
@@ -363,15 +421,32 @@ async def update_user(
         assert data.active is not None
         try:
             await idp.set_enabled(user.idp_id, data.active)
-            if not data.active:
-                await idp.logout_user(user.idp_id)
         except IdpError as exc:
+            if identity_changed:
+                # This request fails as a whole: take the profile change back, or the identity
+                # provider would keep values Velydock never stored.
+                try:
+                    await idp.update_user(
+                        user.idp_id, email=previous[0], first_name=previous[1], last_name=previous[2]
+                    )
+                except IdpError:
+                    log.exception("could not take back the profile change of %s", user.idp_id)
             raise _idp_failure(exc) from exc
         user.active = data.active
         changes["active"] = data.active
         if not data.active:
+            # The account is locked at the identity provider from here on. Ending its sessions
+            # there is the second step; if only that fails, the lock still has to be stored and
+            # the Velydock sessions still have to end, instead of reporting "nothing happened".
+            try:
+                await idp.logout_user(user.idp_id)
+            except IdpError:
+                log.exception("account %s is disabled, but its provider sessions could not be ended", user.id)
             async with system_scope(db):
                 await sessions.delete_user_sessions(db, user.id)
+
+    if promoted and user.id != principal.user.id:
+        await _require_fresh_sign_in(db, user)
 
     await db.flush()
     if changes or identity_changed:
@@ -393,6 +468,9 @@ async def reset_password(
 ) -> str:
     tenant = principal.require_tenant()
     user, membership = await _load(db, tenant.id, user_id)
+    if user.id == principal.user.id:
+        # The own password is changed on the account page of the identity provider.
+        raise invalid("You cannot reset your own password here.", "self_action")
     if not can_manage_identity(principal.actor, _target(user, membership)):
         raise forbidden("This account is managed by another organization or outranks you.")
     password = temporary_password()
@@ -419,6 +497,10 @@ async def end_sessions(
 ) -> None:
     tenant = principal.require_tenant()
     user, membership = await _load(db, tenant.id, user_id)
+    if user.id == principal.user.id:
+        # Ending the session this very request runs in would make the identity provider's
+        # logout notification wait for this request. Signing out does the same job.
+        raise invalid("Sign out to end your own sessions.", "self_action")
     if not can_manage_identity(principal.actor, _target(user, membership)):
         raise forbidden("This account is managed by another organization or outranks you.")
     try:
@@ -430,17 +512,6 @@ async def end_sessions(
     await audit.record(
         db, principal, "user.end_sessions", target_type="user", target_id=user.id, target_label=user.username
     )
-
-
-async def _remaining_system_admins(db: AsyncSession, excluding: uuid.UUID) -> int:
-    async with system_scope(db):
-        return (
-            await db.execute(
-                select(func.count())
-                .select_from(User)
-                .where(User.is_system_admin.is_(True), User.active.is_(True), User.id != excluding)
-            )
-        ).scalar_one()
 
 
 async def remove_user(
@@ -460,8 +531,8 @@ async def remove_user(
     if user.home_tenant_id == tenant.id:
         if not can_manage_identity(principal.actor, target):
             raise forbidden("This account outranks you.")
-        if user.is_system_admin and await _remaining_system_admins(db, user.id) == 0:
-            raise invalid("The last system administrator cannot be deleted.", "last_system_admin")
+        if user.is_system_admin:
+            await _ensure_a_system_admin_remains(db, user.id)
         try:
             await idp.delete_user(user.idp_id)
         except IdpError as exc:
@@ -572,9 +643,16 @@ async def add_member(
                 select(Membership).where(Membership.tenant_id == tenant_id, Membership.user_id == user_id)
             )
         ).scalar_one_or_none()
+        already = conflict("already_member", "The user already belongs to this organization.")
         if existing is not None:
-            raise conflict("already_member", "The user already belongs to this organization.")
-        db.add(Membership(tenant_id=tenant_id, user_id=user_id, role=role.value))
+            raise already
+        try:
+            async with db.begin_nested():
+                db.add(Membership(tenant_id=tenant_id, user_id=user_id, role=role.value))
+                await db.flush()
+        except IntegrityError:
+            # A parallel request added the same membership in the meantime.
+            raise already from None
         if user.home_tenant_id is None:
             user.home_tenant_id = tenant_id
         await db.flush()
@@ -593,6 +671,8 @@ async def add_member(
             details={"role": role.value},
             tenant_id=tenant_id,
         )
+        if role.value in _ELEVATED_ROLES and user.id != principal.user.id:
+            await _require_fresh_sign_in(db, user)
         return await _serialize_system(db, user)
 
 
@@ -606,15 +686,8 @@ async def set_system_admin(
         if not flag and user.id == principal.user.id:
             raise invalid("You cannot revoke your own system administrator role.", "self_action")
         if not flag and user.is_system_admin:
-            remaining = (
-                await db.execute(
-                    select(func.count())
-                    .select_from(User)
-                    .where(User.is_system_admin.is_(True), User.active.is_(True), User.id != user.id)
-                )
-            ).scalar_one()
-            if remaining == 0:
-                raise invalid("At least one system administrator must remain.", "last_system_admin")
+            await _ensure_a_system_admin_remains(db, user.id)
+        granted = flag and not user.is_system_admin
         user.is_system_admin = flag
         await db.flush()
         await audit.record(
@@ -627,4 +700,6 @@ async def set_system_admin(
             details={"is_system_admin": flag},
             tenant_id=None,
         )
+        if granted and user.id != principal.user.id:
+            await _require_fresh_sign_in(db, user)
         return await _serialize_system(db, user)

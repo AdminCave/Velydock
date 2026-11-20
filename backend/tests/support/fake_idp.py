@@ -130,6 +130,12 @@ class FakeIdp:
         self.organizations.pop(org_id, None)
         self.members.pop(org_id, None)
 
+    async def find_organization(self, alias: str) -> str | None:
+        return next((org_id for org_id, org in self.organizations.items() if org["alias"] == alias), None)
+
+    async def list_organization_members(self, org_id: str) -> set[str]:
+        return set(self.members.get(org_id, set()))
+
     async def add_organization_member(self, org_id: str, idp_id: str) -> None:
         self._maybe_fail("add_organization_member")
         self.members.setdefault(org_id, set()).add(idp_id)

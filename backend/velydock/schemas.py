@@ -7,16 +7,37 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from velydock.models import AppType, EmbedStatus, NavPosition, Role, Theme
 
-_USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$|^[a-z0-9]{2,3}$")
+# Three characters at least: Keycloak's user profile refuses shorter names.
+_USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$")
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s.]{2,}$")
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$")
 RESERVED_SLUGS = {"admin", "api", "system", "master", "velydock", "www"}
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+# Keycloak refuses these characters in first and last names (its "person name" rule keeps
+# markup out of e-mails and pages). Checked here, the user gets told which field is wrong.
+_PERSON_NAME_FORBIDDEN = re.compile(r'[<>&"$%!#?§;*~/\\|^=\[\]{}()\x00-\x1f\x7f]')
+
+
+def _person_name(value: str) -> str:
+    if _PERSON_NAME_FORBIDDEN.search(value):
+        raise ValueError('must not contain any of < > & " $ % ! # ? § ; * ~ / \\ | ^ = [ ] { } ( )')
+    return value
+
+
+PersonName = Annotated[Name, AfterValidator(_person_name)]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
 Language = Literal["de", "en"]
 
@@ -25,7 +46,7 @@ def _username(value: str) -> str:
     value = value.strip().lower()
     if not _USERNAME_RE.fullmatch(value):
         raise ValueError(
-            "must be 2-64 characters: lowercase letters, digits, dot, dash or underscore, "
+            "must be 3-64 characters: lowercase letters, digits, dot, dash or underscore, "
             "starting and ending with a letter or digit"
         )
     return value
@@ -46,8 +67,27 @@ Username = Annotated[str, AfterValidator(_username)]
 Email = Annotated[str | None, AfterValidator(_email)]
 
 
+def _has_nul(value: Any) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_has_nul(k) or _has_nul(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_nul(item) for item in value)
+    return False
+
+
 class Model(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_nul_characters(cls, data: Any) -> Any:
+        # PostgreSQL cannot store NUL in text. Refused here, it is a validation error for the
+        # client instead of a failed statement.
+        if isinstance(data, dict) and _has_nul(data):
+            raise ValueError("must not contain NUL characters")
+        return data
 
 
 # -- session / profile ---------------------------------------------------------------------------
@@ -107,8 +147,8 @@ class SettingsUpdate(Model):
 
 
 class ProfileUpdate(Model):
-    first_name: Name
-    last_name: Name
+    first_name: PersonName
+    last_name: PersonName
 
 
 class ActiveTenantUpdate(Model):
@@ -165,8 +205,8 @@ class UserPage(Model):
 class UserCreate(Model):
     username: Username
     email: Email = None
-    first_name: Name
-    last_name: Name
+    first_name: PersonName
+    last_name: PersonName
     role: Role = Role.MEMBER
     group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=200)
     send_email: bool = Field(
@@ -184,8 +224,8 @@ class UserCreated(Model):
 
 class UserUpdate(Model):
     email: Email = None
-    first_name: Name | None = None
-    last_name: Name | None = None
+    first_name: PersonName | None = None
+    last_name: PersonName | None = None
     role: Role | None = None
     group_ids: list[uuid.UUID] | None = Field(default=None, max_length=200)
     active: bool | None = None

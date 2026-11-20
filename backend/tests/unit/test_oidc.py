@@ -115,6 +115,21 @@ class TestIdToken:
         with pytest.raises(OidcError, match="disallowed algorithm"):
             await oidc.validate_id_token(unsigned, nonce=NONCE)
 
+    @pytest.mark.parametrize("algorithm", ["ES256", "ES384", "PS256"])
+    async def test_algorithm_that_does_not_fit_the_key(
+        self, oidc: OidcClient, idp: MiniIdp, algorithm: str
+    ) -> None:
+        """The key id is public. Naming it with another allowed algorithm must be a clean refusal."""
+
+        def b64(data: dict[str, Any]) -> str:
+            return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+
+        forged = (
+            f"{b64({'alg': algorithm, 'kid': idp.kid})}.{b64(idp.id_token_claims(ANNA, nonce=NONCE))}.AAAA"
+        )
+        with pytest.raises(OidcError):
+            await oidc.validate_id_token(forged, nonce=NONCE)
+
     async def test_hmac_signed_with_the_public_key(self, oidc: OidcClient, idp: MiniIdp) -> None:
         """Algorithm confusion: the public key must never be accepted as an HMAC secret."""
         public_pem = idp.key.public_key().public_bytes(
