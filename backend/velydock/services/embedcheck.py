@@ -131,22 +131,35 @@ async def check_embeddable(url: str, *, embedder_origin: str, allow_private: boo
     if not allow_private and not all(is_public_address(a) for a in addresses):
         return EmbedResult(EmbedStatus.UNKNOWN, "address is in a private network and was not checked")
 
-    address = addresses[0]
-    host_in_url = f"[{address}]" if ":" in address else address
     path = parts.path or "/"
-    pinned = f"{parts.scheme}://{host_in_url}:{port}{path}" + (f"?{parts.query}" if parts.query else "")
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False, trust_env=False) as client:
-            request = client.build_request(
-                "GET",
-                pinned,
-                headers={"Host": parts.netloc, "User-Agent": _USER_AGENT, "Accept": "text/html,*/*;q=0.5"},
-                extensions={"sni_hostname": parts.hostname},
-            )
-            response = await client.send(request, stream=True)
-            await response.aclose()
-    except httpx.HTTPError as exc:
-        return EmbedResult(EmbedStatus.UNKNOWN, f"address not reachable ({type(exc).__name__})")
+    response: httpx.Response | None = None
+    failure = "address not reachable"
+    # Try the vetted addresses in turn: a host often has an IPv6 address that cannot be reached
+    # from inside a container while its IPv4 address works.
+    for address in addresses[:4]:
+        host_in_url = f"[{address}]" if ":" in address else address
+        pinned = f"{parts.scheme}://{host_in_url}:{port}{path}" + (f"?{parts.query}" if parts.query else "")
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False, trust_env=False) as client:
+                request = client.build_request(
+                    "GET",
+                    pinned,
+                    headers={
+                        "Host": parts.netloc,
+                        "User-Agent": _USER_AGENT,
+                        "Accept": "text/html,*/*;q=0.5",
+                    },
+                    extensions={"sni_hostname": parts.hostname},
+                )
+                response = await client.send(request, stream=True)
+                await response.aclose()
+            break
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            failure = f"address not reachable ({type(exc).__name__})"
+        except httpx.HTTPError as exc:
+            return EmbedResult(EmbedStatus.UNKNOWN, f"address not reachable ({type(exc).__name__})")
+    if response is None:
+        return EmbedResult(EmbedStatus.UNKNOWN, failure)
 
     if 300 <= response.status_code < 400:
         location = response.headers.get("location", "")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 
@@ -203,3 +205,73 @@ class TestCustomAppLockdown:
         assert "<title>&lt;img src=x onerror=1&gt;</title>" in document
         assert 'data-theme="light"' in document
         assert 'lang="en"' in document
+
+
+class TestEmbedCheckOverHttp:
+    """The complete check against a real (local) web server, including the redirect handling."""
+
+    @pytest.fixture
+    async def site(self) -> AsyncIterator[str]:
+        import asyncio
+
+        responses = {
+            "/open": (200, {}),
+            "/deny": (200, {"X-Frame-Options": "DENY"}),
+            "/ancestors": (200, {"Content-Security-Policy": f"frame-ancestors {ORIGIN}"}),
+            "/self-only": (200, {"Content-Security-Policy": "frame-ancestors 'self'"}),
+            "/login-redirect": (302, {"Location": "https://sso.example.org/auth"}),
+            "/local-redirect": (302, {"Location": "/deny"}),
+            "/error": (500, {"X-Frame-Options": "DENY"}),
+        }
+        seen: list[tuple[str, str]] = []
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            request = (await reader.readuntil(b"\r\n\r\n")).decode()
+            _method, path, _ = request.split("\r\n")[0].split(" ")
+            host = next(
+                line.split(": ", 1)[1] for line in request.split("\r\n") if line.lower().startswith("host:")
+            )
+            seen.append((path, host))
+            status, headers = responses.get(path, (404, {}))
+            head = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+            # A large body that the check must not wait for.
+            writer.write(
+                f"HTTP/1.1 {status} X\r\n{head}Content-Length: 5000000\r\n\r\n".encode() + b"x" * 1000
+            )
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        self.seen = seen
+        async with server:
+            yield f"http://localhost:{port}"
+
+    async def check(self, url: str) -> tuple[EmbedStatus, int | None, str]:
+        result = await check_embeddable(url, embedder_origin=ORIGIN, allow_private=True)
+        return result.status, result.http_status, result.detail
+
+    async def test_headers_of_a_real_response_decide(self, site: str) -> None:
+        assert (await self.check(f"{site}/open"))[:2] == (EmbedStatus.OK, 200)
+        assert (await self.check(f"{site}/deny"))[:2] == (EmbedStatus.BLOCKED, 200)
+        assert (await self.check(f"{site}/ancestors"))[:2] == (EmbedStatus.OK, 200)
+        assert (await self.check(f"{site}/self-only"))[:2] == (EmbedStatus.BLOCKED, 200)
+        assert (await self.check(f"{site}/error"))[:2] == (EmbedStatus.BLOCKED, 500)
+
+    async def test_the_original_host_name_is_sent_although_the_address_is_pinned(self, site: str) -> None:
+        await self.check(f"{site}/open")
+        assert self.seen == [("/open", site.removeprefix("http://"))]
+
+    async def test_redirects_are_reported_not_followed(self, site: str) -> None:
+        status, http_status, detail = await self.check(f"{site}/login-redirect")
+        assert (status, http_status) == (EmbedStatus.UNKNOWN, 302)
+        assert "sso.example.org" in detail
+        assert [path for path, _ in self.seen] == ["/login-redirect"], "no second request was made"
+
+    async def test_private_addresses_stay_off_limits_by_default(self, site: str) -> None:
+        result = await check_embeddable(f"{site}/open", embedder_origin=ORIGIN, allow_private=False)
+        assert result.status == EmbedStatus.UNKNOWN and self.seen == []
+
+    async def test_unreachable_host(self) -> None:
+        status, http_status, _ = await self.check("http://127.0.0.1:9/")
+        assert (status, http_status) == (EmbedStatus.UNKNOWN, None)
