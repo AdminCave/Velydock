@@ -1,0 +1,16 @@
+# Opens Keycloak's own administration console on localhost of the server, for use through an
+# SSH tunnel. Needed for tasks Velydock does not cover: connecting apps via OIDC, LDAP/AD,
+# external identity providers. See docs/betrieb.md.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.keycloak-admin.yml up -d keycloak
+#   docker compose exec velydock velydock keycloak-admin --username <your Velydock user>
+#   ssh -L 8081:127.0.0.1:8081 <server>   then open http://localhost:8081/admin/velydock/console/
+#
+# Close it again with a plain `docker compose up -d`.
+
+services:
+  keycloak:
+    environment:
+      KC_HOSTNAME_ADMIN: http://localhost:${KEYCLOAK_ADMIN_PORT:-8081}
+    ports:
+      - "127.0.0.1:${KEYCLOAK_ADMIN_PORT:-8081}:8080"

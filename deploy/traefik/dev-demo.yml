@@ -1,0 +1,15 @@
+# Development only: a tiny demo web app to embed in Velydock (see docker-compose.dev.yml).
+
+http:
+  routers:
+    demo:
+      rule: "Host(`{{ env "DEMO_HOST" }}`)"
+      entryPoints: [websecure]
+      service: demo
+      tls: {}
+
+  services:
+    demo:
+      loadBalancer:
+        servers:
+          - url: "http://demo:80"

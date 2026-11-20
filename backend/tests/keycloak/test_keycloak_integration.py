@@ -615,3 +615,66 @@ class TestBrowserSignIn:
             assert final.headers["location"] == "/"
             assert (await client.get("/api/v1/me")).json()["user"]["username"] == name
         assert await idp.has_second_factor(user.idp_id) is True
+
+
+class TestOrganizationClaim:
+    """Why tenants are mirrored as organizations: connected apps can tell them apart."""
+
+    async def test_tokens_for_connected_apps_can_carry_the_users_organization(
+        self, kc_settings: Settings, http: httpx.AsyncClient, idp: KeycloakIdp
+    ) -> None:
+        realm_api = f"{INTERNAL}/admin/realms/{kc_settings.keycloak_realm}"
+        headers = {"Authorization": f"Bearer {await service_token(kc_settings, http)}"}
+        acme, globex = unique("acme"), unique("globex")
+        acme_org = await idp.create_organization(name=f"Org {acme}", alias=acme)
+        await idp.create_organization(name=f"Org {globex}", alias=globex)
+
+        name = unique("member")
+        user_id = await idp.create_user(
+            username=name, email=None, first_name="A", last_name="B", temporary_password=PASSWORD
+        )
+        await http.put(
+            f"{realm_api}/users/{user_id}/reset-password",
+            headers=headers,
+            json={"type": "password", "value": PASSWORD, "temporary": False},
+        )
+        await idp.add_organization_member(acme_org, user_id)
+
+        # A stand-in for a connected app (e.g. a customer's Nextcloud) that asks for the organization.
+        client_id = unique("app")
+        created = await http.post(
+            f"{realm_api}/clients",
+            headers=headers,
+            json={
+                "clientId": client_id,
+                "publicClient": True,
+                "directAccessGrantsEnabled": True,
+                "standardFlowEnabled": False,
+                "optionalClientScopes": ["organization"],
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        async def organizations(scope: str) -> object:
+            response = await http.post(
+                f"{kc_settings.realm_internal_url}/protocol/openid-connect/token",
+                data={
+                    "grant_type": "password",
+                    "client_id": client_id,
+                    "username": name,
+                    "password": PASSWORD,
+                    "scope": scope,
+                },
+            )
+            assert response.status_code == 200, response.text
+            return jwt.decode(response.json()["access_token"], options={"verify_signature": False}).get(
+                "organization"
+            )
+
+        assert organizations is not None
+        claim = await organizations("openid organization")
+        assert claim == [acme] or (isinstance(claim, dict) and list(claim) == [acme]), claim
+        # Asking for an organization the user does not belong to yields no such claim.
+        foreign = await organizations(f"openid organization:{globex}")
+        assert not foreign, foreign
+        assert await organizations("openid") is None

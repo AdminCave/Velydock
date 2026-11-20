@@ -17,6 +17,20 @@ http:
         {}
 {{- end }}
 
+    velydock-api:
+      # The API additionally gets a per-client rate limit (sign-in attempts themselves are
+      # throttled by Keycloak's brute-force protection).
+      rule: "Host(`{{ env "VELYDOCK_HOST" }}`) && PathPrefix(`/api/`)"
+      entryPoints: [websecure]
+      service: velydock
+      middlewares: [api-ratelimit, compress]
+      tls:
+{{- if env "TLS_RESOLVER" }}
+        certResolver: {{ env "TLS_RESOLVER" }}
+{{- else }}
+        {}
+{{- end }}
+
     keycloak:
       # Only what browsers need: the Velydock realm and static resources. The admin console, the
       # admin API and the master realm stay unreachable from outside.
@@ -34,6 +48,11 @@ http:
   middlewares:
     compress:
       compress: {}
+    api-ratelimit:
+      rateLimit:
+        average: 50
+        burst: 100
+        period: 1s
 
   services:
     velydock:

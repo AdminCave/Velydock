@@ -67,6 +67,7 @@ markers = [
     "keycloak: needs a running Keycloak (set VELYDOCK_TEST_KEYCLOAK_URL)",
 ]
 addopts = "-ra"
+filterwarnings = ["error::sqlalchemy.exc.SADeprecationWarning"]
 
 [tool.mypy]
 python_version = "3.13"

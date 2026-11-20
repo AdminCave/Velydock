@@ -20,7 +20,7 @@ services:
     image: traefik:v3.7.19
     profiles: ["proxy"]
     command:
-      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.directory=/etc/traefik/dynamic
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
@@ -41,7 +41,7 @@ services:
       - "${HTTP_BIND:-0.0.0.0:80}:80"
       - "${HTTPS_BIND:-0.0.0.0:443}:443"
     volumes:
-      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic/velydock.yml:ro
       - traefik-acme:/acme
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]

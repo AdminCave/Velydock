@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.config import Settings
@@ -99,11 +99,6 @@ async def purge_expired(db: AsyncSession, settings: Settings) -> int:
         )
     )
     return int(getattr(result, "rowcount", 0) or 0)
-
-
-async def count_user_sessions(db: AsyncSession, user_id: uuid.UUID) -> int:
-    rows = await db.execute(select(AuthSession.id_hash).where(AuthSession.user_id == user_id))
-    return len(rows.all())
 
 
 def set_session_cookie(response: Response, settings: Settings, value: str) -> None:

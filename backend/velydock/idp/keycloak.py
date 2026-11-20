@@ -479,3 +479,35 @@ async def ensure_realm(settings: Settings, http: httpx.AsyncClient) -> None:
     await _upsert_client(api, web_client(settings))
     await _configure_user_profile(api)
     log.info("Keycloak realm %s is configured", realm)
+
+
+async def set_console_access(
+    settings: Settings, http: httpx.AsyncClient, username: str, *, grant: bool
+) -> None:
+    """Allow (or forbid) a user of the Velydock realm to use Keycloak's own administration console.
+
+    Grants the ``realm-admin`` role of the realm. Keycloak only lets an administrator hand out
+    roles they hold themselves, so this goes through the bootstrap account of the ``master``
+    realm rather than Velydock's narrower service account.
+    """
+    if not (settings.idp_bootstrap_client_id and settings.idp_bootstrap_client_secret):
+        raise IdpError(
+            "Bootstrap credentials are not configured "
+            "(VELYDOCK_IDP_BOOTSTRAP_CLIENT_ID / VELYDOCK_IDP_BOOTSTRAP_CLIENT_SECRET)."
+        )
+    tokens = _TokenSource(
+        http,
+        f"{settings.keycloak_internal_url}/realms/master/protocol/openid-connect/token",
+        settings.idp_bootstrap_client_id,
+        settings.idp_bootstrap_client_secret,
+    )
+    api = _AdminApi(http, f"{settings.keycloak_internal_url}/admin/realms/{settings.keycloak_realm}", tokens)
+    found = await api.json("GET", "/users", params={"username": username, "exact": "true"})
+    if not found:
+        raise IdpNotFound(f"There is no user {username!r}. Create the account in Velydock first.")
+    user_id = found[0]["id"]
+    management = (await api.json("GET", "/clients", params={"clientId": "realm-management"}))[0]["id"]
+    role = await api.json("GET", f"/clients/{management}/roles/realm-admin")
+    await api.request(
+        "POST" if grant else "DELETE", f"/users/{user_id}/role-mappings/clients/{management}", json=[role]
+    )

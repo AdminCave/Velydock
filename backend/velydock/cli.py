@@ -23,7 +23,7 @@ from velydock import __version__
 from velydock.config import Settings, get_settings
 from velydock.db import Scope, dispose_engine, transaction
 from velydock.idp.base import IdpError, IdpUnavailable
-from velydock.idp.keycloak import KeycloakIdp, ensure_realm
+from velydock.idp.keycloak import KeycloakIdp, ensure_realm, set_console_access
 from velydock.models import Membership, Role, Tenant, User
 from velydock.schemas import TenantCreate, UserCreate
 from velydock.security.tokens import temporary_password
@@ -169,6 +169,23 @@ async def setup_admin(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+async def keycloak_admin(settings: Settings, username: str, revoke: bool) -> int:
+    """Let a Velydock user into Keycloak's own administration console (or take that right away).
+
+    The console is only reachable after opening it with docker-compose.keycloak-admin.yml.
+    """
+    async with _http() as http:
+        await set_console_access(settings, http, username, grant=not revoke)
+    if revoke:
+        print(f"{username} can no longer use the Keycloak administration console.")
+    else:
+        print(
+            f"{username} can now sign in to the Keycloak administration console with the usual credentials."
+        )
+        print("This right covers everything in the Velydock realm; take it away again with --revoke.")
+    return 0
+
+
 def install_theme(target: str) -> None:
     """Copy the Keycloak login theme into ``target`` (the directory Keycloak loads themes from).
 
@@ -271,6 +288,11 @@ def main(argv: list[str] | None = None) -> int:
     admin.add_argument("--last-name", default="Administrator")
     admin.add_argument("--tenant-name", default="Hauptorganisation", help="name of the first organization")
     admin.add_argument("--tenant-slug", default="main", help="short name of the first organization")
+    console = sub.add_parser(
+        "keycloak-admin", help="let a Velydock user into Keycloak's own administration console"
+    )
+    console.add_argument("--username", required=True)
+    console.add_argument("--revoke", action="store_true", help="take the right away again")
     theme = sub.add_parser("install-theme", help="copy the Keycloak login theme into a directory")
     theme.add_argument("target")
     sub.add_parser("version", help="print the version")
@@ -301,6 +323,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "setup-admin":
         try:
             return asyncio.run(setup_admin(settings, args))
+        except IdpError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "keycloak-admin":
+        try:
+            return asyncio.run(keycloak_admin(settings, args.username, args.revoke))
         except IdpError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

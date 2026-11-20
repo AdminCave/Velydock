@@ -1,14 +1,20 @@
-# Local development and test stack. Use together with the main file:
+# Local development and test stack. Always use it under its own project name, so it can never
+# touch the containers or volumes of a real installation on the same machine:
 #
-#   docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#   docker compose -p velydock-dev --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
-# Differences to production: the image is built from this checkout, TLS uses Traefik's
-# self-signed certificate, and PostgreSQL and Keycloak are reachable on localhost for tests.
+# (scripts/dev-stack.sh wraps this.) Differences to production: the image is built from this
+# checkout, TLS uses Traefik's self-signed certificate, PostgreSQL and Keycloak are reachable on
+# localhost for the test suites, and a small demo web app is available to embed.
 
 services:
   traefik:
+    environment:
+      DEMO_HOST: demo.velydock.localhost
     ports: !override
       - "127.0.0.1:${DEV_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./deploy/traefik/dev-demo.yml:/etc/traefik/dynamic/dev-demo.yml:ro
 
   velydock:
     build: .
@@ -21,6 +27,10 @@ services:
     image: velydock:dev
 
   keycloak:
+    environment:
+      # Keycloak's administration console at http://localhost:18080/admin/ (as with
+      # docker-compose.keycloak-admin.yml in production).
+      KC_HOSTNAME_ADMIN: http://localhost:${DEV_KEYCLOAK_PORT:-18080}
     ports:
       - "127.0.0.1:${DEV_KEYCLOAK_PORT:-18080}:8080"
 
@@ -30,3 +40,9 @@ services:
     networks: !override
       - internal
       - edge
+
+  # Echoes the request it receives; sets no framing restrictions, so it can be embedded.
+  demo:
+    image: traefik/whoami:v1.11.0
+    restart: unless-stopped
+    networks: [edge]

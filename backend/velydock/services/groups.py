@@ -37,7 +37,7 @@ async def _counts(
         .where(AppGroupGrant.tenant_id == tenant_id)
         .group_by(AppGroupGrant.group_id)
     )
-    return dict(members.tuples().all()), dict(apps.tuples().all())
+    return {row[0]: row[1] for row in members.all()}, {row[0]: row[1] for row in apps.all()}
 
 
 def _out(group: Group, members: int, apps: int) -> GroupOut:
