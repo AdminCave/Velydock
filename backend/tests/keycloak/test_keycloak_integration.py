@@ -235,6 +235,40 @@ class TestUserLifecycle:
         )
         await idp.delete_user(user_id)
 
+    async def test_every_email_transition_is_accepted(
+        self, kc_settings: Settings, http: httpx.AsyncClient, idp: KeycloakIdp
+    ) -> None:
+        """Without, with, changed and removed address – including editing an account that never had one.
+
+        The account is a member of an organization, as every Velydock user is: for members
+        Keycloak validates the address more strictly and rejects an empty one.
+        """
+        name = unique("mail")
+        user_id = await idp.create_user(
+            username=name, email=None, first_name="A", last_name="B", temporary_password=PASSWORD
+        )
+        alias = unique("org")
+        org_id = await idp.create_organization(name=f"Org {alias}", alias=alias)
+        await idp.add_organization_member(org_id, user_id)
+
+        async def stored() -> tuple[str | None, str]:
+            user = (await admin_get(kc_settings, http, f"/users/{user_id}")).json()
+            return user.get("email"), user["lastName"]
+
+        await idp.update_user(user_id, email=None, first_name="A", last_name="Ohne")
+        assert await stored() == (None, "Ohne")
+        await idp.update_user(user_id, email=f"{name}@acme.example", first_name="A", last_name="Mit")
+        assert await stored() == (f"{name}@acme.example", "Mit")
+        await idp.update_user(user_id, email=f"{name}@neu.example", first_name="A", last_name="Neu")
+        assert await stored() == (f"{name}@neu.example", "Neu")
+        await idp.update_user(user_id, email=None, first_name="A", last_name="Wieder ohne")
+        assert await stored() == (None, "Wieder ohne")
+        assert await idp.list_organization_members(org_id) == {user_id}, "still a member after clearing"
+        await idp.update_user(user_id, email=None, first_name="A", last_name="Immer noch ohne")
+        assert await stored() == (None, "Immer noch ohne")
+        await idp.delete_user(user_id)
+        await idp.delete_organization(org_id)
+
     async def test_duplicates_are_reported_by_field(self, idp: KeycloakIdp) -> None:
         name = unique("dup")
         user_id = await idp.create_user(

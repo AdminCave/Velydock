@@ -162,9 +162,35 @@ class KeycloakIdp:
         current = await self._api.json("GET", f"/users/{idp_id}")
         current["firstName"] = first_name
         current["lastName"] = last_name
-        current["email"] = email or ""
         current["emailVerified"] = bool(email)
+        if email:
+            current["email"] = email
+        elif not current.get("email"):
+            # Nothing stored, nothing to clear: leave the field out. Keycloak rejects an empty
+            # address for members of an organization ("Email not set").
+            current.pop("email", None)
+        else:
+            await self._clear_email(idp_id, current)
+            return
         await self._api.request("PUT", f"/users/{idp_id}", json=current)
+
+    async def _clear_email(self, idp_id: str, representation: dict[str, Any]) -> None:
+        """Remove a stored e-mail address.
+
+        Keycloak refuses to blank the address of an organization member, although members without
+        one are allowed. The memberships are therefore lifted for the moment of the update and
+        restored right after – also if the update fails.
+        """
+        organizations = await self._api.json("GET", f"/organizations/members/{idp_id}/organizations")
+        org_ids = [str(org["id"]) for org in organizations]
+        for org_id in org_ids:
+            await self._api.request("DELETE", f"/organizations/{org_id}/members/{idp_id}", ok=(400, 404))
+        try:
+            representation["email"] = ""
+            await self._api.request("PUT", f"/users/{idp_id}", json=representation)
+        finally:
+            for org_id in org_ids:
+                await self._api.request("POST", f"/organizations/{org_id}/members", json=idp_id, ok=(409,))
 
     async def set_enabled(self, idp_id: str, enabled: bool) -> None:
         current = await self._api.json("GET", f"/users/{idp_id}")

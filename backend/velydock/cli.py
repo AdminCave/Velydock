@@ -39,6 +39,7 @@ def _configure_logging(level: str) -> None:
         stream=sys.stderr,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
 
 
 def _http() -> httpx.AsyncClient:
