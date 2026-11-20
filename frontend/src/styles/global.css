@@ -1,0 +1,351 @@
+/* SPDX-FileCopyrightText: 2026 Kevin Stenzel
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/* Design tokens: verbatim copies of AdminCave/DesignSystem tokens/*.css (fonts.css is left
+   out on purpose: it loads Geist from a CDN, here the fonts are bundled via @fontsource). */
+@import './tokens/colors.css';
+@import './tokens/typography.css';
+@import './tokens/spacing.css';
+@import './tokens/radius.css';
+@import './tokens/elevation.css';
+@import './tokens/base.css';
+
+:root {
+  /* The bundled variable fonts register as "Geist Variable" / "Geist Mono Variable". */
+  --font-sans: 'Geist Variable', 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'Geist Mono Variable', 'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+
+  /* Shell metrics */
+  --dock-rail: 84px;
+  --dock-bar: 60px;
+  --page-pad-x: var(--space-10);
+  --page-pad-y: var(--space-10);
+}
+
+@media (max-width: 720px) {
+  :root {
+    --page-pad-x: var(--space-4);
+    --page-pad-y: var(--space-6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0ms;
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+
+/* Focus ring of the design system, drawn as an outline instead of the box-shadow of
+   tokens/base.css: classes with their own box-shadow would otherwise cover the ring.
+   Components that draw the ring elsewhere (the pill around an input) switch it off for
+   their inner control. */
+:focus-visible {
+  outline: var(--ring-width) solid var(--ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Page scaffolding ───────────────────────────────────────────────── */
+.page {
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: var(--page-pad-y) var(--page-pad-x) var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.page-narrow {
+  max-width: 760px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.page-title {
+  font-size: var(--text-2xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--ls-tight);
+  line-height: var(--lh-snug);
+  color: var(--text-strong);
+}
+
+.page-subtitle {
+  margin-top: var(--space-1);
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.toolbar .grow {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────── */
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.card-pad {
+  padding: var(--space-6);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.section-title {
+  font-size: var(--text-md);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--ls-snug);
+  color: var(--text-strong);
+}
+
+.section-desc {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  max-width: 62ch;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────── */
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.data-table .num,
+.data-table .meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.data-table .actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.data-table .primary {
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+
+.data-table .secondary {
+  display: block;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.cell-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.subtle {
+  color: var(--text-subtle);
+}
+
+/* ── Forms ──────────────────────────────────────────────────────────── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+@media (max-width: 560px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.help {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Toasts keep clear of the dock; Shell.svelte sets data-dock-edge on <body>. */
+body[data-dock-edge='bottom'] {
+  --toast-bottom: calc(var(--dock-bar) + var(--space-4));
+}
+body[data-dock-edge='left'] {
+  --toast-left: calc(var(--dock-rail) + var(--space-4));
+}
+
+/* ── Row menus and table states ─────────────────────────────────────── */
+.row-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.row-menu:hover,
+.row-menu[aria-expanded='true'] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.table-state {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-12);
+  color: var(--text-muted);
+}
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
