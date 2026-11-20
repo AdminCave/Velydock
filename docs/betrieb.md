@@ -23,6 +23,9 @@ docker compose pull           # neues Image
 docker compose up -d
 ```
 
+Wer das Image selbst baut (kein veröffentlichtes Release): statt `docker compose pull` erneut
+`docker build -t ghcr.io/admincave/velydock:latest .` ausführen.
+
 Beim Start wendet Velydock ausstehende Datenbankmigrationen an und gleicht die Realm-Einstellungen
 in Keycloak ab. Enthält das Update ein geändertes Login-Theme, startet Compose Keycloak
 automatisch neu (Abhängigkeit vom Dienst `theme`); die Anmeldung ist dann für etwa eine Minute

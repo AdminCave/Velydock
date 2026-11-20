@@ -29,6 +29,14 @@ cd Velydock
 docker compose up -d
 ```
 
+**Image:** Die Compose-Datei verwendet `ghcr.io/admincave/velydock:latest`. Dieses Image wird
+erst mit einem Release veröffentlicht (ein Tag `v…` löst den Workflow `release.yml` aus). Solange
+es noch keines gibt, baust du es vor `docker compose up -d` einmal selbst aus dem Quelltext:
+
+```bash
+docker build -t ghcr.io/admincave/velydock:latest .
+```
+
 `install.sh` legt die Datei `.env` mit zufällig erzeugten Geheimnissen an (nur für den eigenen
 Benutzer lesbar). Es startet nichts und überschreibt keine vorhandene `.env`. Die vierte Angabe
 ist die E-Mail-Adresse für Let's Encrypt.

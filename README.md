@@ -32,6 +32,7 @@ Voraussetzungen: Docker mit Compose und drei DNS-Namen, die auf den Server zeige
 
 ```bash
 git clone https://github.com/AdminCave/Velydock.git && cd Velydock
+docker build -t ghcr.io/admincave/velydock:latest .    # nur solange kein Release veröffentlicht ist
 ./scripts/install.sh dock.example.com auth.example.com sandbox.example.com admin@example.com
 docker compose up -d
 docker compose exec velydock velydock setup-admin --username admin --email admin@example.com
@@ -39,6 +40,9 @@ docker compose exec velydock velydock setup-admin --username admin --email admin
 
 Der letzte Befehl zeigt ein Einmalpasswort. Danach `https://dock.example.com` öffnen und anmelden.
 Ausführlich: [docs/installation.md](docs/installation.md).
+
+Ein fertiges Image gibt es erst mit dem ersten Release (Tag `v0.1.0`); bis dahin baut die zweite
+Zeile es lokal aus dem Quelltext.
 
 Zum Ausprobieren auf dem eigenen Rechner ohne DNS und Zertifikate:
 [docs/entwicklung.md](docs/entwicklung.md#der-entwicklungs-stack).
