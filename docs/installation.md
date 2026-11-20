@@ -110,19 +110,19 @@ solange `KEYCLOAK_BOOTSTRAP_SECRET` gesetzt ist. Die Datenbank-Passwörter lasse
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
-| `VELYDOCK_REQUIRE_ADMIN_2FA` | `true` | Zwei-Faktor-Pflicht für Rollen mit Verwaltungsrechten. Lässt sich in der Oberfläche überschreiben (System → Einstellungen). |
+| `VELYDOCK_REQUIRE_ADMIN_2FA` | `true` | Zwei-Faktor-Pflicht für Rollen mit Verwaltungsrechten. Lässt sich in der Oberfläche überschreiben (System → Systemeinstellungen). |
 | `VELYDOCK_SESSION_IDLE_MINUTES` | `120` | Sitzung endet nach dieser Zeit ohne Aktivität. |
 | `VELYDOCK_SESSION_MAX_HOURS` | `12` | Sitzung endet spätestens nach dieser Zeit. |
 | `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE` | `false` | Erlaubt der Einbettungsprüfung, Adressen in privaten Netzen abzurufen. |
 | `VELYDOCK_LOG_LEVEL` | `INFO` | Protokollstufe des Backends. |
 
 Weitere Einstellungen (Instanzname, Standardsprache, Standard-Design, Navigationsposition,
-E-Mail-Versand) werden in der Oberfläche unter **System → Einstellungen** vorgenommen.
+E-Mail-Versand) werden in der Oberfläche unter **System → Systemeinstellungen** vorgenommen.
 
 ## E-Mail-Versand
 
 Ohne Mailserver funktioniert alles; neue Benutzer erhalten dann ein Einmalpasswort, das der
-Administrator weitergibt. Mit einem unter **System → Einstellungen** eingetragenen SMTP-Server
+Administrator weitergibt. Mit einem unter **System → Systemeinstellungen** eingetragenen SMTP-Server
 kann Velydock stattdessen einen Link zum Setzen des Passworts verschicken, und die Anmeldeseite
 bietet „Passwort vergessen“ an. Die SMTP-Zugangsdaten werden in Keycloak gespeichert, nicht in
 Velydock.

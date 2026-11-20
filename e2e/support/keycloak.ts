@@ -52,3 +52,23 @@ export async function keycloakUserId(username: string): Promise<string> {
   if (!users[0]) throw new Error(`no Keycloak user ${username}`);
   return users[0].id;
 }
+
+/**
+ * Try to sign in and report what Keycloak says. Unlike `submitCredentials` this copes with
+ * Keycloak refusing right after the user name (a disabled account never sees the password page).
+ */
+export async function attemptSignIn(page: Page, username: string, password: string): Promise<string> {
+  await expect(page).toHaveURL(new RegExp(`^${AUTH_URL}/realms/velydock/`));
+  await page.locator('#username').fill(username);
+  if (!(await page.locator('#password').isVisible())) {
+    await page.locator('#kc-login').click();
+    await page.waitForLoadState('domcontentloaded');
+  }
+  const passwordField = page.locator('#password');
+  if (await passwordField.isVisible().catch(() => false)) {
+    await passwordField.fill(password);
+    await page.locator('#kc-login').click();
+    await page.waitForLoadState('domcontentloaded');
+  }
+  return (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+}

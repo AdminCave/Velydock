@@ -108,5 +108,5 @@ Mandanten ein Konto an. Das ist die wichtigste Folge des gemeinsamen Realms
 - **Active Directory / LDAP:** in Keycloak als *User Federation*.
 
 In beiden Fällen entsteht die Velydock-Identität bei der ersten Anmeldung ohne Mandant; ein
-Systemadministrator ordnet sie unter *System → Benutzer* zu. Eine automatische Zuordnung ist als
+Systemadministrator ordnet sie unter *System → Alle Benutzer* zu. Eine automatische Zuordnung ist als
 Erweiterung vorgesehen.

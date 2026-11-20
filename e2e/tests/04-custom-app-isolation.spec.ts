@@ -1,13 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DOCK_URL, SANDBOX_URL } from '../support/stack';
-import { apiAs, contextAs, world } from '../support/world';
+import { appFrame } from '../support/ui';
+import { apiAs, contextAs, unique, world } from '../support/world';
 
 type Probe = Record<string, string>;
 
 /** Open a custom app and read what its own JavaScript found out about its surroundings. */
 async function runProbe(page: Page, appId: string): Promise<Probe> {
   await page.goto(`/app/${appId}`);
-  const frame = page.frameLocator(`[data-testid="app-frame"][data-app-id="${appId}"]`);
+  const frame = appFrame(page, appId).contentFrame();
   await expect(frame.locator('#probe[data-done="true"]')).toBeVisible({ timeout: 20_000 });
   return JSON.parse((await frame.locator('#probe').textContent())!) as Probe;
 }
@@ -18,7 +19,7 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     const context = await contextAs(browser, 'mia');
     const page = await context.newPage();
     await page.goto(`/app/${apps.notes}`);
-    const frame = page.locator(`[data-testid="app-frame"][data-app-id="${apps.notes}"]`);
+    const frame = appFrame(page, apps.notes);
     await expect(frame).toHaveAttribute('data-app-type', 'custom');
     await expect(frame).toHaveAttribute('src', new RegExp(`^${SANDBOX_URL}/c/`));
 
@@ -49,7 +50,7 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     expect((await page.request.get('/api/v1/me')).status()).toBe(200);
 
     // And it is a working app: its script reacts to a click.
-    const frame = page.frameLocator(`[data-app-id="${apps.notes}"]`);
+    const frame = appFrame(page, apps.notes).contentFrame();
     await frame.locator('#count').click();
     await expect(frame.locator('#count')).toHaveText('Geklickt: 1');
     // It received the user's theme.
@@ -85,9 +86,31 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
   });
 
   test('auch direkt im Browser geöffnet bleibt die App in der Sandbox', async ({ browser }) => {
-    const { apps } = world();
+    // A dedicated app: opened as a page of its own, a document may of course navigate itself,
+    // so this one only reports what it can reach.
+    const anna = await apiAs('anna');
+    const app = await (
+      await anna.post('/api/v1/admin/apps', {
+        data: {
+          name: unique('Direkt'),
+          type: 'custom',
+          visible_to_all: true,
+          custom_html: '<pre id="probe"></pre>',
+          custom_js: `
+            const result = { origin: self.origin };
+            for (const [name, action] of [
+              ['cookie', () => document.cookie],
+              ['localStorage', () => (localStorage.setItem('probe', '1'), 'writable')],
+            ]) {
+              try { result[name] = String(action()); } catch (error) { result[name] = 'BLOCKED:' + error.name; }
+            }
+            document.getElementById('probe').textContent = JSON.stringify(result);
+            document.getElementById('probe').dataset.done = 'true';`,
+        },
+      })
+    ).json();
     const mia = await apiAs('mia');
-    const launched = await (await mia.post(`/api/v1/workspace/apps/${apps.notes}/launch`, { data: { theme: 'dark', language: 'de' } })).json();
+    const launched = await (await mia.post(`/api/v1/workspace/apps/${app.id}/launch`, { data: { theme: 'dark', language: 'de' } })).json();
     await mia.dispose();
     expect(launched.url.startsWith(`${SANDBOX_URL}/c/`)).toBe(true);
 
@@ -104,6 +127,8 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     expect(probe.cookie).toMatch(/^BLOCKED:/);
     expect(probe.localStorage).toMatch(/^BLOCKED:/);
     await context.close();
+    await anna.delete(`/api/v1/admin/apps/${app.id}`);
+    await anna.dispose();
   });
 
   test('Links sind kurzlebig signiert; gefälschte werden abgewiesen', async ({ browser }) => {

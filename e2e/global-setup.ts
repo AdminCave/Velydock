@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { chromium, expect, request, type APIRequestContext, type Browser } from '@playwright/test';
 import { DEMO_URL, DOCK_URL, AUTH_DIR, PASSWORD, compose } from './support/stack';
 import { firstSignIn, stateFile, WORLD_FILE, type Account, type World } from './support/world';
@@ -59,7 +59,7 @@ async function ok<T>(response: Awaited<ReturnType<APIRequestContext['get']>>): P
 }
 
 async function signInOnce(browser: Browser, account: Account, username: string, oneTimePassword: string): Promise<void> {
-  const context = await browser.newContext({ ignoreHTTPSErrors: true, locale: 'de-DE' });
+  const context = await browser.newContext({ baseURL: DOCK_URL, ignoreHTTPSErrors: true, locale: 'de-DE' });
   const page = await context.newPage();
   await firstSignIn(page, username, oneTimePassword);
   await expect(page.getByTestId('dock')).toBeVisible({ timeout: 30_000 });
@@ -67,8 +67,27 @@ async function signInOnce(browser: Browser, account: Account, username: string, 
   await context.close();
 }
 
+/** True if an earlier run already prepared this stack and its sessions are still alive. */
+async function alreadySeeded(): Promise<boolean> {
+  if (!existsSync(WORLD_FILE)) return false;
+  for (const account of ['root', 'anna', 'uwe', 'mia', 'ben', 'gina', 'gero'] as const) {
+    if (!existsSync(stateFile(account))) return false;
+    const api = await request.newContext({ baseURL: DOCK_URL, ignoreHTTPSErrors: true, storageState: stateFile(account) });
+    const status = (await api.get('/api/v1/me')).status();
+    await api.dispose();
+    if (status !== 200) return false;
+  }
+  return true;
+}
+
 export default async function globalSetup(): Promise<void> {
   mkdirSync(AUTH_DIR, { recursive: true });
+  if (await alreadySeeded()) return;
+  if (existsSync(WORLD_FILE)) {
+    throw new Error(
+      'The stack was seeded by an earlier run but its sessions are gone. Reset it: ./scripts/tests/e2e.sh',
+    );
+  }
 
   const output = compose(
     'exec', '-T', 'velydock', 'velydock', 'setup-admin',

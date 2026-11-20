@@ -10,6 +10,7 @@ cd "$(dirname "$0")/../.."
 
 if [[ ${1:-} != --keep ]]; then
   ./scripts/dev-stack.sh down --volumes --remove-orphans
+  rm -rf -- e2e/.auth          # signed-in browser states of the previous stack
   ./scripts/dev-stack.sh up -d --build --wait
 else
   shift

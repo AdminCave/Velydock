@@ -39,4 +39,4 @@ done
 
 echo "starting Velydock and Keycloak …"
 "${compose[@]}" up -d
-echo "restore finished. Sessions from before the backup are gone; users sign in again."
+echo "restore finished. Sessions opened after the backup no longer exist; those users sign in again."

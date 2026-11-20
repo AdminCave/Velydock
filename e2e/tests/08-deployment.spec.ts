@@ -69,7 +69,8 @@ test.describe('Die Docker-Installation', () => {
   test('die Anmeldeseite trägt das Velydock-Theme', async ({ page }) => {
     const failed: string[] = [];
     page.on('response', (response) => {
-      if (response.status() >= 400) failed.push(`${response.status()} ${response.url()}`);
+      // The login page asks whether a session exists; 401 is the expected answer here.
+      if (response.status() >= 400 && !response.url().endsWith('/api/v1/me')) failed.push(`${response.status()} ${response.url()}`);
     });
     await page.goto('/login');
     await page.getByTestId('login-button').click();

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { keycloakAdmin, keycloakUserId, submitCredentials } from '../support/keycloak';
 import { AUTH_URL } from '../support/stack';
-import { apiAs, signIn, stateFile, world } from '../support/world';
+import { apiAs, removeUser, signIn, stateFile, throwawayUser } from '../support/world';
 
 test.describe('Anmeldung und Sitzung', () => {
   test('ohne Anmeldung führt alles zur Login-Seite', async ({ page }) => {
@@ -41,7 +41,7 @@ test.describe('Anmeldung und Sitzung', () => {
   test('ein falsches Passwort meldet niemanden an', async ({ page }) => {
     await signIn(page, 'mia', 'ganz-falsches-passwort');
     await expect(page).toHaveURL(new RegExp(`^${AUTH_URL}/`));
-    await expect(page.locator('#input-error, .pf-m-error, .pf-v5-c-alert')).toBeVisible();
+    await expect(page.locator('#input-error-password, #input-error-username, .pf-v5-c-alert').first()).toBeVisible();
     await page.goto('/');
     await expect(page).toHaveURL(/\/login/);
   });
@@ -63,35 +63,35 @@ test.describe('Anmeldung und Sitzung', () => {
   });
 
   test('meldet Keycloak den Benutzer ab, endet auch die Velydock-Sitzung (Back-Channel-Logout)', async ({ browser }) => {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await signIn(page, 'gero');
-    await expect(page.getByTestId('dock')).toBeVisible();
+    const user = await throwawayUser(browser);
+    expect((await user.page.request.get('/api/v1/me')).status()).toBe(200);
 
     // What an operator does in Keycloak's console: "Sign out all sessions" of this user.
-    const response = await keycloakAdmin('POST', `/users/${await keycloakUserId('gero')}/logout`);
+    const response = await keycloakAdmin('POST', `/users/${await keycloakUserId(user.username)}/logout`);
     expect(response.status).toBe(204);
 
-    await expect.poll(async () => (await page.request.get('/api/v1/me')).status(), { timeout: 15_000 }).toBe(401);
-    await page.reload();
-    await expect(page).toHaveURL(/\/login/);
-    await context.close();
+    // Keycloak notifies Velydock server-to-server; no browser is involved.
+    await expect.poll(async () => (await user.page.request.get('/api/v1/me')).status(), { timeout: 15_000 }).toBe(401);
+    await user.page.reload();
+    await expect(user.page).toHaveURL(/\/login/);
+    await user.context.close();
+    await removeUser(user.id);
   });
 
   test('beendet ein Administrator die Sitzungen eines Benutzers, ist dieser sofort abgemeldet', async ({ browser }) => {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await signIn(page, 'ben');
-    await expect(page.getByTestId('dock')).toBeVisible();
-
+    const user = await throwawayUser(browser);
     const anna = await apiAs('anna');
-    expect((await anna.post(`/api/v1/admin/users/${world().users.ben}/end-sessions`)).status()).toBe(204);
+    expect((await anna.post(`/api/v1/admin/users/${user.id}/end-sessions`)).status()).toBe(204);
     await anna.dispose();
 
-    expect((await page.request.get('/api/v1/me')).status()).toBe(401);
-    await page.goto('/');
-    await expect(page).toHaveURL(/\/login/);
-    await context.close();
+    expect((await user.page.request.get('/api/v1/me')).status()).toBe(401);
+    await user.page.goto('/');
+    await expect(user.page).toHaveURL(/\/login/);
+    // The Keycloak session is gone as well: no silent sign-in.
+    await user.page.getByTestId('login-button').click();
+    await expect(user.page.locator('#username')).toBeVisible();
+    await user.context.close();
+    await removeUser(user.id);
   });
 
   test('ohne CSRF-Header werden Änderungen abgelehnt', async ({ browser }) => {
