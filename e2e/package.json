@@ -1,0 +1,17 @@
+{
+  "name": "velydock-e2e",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "description": "Browser tests against the complete Velydock stack (Traefik, Velydock, Keycloak, PostgreSQL).",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "^22.0.0",
+    "otpauth": "^9.3.6",
+    "typescript": "~5.9.0"
+  }
+}

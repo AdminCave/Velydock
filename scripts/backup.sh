@@ -17,8 +17,9 @@ mkdir -p "$target"
 
 for database in velydock keycloak; do
   echo "dumping database $database …"
-  # Custom format: compressed, and restorable into an existing database with pg_restore.
-  "${compose[@]}" exec -T postgres pg_dump -U postgres --format=custom --no-owner "$database" > "$target/$database.dump"
+  # Custom format: compressed, restorable with pg_restore. Ownership is part of the dump: the
+  # tables must belong to the application role again after a restore.
+  "${compose[@]}" exec -T postgres pg_dump -U postgres --format=custom "$database" > "$target/$database.dump"
 done
 
 env_file=${VELYDOCK_ENV_FILE:-.env}

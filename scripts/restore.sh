@@ -33,8 +33,8 @@ for database in velydock keycloak; do
     -c "DROP DATABASE IF EXISTS $database WITH (FORCE)" \
     -c "CREATE DATABASE $database OWNER $database" \
     -c "REVOKE ALL ON DATABASE $database FROM PUBLIC"
-  "${compose[@]}" exec -T postgres pg_restore -U postgres --no-owner --role="$database" --exit-on-error \
-    -d "$database" < "$source_dir/$database.dump"
+  # Restored as superuser: row-level security would otherwise reject the rows being loaded.
+  "${compose[@]}" exec -T postgres pg_restore -U postgres --exit-on-error -d "$database" < "$source_dir/$database.dump"
 done
 
 echo "starting Velydock and Keycloak …"
