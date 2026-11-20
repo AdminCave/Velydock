@@ -9,3 +9,11 @@
 export function leaveTo(url: string): void {
   window.location.assign(url);
 }
+
+/**
+ * Load the page anew, e.g. when the browser brought it back from its back/forward cache
+ * and what is on screen may belong to a session that has ended since.
+ */
+export function reloadPage(): void {
+  window.location.reload();
+}

@@ -25,6 +25,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import X from '@lucide/svelte/icons/x';
   import { t } from '$lib/i18n';
   import Callout from './Callout.svelte';
+  import { cancelConfirm, confirmDialog } from './confirm';
   import IconButton from './IconButton.svelte';
 
   interface Props {
@@ -35,6 +36,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
     /** A failure to report. Shown above the footer, where it stays in view however far
      *  the body is scrolled. */
     error?: string;
+    /** False: the dialog closes through its own buttons only. No X in the header, and
+     *  neither Escape nor a click beside it does anything. For content that is shown
+     *  once and must not vanish by accident. */
+    dismissible?: boolean;
+    /** The dialog holds input that has not been saved. A click beside it then does
+     *  nothing and Escape asks before the input is thrown away; the X and the dialog's
+     *  own "Cancel" still close at once, they say what they do. */
+    dirty?: boolean;
     onClose?: () => void;
     children: Snippet;
     footer?: Snippet;
@@ -46,6 +55,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     description,
     width = '520px',
     error = '',
+    dismissible = true,
+    dirty = false,
     onClose,
     children,
     footer,
@@ -55,6 +66,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const uid = $props.id();
   let panel = $state<HTMLElement | undefined>();
   let returnTo: Element | null = null;
+  // Whether the mouse button went down on the backdrop itself (see onBackdropClick).
+  let pressedOnBackdrop = false;
+  // A "discard your input?" question of this dialog is open.
+  let asking = false;
 
   function focusables(): HTMLElement[] {
     return panel ? [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)] : [];
@@ -86,6 +101,25 @@ SPDX-License-Identifier: GPL-3.0-or-later
     onClose?.();
   }
 
+  // Escape and a click beside the dialog are easy to hit by accident; what they may do
+  // depends on what would be lost.
+  async function dismiss(how: 'escape' | 'backdrop') {
+    if (!dismissible) return;
+    if (!dirty) {
+      close();
+      return;
+    }
+    if (how === 'backdrop' || asking) return;
+    asking = true;
+    const discard = await confirmDialog($t('dialog.discard.question'), {
+      title: $t('dialog.discard.title'),
+      confirmLabel: $t('dialog.discard.confirm'),
+      cancelLabel: $t('dialog.discard.keep'),
+    });
+    asking = false;
+    if (discard && open) close();
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Tab' && open) {
       if (modalStack[modalStack.length - 1] === instance) trapTab(e);
@@ -98,12 +132,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
       // its own document keydown listener, so one Escape must not close two
       // stacked modals at once (2.136).
       e.stopImmediatePropagation();
-      close();
+      void dismiss('escape');
     }
   }
 
+  function onBackdropPress(e: MouseEvent) {
+    pressedOnBackdrop = e.target === e.currentTarget;
+    // A press beside the dialog must not pull the focus out of it (to the page behind).
+    if (pressedOnBackdrop) e.preventDefault();
+  }
+
+  // The browser reports a click on the backdrop also when the button went down inside
+  // the dialog and was released beside it (selecting text with the mouse and overshooting):
+  // the click then lands on the common ancestor. Only a press AND release on the backdrop
+  // is meant as "close".
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) close();
+    const pressed = pressedOnBackdrop;
+    pressedOnBackdrop = false;
+    if (e.target === e.currentTarget && pressed) void dismiss('backdrop');
   }
 
   // Escape listener only while open — a closed modal must not keep a document
@@ -116,6 +162,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
       document.removeEventListener('keydown', onKeydown);
       const i = modalStack.indexOf(instance);
       if (i >= 0) modalStack.splice(i, 1);
+      // The dialog went away while its "discard?" question was open: that is settled.
+      if (asking) cancelConfirm();
     };
   });
 
@@ -157,7 +205,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </script>
 
 {#if open}
-  <div class="modal-backdrop" onclick={onBackdropClick} role="presentation">
+  <div
+    class="modal-backdrop"
+    onmousedown={onBackdropPress}
+    onclick={onBackdropClick}
+    role="presentation"
+  >
     <div
       bind:this={panel}
       class="modal-panel"
@@ -171,7 +224,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
       {#if title}
         <div class="modal-header">
           <h2 class="modal-title" id="{uid}-title">{title}</h2>
-          <IconButton icon={X} label={$t('action.close')} size="sm" onclick={close} />
+          {#if dismissible}
+            <IconButton icon={X} label={$t('action.close')} size="sm" onclick={close} />
+          {/if}
         </div>
       {/if}
       <div class="modal-body">

@@ -41,6 +41,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
     onClear?.();
     input?.focus();
   }
+
+  // Escape empties a filled search field, as browsers do for type="search", and that is
+  // all it does then: a dialog around the field must not close on the same key press.
+  function handleKeydown(e: KeyboardEvent) {
+    onkeydown?.(e);
+    if (e.key !== 'Escape' || !value || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    value = '';
+    onClear?.();
+  }
 </script>
 
 <div class="search search-{size}" class:full={fullWidth}>
@@ -67,7 +78,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     aria-label={label ?? (field ? undefined : (placeholder ?? $t('ui.search')))}
     aria-describedby={field?.describedBy}
     {oninput}
-    {onkeydown}
+    onkeydown={handleKeydown}
   />
   {#if value}
     <button type="button" class="clear" aria-label={$t('ui.clear')} onclick={clear}>×</button>

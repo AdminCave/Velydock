@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import type { AdminApp, AppCreate, Tenant, User } from '$lib/api/types';
 import { translate } from '$lib/i18n';
+import { APP_ICON_NAMES } from '$lib/appIcons';
+import ConfirmDialog, { cancelConfirm } from '$lib/components/ui/ConfirmDialog.svelte';
 import { ACME, errorResponse, stubApi } from '../test/fixtures';
 import { moved, visibilitySummary } from '../pages/admin/Apps.svelte';
-import { ICON_MAX_BYTES, appChanges, iconFileProblem } from './AppModal.svelte';
+import AppModal, { ICON_MAX_BYTES, appChanges, iconFileProblem } from './AppModal.svelte';
+import GroupModal from './GroupModal.svelte';
 import TempPasswordModal from './TempPasswordModal.svelte';
 import TenantDeleteModal from './TenantDeleteModal.svelte';
 import TenantModal from './TenantModal.svelte';
@@ -19,9 +22,17 @@ const de = (key: string, vars?: Record<string, string | number | null | undefine
   translate('de', key, vars);
 
 afterEach(() => {
+  cancelConfirm();
   cleanup();
   vi.unstubAllGlobals();
 });
+
+// What a browser sends for a press and release beside a dialog: mousedown, then click.
+const backdropOf = (dialog: HTMLElement) => dialog.parentElement as HTMLElement;
+async function clickBeside(dialog: HTMLElement) {
+  await fireEvent.mouseDown(backdropOf(dialog));
+  await fireEvent.click(backdropOf(dialog));
+}
 
 function makeUser(overrides: Partial<User> = {}): User {
   return {
@@ -73,6 +84,19 @@ describe('TempPasswordModal', () => {
     expect(writeText).toHaveBeenCalledWith('Abc-123');
   });
 
+  it('closes through its button only: the password is shown exactly once', async () => {
+    const onClose = vi.fn();
+    render(TempPasswordModal, { password: 'Abc-123-xyz', name: 'K', username: 'k', onClose });
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await clickBeside(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('temp-password')).toHaveTextContent('Abc-123-xyz');
+    expect(screen.queryByRole('button', { name: 'Schließen' })).toBeNull(); // no X either
+    await fireEvent.click(screen.getByRole('button', { name: de('tempPassword.done') }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves nothing in the document once closed', async () => {
     const view = render(TempPasswordModal, {
       password: 'Abc-123-xyz',
@@ -104,8 +128,53 @@ describe('UserCreateModal', () => {
       target: { value: 'Karl Test' },
     });
     await fireEvent.click(screen.getByRole('button', { name: 'Konto anlegen' }));
-    expect(screen.getByText(/2–64 Zeichen: Kleinbuchstaben/, { selector: '.error' })).toBeVisible();
+    expect(screen.getByText(/3–64 Zeichen: Kleinbuchstaben/, { selector: '.error' })).toBeVisible();
+    // Two characters are too few (the identity provider refuses them).
+    await fireEvent.input(screen.getByLabelText('Benutzername'), { target: { value: 'kt' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Konto anlegen' }));
+    expect(screen.getByText(/3–64 Zeichen: Kleinbuchstaben/, { selector: '.error' })).toBeVisible();
     expect(calls).toHaveLength(0);
+  });
+
+  it('closes on Escape or a click beside it while nothing has been entered', async () => {
+    const onClose = vi.fn();
+    render(UserCreateModal, { ...props, onClose });
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await clickBeside(screen.getByRole('dialog'));
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not lose input to a stray click or key', async () => {
+    const onClose = vi.fn();
+    render(ConfirmDialog);
+    render(UserCreateModal, { ...props, onClose });
+    const form = screen.getByRole('dialog', { name: de('users.create.title') });
+    await fireEvent.input(screen.getByLabelText('Vorname'), { target: { value: 'Karl' } });
+    await clickBeside(form);
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Weiter bearbeiten' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Eingaben verwerfen?' })).toBeNull(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Vorname')).toHaveValue('Karl');
+    // "Abbrechen" says what it does and needs no second question.
+    await fireEvent.click(screen.getByRole('button', { name: 'Abbrechen' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a chosen group or role as input, and input taken back as none', async () => {
+    const onClose = vi.fn();
+    render(UserCreateModal, { ...props, onClose });
+    const form = screen.getByRole('dialog');
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'IT' }));
+    await clickBeside(form);
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'IT' }));
+    await clickBeside(form);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('creates the account and hands the result on', async () => {
@@ -250,6 +319,85 @@ describe('UserEditModal', () => {
     expect(screen.getByLabelText('Rolle')).toBeDisabled();
     expect(screen.getByText('Deine eigene Rolle kannst du nicht ändern.')).toBeVisible();
   });
+
+  it('closes on a click beside it only while nothing was changed', async () => {
+    const onClose = vi.fn();
+    render(UserEditModal, { ...props, user: makeUser(), onClose });
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.input(screen.getByLabelText('Vorname'), { target: { value: 'Maria' } });
+    await clickBeside(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.input(screen.getByLabelText('Vorname'), { target: { value: 'Mia' } });
+    await clickBeside(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GroupModal', () => {
+  const group = groups[0];
+  const clara = makeUser({
+    id: 'u-clara',
+    username: 'clara',
+    first_name: 'Clara',
+    last_name: 'Chefin',
+    display_name: 'Clara Chefin',
+    role: 'tenant_admin',
+    // What the API reports to a user manager about an administrator.
+    can_edit_identity: false,
+    can_edit_membership: false,
+    can_assign_role: false,
+  });
+  const mia = makeUser();
+  const ben = makeUser({
+    id: 'u-ben',
+    username: 'ben',
+    first_name: 'Ben',
+    last_name: 'Büro',
+    display_name: 'Ben Büro',
+  });
+  const props = { open: true, group, canReadUsers: true, onClose: () => {}, onSaved: () => {} };
+  const page = (items: User[]) => ({ items, total: items.length, page: 1, page_size: 200 });
+
+  it('shows members who outrank the administrator but does not let them be added or removed', async () => {
+    const onSaved = vi.fn();
+    const { calls } = stubApi({
+      'GET /api/v1/admin/users': () => page([clara, mia, ben]),
+      'GET /api/v1/admin/groups/g-office': () => ({ ...group, member_ids: ['u-clara', 'u-mia'] }),
+      'PATCH /api/v1/admin/groups/g-office': () => ({ ...group, member_ids: [] }),
+    });
+    render(GroupModal, { ...props, onSaved });
+    const locked = await screen.findByRole('checkbox', { name: /Clara Chefin/ });
+    expect(locked).toBeChecked(); // a member, and shown as one
+    expect(locked).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Clara Chefin entfernen' })).toBeNull();
+    expect(screen.getByText(/Ausgegraute Konten haben mehr Rechte als du/)).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /Mia Mitglied/ })).toBeEnabled();
+
+    // Other members can still be changed; the locked one is sent on unchanged.
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Ben Büro/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    const patch = calls.find((call) => call.method === 'PATCH');
+    expect(patch?.body).toMatchObject({ member_ids: ['u-clara', 'u-mia', 'u-ben'] });
+  });
+
+  it('cannot add somebody who outranks the administrator to a new group', async () => {
+    stubApi({ 'GET /api/v1/admin/users': () => page([clara, mia]) });
+    render(GroupModal, { ...props, group: null });
+    const locked = await screen.findByRole('checkbox', { name: /Clara Chefin/ });
+    expect(locked).not.toBeChecked();
+    expect(locked).toBeDisabled();
+  });
+
+  it('says nothing about locked accounts when every member may be changed', async () => {
+    stubApi({
+      'GET /api/v1/admin/users': () => page([mia, ben]),
+      'GET /api/v1/admin/groups/g-office': () => ({ ...group, member_ids: ['u-mia'] }),
+    });
+    render(GroupModal, props);
+    expect(await screen.findByRole('checkbox', { name: /Ben Büro/ })).toBeEnabled();
+    expect(screen.queryByText(/Ausgegraute Konten/)).toBeNull();
+  });
 });
 
 describe('TenantModal', () => {
@@ -308,6 +456,69 @@ describe('TenantDeleteModal', () => {
     await fireEvent.click(button);
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith(tenant));
     expect(calls[0].body).toEqual({ confirm_slug: 'acme' });
+  });
+});
+
+describe('AppModal', () => {
+  const props = {
+    open: true,
+    app: null,
+    groups: [],
+    canReadUsers: false,
+    onClose: () => {},
+    onSaved: () => {},
+  };
+  const icons = () => screen.getAllByRole('radio').filter((el) => el.tagName === 'BUTTON');
+
+  it('makes the icon grid a single Tab stop: the chosen icon', async () => {
+    render(AppModal, props);
+    const all = icons();
+    expect(all).toHaveLength(APP_ICON_NAMES.length);
+    expect(all.filter((icon) => icon.tabIndex === 0)).toHaveLength(1);
+    const chosen = all.find((icon) => icon.getAttribute('aria-checked') === 'true');
+    expect(chosen).toBeDefined();
+    expect(chosen?.tabIndex).toBe(0);
+    // Choosing another icon moves the Tab stop with it.
+    await fireEvent.click(all[5]);
+    expect(all[5]).toHaveAttribute('aria-checked', 'true');
+    all[5].focus();
+    await waitFor(() => expect(all.filter((icon) => icon.tabIndex === 0)).toEqual([all[5]]));
+  });
+
+  it('moves inside the icon grid with the arrow keys, Home and End, without choosing', async () => {
+    render(AppModal, props);
+    const all = icons();
+    const last = all.length - 1;
+    all[0].focus();
+    await fireEvent.keyDown(all[0], { key: 'ArrowRight' });
+    expect(all[1]).toHaveFocus();
+    await fireEvent.keyDown(all[1], { key: 'ArrowLeft' });
+    await fireEvent.keyDown(all[0], { key: 'ArrowLeft' });
+    expect(all[last]).toHaveFocus(); // wraps around
+    await fireEvent.keyDown(all[last], { key: 'Home' });
+    expect(all[0]).toHaveFocus();
+    await fireEvent.keyDown(all[0], { key: 'End' });
+    expect(all[last]).toHaveFocus();
+    // The Tab stop follows the focus, so Tab out and back in returns here.
+    await waitFor(() => expect(all.filter((icon) => icon.tabIndex === 0)).toEqual([all[last]]));
+    // Moving does not choose: the first icon is still the chosen one.
+    expect(all[0]).toHaveAttribute('aria-checked', 'true');
+    expect(all[last]).toHaveAttribute('aria-checked', 'false');
+    // Keys with a modifier are the browser's.
+    await fireEvent.keyDown(all[last], { key: 'ArrowLeft', altKey: true });
+    expect(all[last]).toHaveFocus();
+  });
+
+  it('does not lose typed code to a stray click beside the dialog', async () => {
+    const onClose = vi.fn();
+    render(AppModal, { ...props, onClose });
+    const dialog = screen.getByRole('dialog');
+    await clickBeside(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1); // untouched: closes
+    await fireEvent.click(screen.getByRole('radio', { name: de('app.type.custom') }));
+    await fireEvent.input(screen.getByLabelText('HTML'), { target: { value: '<h1>Hallo</h1>' } });
+    await clickBeside(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

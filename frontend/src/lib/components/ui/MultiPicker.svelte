@@ -10,6 +10,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     label: string;
     /** Secondary text such as a username, set in mono. */
     detail?: string;
+    /** The entry stays as it is, chosen or not: it is shown but cannot be toggled. */
+    locked?: boolean;
   }
 
   /** Options whose label or detail contains the query (case-insensitive). */
@@ -36,6 +38,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     label?: string;
     searchPlaceholder?: string;
     emptyText?: string;
+    /** Why locked entries cannot be changed; shown as their tooltip. */
+    lockedHint?: string;
     loading?: boolean;
     disabled?: boolean;
     onChange?: (selected: string[]) => void;
@@ -47,6 +51,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     label,
     searchPlaceholder,
     emptyText,
+    lockedHint,
     loading = false,
     disabled = false,
     onChange,
@@ -69,6 +74,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 
   function toggle(id: string, on: boolean) {
+    if (byId.get(id)?.locked) return;
     if (on && !chosen.has(id)) set([...selected, id]);
     if (!on && chosen.has(id)) set(selected.filter((x) => x !== id));
   }
@@ -90,7 +96,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <Tag
           tone="neutral"
           mono={false}
-          onRemove={disabled ? undefined : () => toggle(chip.id, false)}
+          onRemove={disabled || chip.locked ? undefined : () => toggle(chip.id, false)}
           removeLabel={$t('picker.remove', { name: chip.label })}
         >
           {chip.label}
@@ -111,11 +117,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <div class="state"><Spinner size={16} /></div>
     {:else}
       {#each visible as option (option.id)}
-        <label class="row">
+        <label
+          class="row"
+          class:locked={option.locked}
+          title={option.locked ? lockedHint : undefined}
+        >
           <input
             type="checkbox"
             checked={chosen.has(option.id)}
-            {disabled}
+            disabled={disabled || option.locked}
             onchange={(e) => toggle(option.id, e.currentTarget.checked)}
           />
           <span class="name">{option.label}</span>
@@ -166,8 +176,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
     font-size: var(--text-sm);
     cursor: pointer;
   }
-  .disabled .row {
+  .disabled .row,
+  .row.locked {
     cursor: not-allowed;
+  }
+  .row.locked {
+    opacity: 0.6;
   }
   .row:hover {
     background: var(--surface-hover);

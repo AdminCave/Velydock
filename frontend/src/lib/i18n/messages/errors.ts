@@ -30,6 +30,10 @@ export const errors = {
     'The request was rejected for security reasons. Reload the page and try again.',
   ],
   'error.no_tenant': ['Es ist keine Organisation ausgewählt.', 'No organization is selected.'],
+  'error.tenant_changed': [
+    'Die aktive Organisation hat sich inzwischen geändert. Es wurde nichts ausgeführt – prüf die Ansicht und versuch es noch einmal.',
+    'The active organization has changed in the meantime. Nothing was done – check the view and try again.',
+  ],
   'error.username_taken': [
     'Dieser Benutzername ist bereits vergeben.',
     'This username is already in use.',
@@ -118,6 +122,18 @@ export const errors = {
   'error.not_embedded': [
     'Nur eingebettete Apps können geprüft werden.',
     'Only embedded apps can be checked.',
+  ],
+  'error.try_again': [
+    'Zwei Änderungen sind sich in die Quere gekommen. Es wurde nichts geändert – versuch es einfach noch einmal.',
+    'Two changes got in each other’s way. Nothing was changed – just try again.',
+  ],
+  'error.too_large': [
+    'Die Anfrage ist zu groß. Bei einer eigenen App hilft es, HTML, CSS oder JavaScript zu kürzen.',
+    'The request is too large. For a custom app it helps to shorten the HTML, CSS or JavaScript.',
+  ],
+  'error.rate_limited': [
+    'Zu viele Anfragen in kurzer Zeit. Warte einen Moment und versuch es noch einmal.',
+    'Too many requests in a short time. Wait a moment and try again.',
   ],
   'error.idp_unavailable': [
     'Der Anmeldedienst ist gerade nicht erreichbar. Bitte versuch es gleich noch einmal.',

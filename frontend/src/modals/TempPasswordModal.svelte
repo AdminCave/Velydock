@@ -25,8 +25,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </script>
 
 <!-- The API returns a one-time password exactly once; it is shown here and nowhere else,
-     and it is gone as soon as this dialog closes. -->
-<Modal open={password !== null} title={$t('tempPassword.title', { name })} width="480px" {onClose}>
+     and it is gone as soon as this dialog closes. Hence not dismissible: neither Escape nor
+     a click beside the dialog closes it, only its button does. -->
+<Modal
+  open={password !== null}
+  title={$t('tempPassword.title', { name })}
+  width="480px"
+  dismissible={false}
+  {onClose}
+>
   <Callout tone="warning" title={$t('tempPassword.once.title')}>
     {$t('tempPassword.once.text')}
   </Callout>

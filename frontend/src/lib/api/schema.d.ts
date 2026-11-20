@@ -16,6 +16,10 @@ export interface paths {
     /**
      * Logout
      * @description End the Velydock session and return the address that also ends the Keycloak session.
+     *
+     *     Deliberately works without a live session: someone who clicks "sign out" after the Velydock
+     *     session idled out still has a Keycloak session, and that is the one that must end. The row
+     *     is therefore looked up without the expiry check, and the answer is the same either way.
      */
     post: operations['logout_api_auth_logout_post'];
     delete?: never;

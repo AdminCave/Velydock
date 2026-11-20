@@ -17,7 +17,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid } from '$lib/utils/forms';
+  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
   import { isValidEmail, isValidUsername } from '$lib/utils/validate';
 
   interface Props {
@@ -44,6 +44,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let errors = $state<Record<string, string>>({});
   let failure = $state('');
 
+  // What the form holds, and what it held when the dialog opened: with input in it the
+  // dialog does not close on a stray click or key (see Modal).
+  const fields = () => [username, firstName, lastName, email, role, [...groupIds], sendEmail];
+  let pristine = $state.raw<unknown[]>([]);
+  const dirty = $derived(formChanged(fields(), pristine));
+
   // A field marked invalid gets the focus, so the message is seen even in a long form.
   $effect(() => {
     if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
@@ -60,6 +66,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       saving = false;
       errors = {};
       failure = '';
+      pristine = fields();
     });
   });
 
@@ -115,7 +122,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 </script>
 
-<Modal {open} title={$t('users.create.title')} width="620px" error={failure} {onClose}>
+<Modal {open} title={$t('users.create.title')} width="620px" error={failure} {dirty} {onClose}>
   <form id={formId} class="form" onsubmit={submit} novalidate>
     <FormField
       label={$t('field.username')}

@@ -21,6 +21,13 @@ export const common = {
   'ui.select': ['Auswählen …', 'Select …'],
   'state.loading': ['Lädt …', 'Loading …'],
   'confirm.title': ['Bitte bestätigen', 'Please confirm'],
+  'dialog.discard.title': ['Eingaben verwerfen?', 'Discard your input?'],
+  'dialog.discard.question': [
+    'Du hast in diesem Dialog etwas eingegeben, das noch nicht gespeichert ist.',
+    'You have entered something in this dialog that has not been saved yet.',
+  ],
+  'dialog.discard.confirm': ['Verwerfen', 'Discard'],
+  'dialog.discard.keep': ['Weiter bearbeiten', 'Keep editing'],
   'toast.copied': ['Kopiert.', 'Copied.'],
   'toast.copyFailed': [
     'Kopieren hat nicht geklappt. Bitte markier den Text und kopier ihn von Hand.',
@@ -89,8 +96,8 @@ export const common = {
     'This is not a valid e-mail address.',
   ],
   'validation.username': [
-    '2–64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich oder Unterstrich; am Anfang und am Ende ein Buchstabe oder eine Ziffer.',
-    '2–64 characters: lowercase letters, digits, dot, dash or underscore, starting and ending with a letter or digit.',
+    '3–64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich oder Unterstrich; am Anfang und am Ende ein Buchstabe oder eine Ziffer.',
+    '3–64 characters: lowercase letters, digits, dot, dash or underscore, starting and ending with a letter or digit.',
   ],
 
   // ── Pagination and pickers ───────────────────────────────────────────

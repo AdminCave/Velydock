@@ -41,7 +41,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </script>
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Blocks from '@lucide/svelte/icons/blocks';
@@ -77,6 +77,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let busy = $state(false);
   let modalOpen = $state(false);
   let editing = $state<AdminApp | null>(null);
+  let table = $state<HTMLTableElement | undefined>();
 
   async function load() {
     try {
@@ -120,13 +121,32 @@ SPDX-License-Identifier: GPL-3.0-or-later
     refreshDock();
   }
 
+  // Moving a row takes the focus away from the button that was pressed (the row is
+  // re-inserted elsewhere in the table). Put it back on the same app's button, so the
+  // next press moves the same app again; at the end of the list the opposite button of
+  // the row takes over. Focus that went somewhere else in the meantime is left alone.
+  async function keepFocus(appId: string, delta: -1 | 1) {
+    await tick();
+    if (!table) return;
+    const at = document.activeElement;
+    if (at && at !== document.body && !table.contains(at)) return;
+    const row = [...table.querySelectorAll<HTMLTableRowElement>('tbody tr')].find(
+      (candidate) => candidate.dataset.appId === appId,
+    );
+    const [up, down] = row?.querySelectorAll<HTMLButtonElement>('.row-actions button') ?? [];
+    const [wanted, other] = delta === -1 ? [up, down] : [down, up];
+    (wanted && !wanted.disabled ? wanted : other)?.focus();
+  }
+
   async function move(index: number, delta: -1 | 1) {
     if (!apps || busy) return;
     const next = moved(apps, index, delta);
     if (!next) return;
     const previous = apps;
+    const appId = apps[index].id;
     apps = next; // shown at once, confirmed by the server's answer
     busy = true;
+    void keepFocus(appId, delta);
     try {
       apps = await api.put('/api/v1/admin/apps/order', {
         body: { app_ids: next.map((a) => a.id) },
@@ -138,6 +158,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       void load();
     } finally {
       busy = false;
+      void keepFocus(appId, delta);
     }
   }
 
@@ -184,8 +205,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <Button iconLeft={Plus} onclick={openCreate}>{$t('apps.create')}</Button>
   </header>
 
-  <div class="table-wrap">
-    <table class="data-table" data-testid="apps-table">
+  <div class="table-wrap" aria-busy={busy}>
+    <table bind:this={table} class="data-table" data-testid="apps-table">
       <thead>
         <tr>
           <th scope="col" class="order">{$t('apps.col.order')}</th>
@@ -201,19 +222,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
         {#each apps ?? [] as app, index (app.id)}
           <tr data-app-id={app.id}>
             <td class="order">
+              <!-- Not disabled while a move is being stored: a disabled button loses the
+                   keyboard focus. move() ignores presses during that time. -->
               <span class="row-actions">
                 <IconButton
                   icon={ArrowUp}
                   size="sm"
                   label={$t('apps.move.up', { name: app.name })}
-                  disabled={busy || index === 0}
+                  disabled={index === 0}
                   onclick={() => void move(index, -1)}
                 />
                 <IconButton
                   icon={ArrowDown}
                   size="sm"
                   label={$t('apps.move.down', { name: app.name })}
-                  disabled={busy || index === (apps?.length ?? 0) - 1}
+                  disabled={index === (apps?.length ?? 0) - 1}
                   onclick={() => void move(index, 1)}
                 />
               </span>

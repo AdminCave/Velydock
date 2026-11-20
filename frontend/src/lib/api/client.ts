@@ -85,11 +85,34 @@ export class ApiError extends Error {
 
 export const CSRF_HEADER = 'X-Velydock-CSRF';
 
+/**
+ * Names the organization the page believes it is acting on. The active organization
+ * belongs to the session, which all tabs share: switching it in one tab changes what the
+ * requests of every other tab act on. With this header the API can tell that a tab is out
+ * of date and refuses the request (409 `tenant_changed`) instead of carrying it out in
+ * another organization than the one on screen.
+ */
+export const TENANT_HEADER = 'X-Velydock-Tenant';
+export const TENANT_CHANGED = 'tenant_changed';
+
+let activeTenantId: string | null = null;
+
+/** The organization to name in every request; null leaves the header out. */
+export function setActiveTenant(tenantId: string | null | undefined): void {
+  activeTenantId = tenantId || null;
+}
+
 let onUnauthorized: (() => void) | null = null;
+let onTenantChanged: (() => void) | null = null;
 
 /** Called whenever the API answers 401: the session is gone (expired, ended elsewhere). */
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
+}
+
+/** Called whenever the API refuses a request because the active organization changed. */
+export function setTenantChangedHandler(handler: (() => void) | null): void {
+  onTenantChanged = handler;
 }
 
 /** Replace `{name}` segments and append the query. Exported for tests. */
@@ -118,8 +141,16 @@ export function buildUrl(
   return url;
 }
 
+// What a status means when the answer carries no error envelope: a reverse proxy in
+// front of the API answers in its own words (plain "Too Many Requests", an HTML page).
+const STATUS_CODES: Record<number, string> = {
+  401: 'not_authenticated',
+  413: 'too_large',
+  429: 'rate_limited',
+};
+
 async function toApiError(response: Response): Promise<ApiError> {
-  let code = response.status === 401 ? 'not_authenticated' : 'error';
+  let code = STATUS_CODES[response.status] ?? 'error';
   let message = response.statusText || `HTTP ${response.status}`;
   let details: Record<string, unknown> = {};
   try {
@@ -154,6 +185,7 @@ export async function request<T>(
   const headers: Record<string, string> = { Accept: 'application/json' };
   // Every state-changing request carries the CSRF header; the API answers 403 without it.
   if (method !== 'get') headers[CSRF_HEADER] = '1';
+  if (activeTenantId) headers[TENANT_HEADER] = activeTenantId;
   const init: RequestInit = {
     method: method.toUpperCase(),
     credentials: 'same-origin',
@@ -176,6 +208,7 @@ export async function request<T>(
   if (!response.ok) {
     const error = await toApiError(response);
     if (response.status === 401) onUnauthorized?.();
+    else if (response.status === 409 && error.code === TENANT_CHANGED) onTenantChanged?.();
     throw error;
   }
   if (response.status === 204) return undefined as T;

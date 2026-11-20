@@ -91,7 +91,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import Switch from '$lib/components/ui/Switch.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid } from '$lib/utils/forms';
+  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
+  import { rovingIndex } from '$lib/utils/roving';
   import { isHttpUrl } from '$lib/utils/validate';
 
   interface Props {
@@ -139,6 +140,28 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let errors = $state<Record<string, string>>({});
   let failure = $state('');
 
+  // What the form holds, and what it held when the dialog opened: with changes in it the
+  // dialog does not close on a stray click or key (see Modal).
+  const fields = () => [
+    name,
+    description,
+    type,
+    url,
+    enabled,
+    audience,
+    [...groupIds],
+    [...userIds],
+    [...framePermissions],
+    customHtml,
+    customCss,
+    customJs,
+    allowNetwork,
+    iconName,
+    iconUpload,
+  ];
+  let pristine = $state.raw<unknown[]>([]);
+  const dirty = $derived(formChanged(fields(), pristine));
+
   // A field marked invalid gets the focus, so the message is seen even in a long form.
   $effect(() => {
     if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
@@ -175,6 +198,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
       failure = '';
       users = [];
       usersLoading = canReadUsers;
+      iconFocus = null;
+      pristine = fields();
     });
     if (canReadUsers) {
       fetchAllUsers(controller.signal)
@@ -204,6 +229,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
     users.map((u) => ({ id: u.id, label: u.display_name, detail: u.username })),
   );
   const previewUrl = $derived(iconUpload ?? storedIconUrl);
+
+  // The icon grid is a single Tab stop: the chosen icon (or the one last focused, or the
+  // first). Arrow keys, Home and End move the focus inside it; Enter or Space choose.
+  let iconGrid = $state<HTMLDivElement | undefined>();
+  let iconFocus = $state<string | null>(null);
+  const iconTabStop = $derived(
+    iconFocus ??
+      (!previewUrl && iconName && APP_ICON_NAMES.includes(iconName) ? iconName : APP_ICON_NAMES[0]),
+  );
+
+  function onIconKeydown(event: KeyboardEvent) {
+    if (!iconGrid || event.altKey || event.ctrlKey || event.metaKey) return;
+    const buttons = [...iconGrid.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    // The grid wraps with the width of the dialog: count what the first row holds.
+    const top = buttons[0].offsetTop;
+    const columns = buttons.filter((button) => button.offsetTop === top).length;
+    const next = rovingIndex(event.key, at, buttons.length, columns);
+    if (next === null) return;
+    event.preventDefault();
+    buttons[next].focus();
+  }
 
   function pickGlyph(next: string) {
     iconName = next;
@@ -344,6 +392,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   title={app ? $t('apps.edit.title', { name: app.name }) : $t('apps.create.title')}
   width="760px"
   error={failure}
+  {dirty}
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>
@@ -494,7 +543,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
           </p>
         </div>
       </div>
-      <div class="icon-grid" role="radiogroup" aria-label={$t('apps.icon.pick')}>
+      <div
+        bind:this={iconGrid}
+        class="icon-grid"
+        role="radiogroup"
+        aria-label={$t('apps.icon.pick')}
+      >
         {#each APP_ICON_NAMES as glyph (glyph)}
           {@const Glyph = APP_ICONS[glyph]}
           {@const selected = !previewUrl && iconName === glyph}
@@ -506,6 +560,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
             aria-checked={selected}
             aria-label={glyph}
             title={glyph}
+            tabindex={glyph === iconTabStop ? 0 : -1}
+            onfocus={() => (iconFocus = glyph)}
+            onkeydown={onIconKeydown}
             onclick={() => pickGlyph(glyph)}
           >
             <Glyph size={20} />

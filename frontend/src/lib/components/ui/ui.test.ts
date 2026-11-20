@@ -11,8 +11,9 @@ import { initials } from './Avatar.svelte';
 import ConfirmDialog, { cancelConfirm, confirmDialog } from './ConfirmDialog.svelte';
 import { placeMenu } from './Menu.svelte';
 import Modal from './Modal.svelte';
-import { filterOptions } from './MultiPicker.svelte';
+import MultiPicker, { filterOptions } from './MultiPicker.svelte';
 import { pageCount } from './Pagination.svelte';
+import SearchField from './SearchField.svelte';
 import Segmented from './Segmented.svelte';
 import Toast from './Toast.svelte';
 
@@ -138,6 +139,12 @@ describe('Toast', () => {
     showError(new DOMException('aborted', 'AbortError'));
     expect(screen.queryByTestId('toast')).toBeNull();
   });
+
+  it('leaves an ended session to the login page, which explains it', () => {
+    render(Toast);
+    showError(new ApiError(401, 'not_authenticated', 'Sign-in required.', {}));
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
 });
 
 describe('Modal', () => {
@@ -183,6 +190,189 @@ describe('Modal', () => {
   it('renders nothing while closed', () => {
     render(Modal, { open: false, title: 'Dialog', children: body });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // What a browser sends for a press and release of the mouse button: mousedown where
+  // the button went down, then click on the common ancestor of press and release.
+  const backdrop = () => screen.getByRole('dialog').parentElement as HTMLElement;
+  async function press(down: Element, clickOn: Element) {
+    await fireEvent.mouseDown(down);
+    await fireEvent.click(clickOn);
+  }
+
+  it('closes on a click beside the dialog', async () => {
+    const onClose = vi.fn();
+    render(Modal, { open: true, title: 'Dialog', onClose, children: body });
+    await press(backdrop(), backdrop());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open when the mouse button went down inside and was released beside it', async () => {
+    const onClose = vi.fn();
+    render(Modal, { open: true, title: 'Dialog', onClose, children: body });
+    // Selecting text in a field and overshooting: the click lands on the backdrop.
+    await press(screen.getByLabelText('first'), backdrop());
+    expect(onClose).not.toHaveBeenCalled();
+    // A click inside is none on the backdrop either.
+    await press(screen.getByLabelText('first'), screen.getByLabelText('first'));
+    expect(onClose).not.toHaveBeenCalled();
+    // And the earlier press does not count for a later click.
+    await fireEvent.click(backdrop());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes through its own buttons only when it is not dismissible', async () => {
+    const onClose = vi.fn();
+    render(Modal, { open: true, title: 'Einmalig', dismissible: false, onClose, children: body });
+    expect(screen.queryByRole('button', { name: 'Schließen' })).toBeNull();
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await press(backdrop(), backdrop());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Einmalig' })).toBeVisible();
+  });
+
+  describe('with unsaved input', () => {
+    it('ignores a click beside it and keeps the focus where it is', async () => {
+      const onClose = vi.fn();
+      render(Modal, { open: true, title: 'Formular', dirty: true, onClose, children: body });
+      await press(backdrop(), backdrop());
+      expect(onClose).not.toHaveBeenCalled();
+      // The press is cancelled, so the browser does not move the focus to the page behind;
+      // a press inside the dialog is left to the browser.
+      expect(await fireEvent.mouseDown(backdrop())).toBe(false);
+      expect(await fireEvent.mouseDown(screen.getByLabelText('first'))).toBe(true);
+    });
+
+    it('asks on Escape and keeps the input unless told to discard it', async () => {
+      const onClose = vi.fn();
+      render(ConfirmDialog);
+      render(Modal, { open: true, title: 'Formular', dirty: true, onClose, children: body });
+      await fireEvent.keyDown(document, { key: 'Escape' });
+      const question = await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+      expect(question).toHaveTextContent('noch nicht gespeichert');
+      expect(onClose).not.toHaveBeenCalled();
+      // Escape again answers the question with "no": the form stays.
+      await fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Eingaben verwerfen?' })).toBeNull(),
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole('dialog', { name: 'Formular' })).toBeVisible();
+
+      await fireEvent.keyDown(document, { key: 'Escape' });
+      await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+      await fireEvent.click(screen.getByRole('button', { name: 'Weiter bearbeiten' }));
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Eingaben verwerfen?' })).toBeNull(),
+      );
+      expect(onClose).not.toHaveBeenCalled();
+
+      await fireEvent.keyDown(document, { key: 'Escape' });
+      await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+      await fireEvent.click(screen.getByRole('button', { name: 'Verwerfen' }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it('closes at once through the X', async () => {
+      const onClose = vi.fn();
+      render(Modal, { open: true, title: 'Formular', dirty: true, onClose, children: body });
+      await fireEvent.click(screen.getByRole('button', { name: 'Schließen' }));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('withdraws its question when the dialog goes away meanwhile', async () => {
+      render(ConfirmDialog);
+      const view = render(Modal, { open: true, title: 'Formular', dirty: true, children: body });
+      await fireEvent.keyDown(document, { key: 'Escape' });
+      await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+      await view.rerender({ open: false }); // e.g. saved in the meantime
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+  });
+});
+
+describe('MultiPicker', () => {
+  const options = [
+    { id: '1', label: 'Anna Admin', detail: 'anna', locked: true },
+    { id: '2', label: 'Mia Mitglied', detail: 'mia' },
+    { id: '3', label: 'Clara Chefin', detail: 'clara', locked: true },
+  ];
+
+  it('shows a locked entry as it is and does not let it be toggled', async () => {
+    const onChange = vi.fn();
+    render(MultiPicker, {
+      options,
+      selected: ['1', '2'],
+      label: 'Mitglieder',
+      lockedHint: 'Mehr Rechte als du',
+      onChange,
+    });
+    const anna = screen.getByRole('checkbox', { name: /Anna Admin/ });
+    const clara = screen.getByRole('checkbox', { name: /Clara Chefin/ });
+    expect(anna).toBeChecked();
+    expect(anna).toBeDisabled();
+    expect(clara).not.toBeChecked();
+    expect(clara).toBeDisabled();
+    expect(anna.closest('label')).toHaveAttribute('title', 'Mehr Rechte als du');
+    // The chip of a locked entry cannot be removed either; the others can.
+    expect(screen.queryByRole('button', { name: 'Anna Admin entfernen' })).toBeNull();
+    const mia = screen.getByRole('checkbox', { name: /Mia Mitglied/ });
+    expect(mia).toBeEnabled();
+    expect(mia.closest('label')).not.toHaveAttribute('title');
+    await fireEvent.click(screen.getByRole('button', { name: 'Mia Mitglied entfernen' }));
+    expect(onChange).toHaveBeenCalledWith(['1']);
+  });
+
+  it('lets every entry be toggled when none is locked', async () => {
+    const onChange = vi.fn();
+    render(MultiPicker, {
+      options: options.map(({ id, label }) => ({ id, label })),
+      selected: [],
+      label: 'Mitglieder',
+      onChange,
+    });
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Clara Chefin' }));
+    expect(onChange).toHaveBeenCalledWith(['3']);
+  });
+});
+
+describe('SearchField', () => {
+  it('empties a filled field on Escape and keeps the key to itself', async () => {
+    const outside = vi.fn();
+    document.addEventListener('keydown', outside);
+    try {
+      render(SearchField, { value: 'anna', label: 'Suche' });
+      const input = screen.getByRole('searchbox', { name: 'Suche' }) as HTMLInputElement;
+      await fireEvent.keyDown(input, { key: 'Escape' });
+      expect(input.value).toBe('');
+      // A dialog listens on the document: it must not see this Escape …
+      expect(outside).not.toHaveBeenCalled();
+      // … but the next one, with nothing left to clear, is its own.
+      await fireEvent.keyDown(input, { key: 'Escape' });
+      expect(outside).toHaveBeenCalledTimes(1);
+      await fireEvent.keyDown(input, { key: 'a' });
+      expect(outside).toHaveBeenCalledTimes(2);
+    } finally {
+      document.removeEventListener('keydown', outside);
+    }
+  });
+
+  it('does not close the dialog around it while it has something to clear', async () => {
+    const onClose = vi.fn();
+    const withSearch = createRawSnippet(() => ({
+      render: () => '<div data-testid="slot"></div>',
+    }));
+    render(Modal, { open: true, title: 'Dialog', onClose, children: withSearch });
+    render(SearchField, {
+      target: screen.getByTestId('slot'),
+      props: { value: 'anna', label: 'Suche' },
+    });
+    const input = screen.getByRole('searchbox', { name: 'Suche' }) as HTMLInputElement;
+    await fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input.value).toBe('');
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

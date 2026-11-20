@@ -33,6 +33,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let failure = $state('');
   let missing = $state(false);
 
+  // With a choice made the dialog does not close on a stray click or key (see Modal).
+  const dirty = $derived(tenantId !== '' || role !== 'member');
+
   $effect(() => {
     if (!user) return;
     untrack(() => {
@@ -80,6 +83,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   title={$t('systemUsers.add.title', { name: user?.display_name ?? '' })}
   width="520px"
   error={failure}
+  {dirty}
   {onClose}
 >
   {#if user}

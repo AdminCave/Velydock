@@ -8,10 +8,11 @@ import { isHttpUrl, isValidEmail, isValidUsername } from './validate';
 
 describe('isValidUsername', () => {
   it('follows the rules of the API', () => {
-    for (const ok of ['ab', 'abc', 'anna', 'user01', 'a.b', 'a-b_c', 'x'.repeat(64)]) {
+    for (const ok of ['abc', 'a1b', 'anna', 'user01', 'a.b', 'a-b_c', 'x'.repeat(64)]) {
       expect(isValidUsername(ok), ok).toBe(true);
     }
-    for (const bad of ['', 'a', '.ab', 'ab.', 'a b', 'ä12', 'a@b', 'x'.repeat(65)]) {
+    // At least three characters: the identity provider refuses shorter names.
+    for (const bad of ['', 'a', 'ab', '.ab', 'ab.', 'a b', 'ä12', 'a@b', 'x'.repeat(65)]) {
       expect(isValidUsername(bad), bad).toBe(false);
     }
   });

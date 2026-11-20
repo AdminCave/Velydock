@@ -21,6 +21,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const params = $derived(new URLSearchParams($location.search));
   const errorCode = $derived(params.get('error'));
   const signedOut = $derived(params.get('signed_out') === '1');
+  // Set by the app when a session that was in use ended (a request was answered 401).
+  const expired = $derived(params.get('expired') === '1');
   const returnTo = $derived(safeReturnPath(params.get('return_to')));
 
   let info = $state<PublicInfo | null>(null);
@@ -43,6 +45,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
       .catch(() => {
         /* the page works without it; the name falls back to the product name */
       });
+    // Back from the identity provider: a page restored from the back/forward cache still
+    // has the button in its "leaving" state, and nobody could sign in with it.
+    const onPageShow = () => (leaving = false);
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
   });
 
   // Already signed in: there is nothing to do here.
@@ -71,6 +78,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
     {#if errorText}
       <Callout tone="danger" role="alert" testid="login-message">{errorText}</Callout>
+    {:else if expired}
+      <Callout tone="warning" role="status" testid="login-message">
+        {$t('login.sessionExpired')}
+      </Callout>
     {:else if signedOut}
       <Callout tone="success" role="status" testid="login-message">
         {$t('login.signedOut')}

@@ -81,9 +81,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     if (tenantId === me.active_tenant?.id || switching) return;
     switching = true;
     try {
-      await switchTenant(tenantId);
       // The new organization has its own apps and pages; start at its dashboard.
-      navigate('/');
+      await switchTenant(tenantId, () => navigate('/'));
     } catch (err) {
       showError(err);
     } finally {
@@ -114,7 +113,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     data-testid="dock-home"
   >
     <Mark size={30} />
-    <span class="instance">{me.instance_name}</span>
+    <span class="instance" title={me.instance_name}>{me.instance_name}</span>
   </a>
 
   <span class="divider" aria-hidden="true"></span>
@@ -242,6 +241,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     align-items: center;
     gap: var(--space-3);
     flex: 0 0 auto;
+    min-width: 0;
     padding: var(--space-2);
     border-radius: var(--radius-md);
     color: var(--text-strong);
@@ -252,9 +252,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
     text-decoration: none;
   }
   .instance {
+    /* A long instance name must not take the room of the apps next to it. */
+    max-width: clamp(6rem, 16vw, 16rem);
+    overflow: hidden;
     font-size: var(--text-md);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-tight);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .divider {

@@ -16,7 +16,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Modal from '$lib/components/ui/Modal.svelte';
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid } from '$lib/utils/forms';
+  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
 
   interface Props {
     open: boolean;
@@ -34,12 +34,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let name = $state('');
   let description = $state('');
   let memberIds = $state<string[]>([]);
-  let originalMembers: string[] = [];
+  let originalMembers = $state.raw<string[]>([]);
   let users = $state<User[]>([]);
   let loading = $state(false);
   let saving = $state(false);
   let errors = $state<Record<string, string>>({});
   let failure = $state('');
+
+  // With changes in it the dialog does not close on a stray click or key (see Modal).
+  // The members count from what the server reported, which arrives after opening.
+  const dirty = $derived(
+    formChanged(
+      [name, description, [...memberIds].sort()],
+      [group?.name ?? '', group?.description ?? '', [...originalMembers].sort()],
+    ),
+  );
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
   $effect(() => {
@@ -87,13 +96,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
     return () => controller.abort();
   });
 
+  // The API refuses a change that adds or removes somebody who outranks the administrator
+  // (a user manager and an administrator, anybody and a system administrator). Those
+  // accounts are shown as they are and cannot be toggled; `can_edit_membership` says which.
   const options = $derived(
     users.map((u) => ({
       id: u.id,
       label: u.active ? u.display_name : `${u.display_name} (${$t('status.inactive')})`,
       detail: u.username,
+      locked: !u.can_edit_membership,
     })),
   );
+  const someLocked = $derived(options.some((option) => option.locked));
 
   function sameIds(a: string[], b: string[]): boolean {
     return a.length === b.length && [...a].sort().join() === [...b].sort().join();
@@ -141,6 +155,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   title={group ? $t('groups.edit.title', { name: group.name }) : $t('groups.create.title')}
   width="620px"
   error={failure}
+  {dirty}
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>
@@ -151,11 +166,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <Input bind:value={description} multiline rows={2} maxlength={500} />
     </FormField>
     {#if canReadUsers}
-      <FormField label={$t('groups.members')} hint={$t('groups.members.hint')}>
+      <FormField
+        label={$t('groups.members')}
+        hint={someLocked
+          ? `${$t('groups.members.hint')} ${$t('groups.members.locked')}`
+          : $t('groups.members.hint')}
+      >
         <MultiPicker
           bind:selected={memberIds}
           {options}
           {loading}
+          lockedHint={$t('groups.members.locked')}
           searchPlaceholder={$t('groups.members.search')}
           emptyText={$t('groups.members.empty')}
         />

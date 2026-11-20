@@ -18,6 +18,7 @@ const BACKEND_CODES = [
   'validation',
   'csrf',
   'no_tenant',
+  'tenant_changed',
   'username_taken',
   'email_taken',
   'group_name_taken',
@@ -41,6 +42,9 @@ const BACKEND_CODES = [
   'icon_too_large',
   'order_mismatch',
   'not_embedded',
+  'try_again',
+  'too_large',
+  'rate_limited',
   'idp_unavailable',
   'idp_error',
 ];

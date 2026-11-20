@@ -5,54 +5,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
 <script lang="ts" module>
-  import { writable, get } from 'svelte/store';
-
-  export interface ConfirmOptions {
-    title?: string;
-    /** Plain-language consequences, shown below the question. */
-    detail?: string;
-    confirmLabel?: string;
-    cancelLabel?: string;
-    /** "danger" for anything that deletes or locks out; "neutral" otherwise. */
-    tone?: 'danger' | 'neutral';
-  }
-
-  interface ConfirmRequest extends ConfirmOptions {
-    message: string;
-    resolve: (ok: boolean) => void;
-  }
-
-  const _pending = writable<ConfirmRequest | null>(null);
-
-  /** Ask a yes/no question in a dialog. Resolves false when dismissed. */
-  export function confirmDialog(message: string, options: ConfirmOptions = {}): Promise<boolean> {
-    // Resolve a still-open question as cancelled before replacing it; its awaiter would
-    // otherwise hang forever.
-    const previous = get(_pending);
-    if (previous) previous.resolve(false);
-    return new Promise((resolve) => {
-      _pending.set({ ...options, message, resolve });
-    });
-  }
-
-  /** Cancel an open question, e.g. when the session ends. */
-  export function cancelConfirm(): void {
-    const current = get(_pending);
-    if (current) current.resolve(false);
-    _pending.set(null);
-  }
+  // The question itself lives in confirm.ts; these names stay available here because
+  // pages import them together with the dialog.
+  export { cancelConfirm, confirmDialog, type ConfirmOptions } from './confirm';
 </script>
 
 <script lang="ts">
   import Modal from './Modal.svelte';
   import Button from './Button.svelte';
+  import { pendingConfirm, settleConfirm } from './confirm';
   import { t } from '$lib/i18n';
 
-  const request = $derived($_pending);
+  const request = $derived($pendingConfirm);
 
   function settle(ok: boolean) {
-    request?.resolve(ok);
-    _pending.set(null);
+    settleConfirm(ok);
   }
 </script>
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { writable } from 'svelte/store';
+import { ApiError } from '$lib/api/client';
 import { errorMessage } from '$lib/api/errors';
 
 export type ToastKind = 'success' | 'error' | 'info';
@@ -30,6 +31,8 @@ export function showToast(message: string, kind: ToastKind = 'success', duration
 export function showError(err: unknown): void {
   // A cancelled request is not an error worth reporting.
   if (err instanceof DOMException && err.name === 'AbortError') return;
+  // A 401 ends the session; the login page that follows says so (see stores/session.ts).
+  if (err instanceof ApiError && err.status === 401) return;
   showToast(errorMessage(err), 'error');
 }
 

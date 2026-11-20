@@ -3,7 +3,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, CSRF_HEADER, api, buildUrl, request, setUnauthorizedHandler } from './client';
+import {
+  ApiError,
+  CSRF_HEADER,
+  TENANT_HEADER,
+  api,
+  buildUrl,
+  request,
+  setActiveTenant,
+  setTenantChangedHandler,
+  setUnauthorizedHandler,
+} from './client';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -32,6 +42,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   setUnauthorizedHandler(null);
+  setTenantChangedHandler(null);
+  setActiveTenant(null);
 });
 
 describe('buildUrl', () => {
@@ -159,6 +171,28 @@ describe('errors', () => {
     expect(error.fields).toEqual([]);
   });
 
+  it('names what a reverse proxy means when it answers without the envelope', async () => {
+    // nginx and friends: a plain text or HTML body, no JSON.
+    fetchMock.mockResolvedValue(new Response('Too Many Requests', { status: 429 }));
+    let error = (await request('get', '/x').catch((e: unknown) => e)) as ApiError;
+    expect(error).toMatchObject({ status: 429, code: 'rate_limited' });
+    fetchMock.mockResolvedValue(new Response('<html>413</html>', { status: 413 }));
+    error = (await request('post', '/x', { body: {} }).catch((e: unknown) => e)) as ApiError;
+    expect(error).toMatchObject({ status: 413, code: 'too_large' });
+  });
+
+  it('prefers the code of the envelope over the one derived from the status', async () => {
+    fetchMock.mockResolvedValue(apiError(429, 'rate_limited'));
+    let error = (await request('get', '/x').catch((e: unknown) => e)) as ApiError;
+    expect(error.code).toBe('rate_limited');
+    fetchMock.mockResolvedValue(apiError(409, 'try_again'));
+    error = (await request('post', '/x').catch((e: unknown) => e)) as ApiError;
+    expect(error).toMatchObject({ status: 409, code: 'try_again' });
+    fetchMock.mockResolvedValue(apiError(413, 'something_else'));
+    error = (await request('post', '/x').catch((e: unknown) => e)) as ApiError;
+    expect(error.code).toBe('something_else');
+  });
+
   it('reports an unreachable server as a network error', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     const error = (await request('get', '/x').catch((e: unknown) => e)) as ApiError;
@@ -199,6 +233,54 @@ describe('401', () => {
     fetchMock.mockResolvedValue(apiError(403, 'csrf'));
     await request('post', '/x').catch(() => {});
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('active organization', () => {
+  it('names the organization the page shows in every request, reads and writes', async () => {
+    expect(TENANT_HEADER).toBe('X-Velydock-Tenant');
+    setActiveTenant('t-acme');
+    fetchMock.mockImplementation(async () => json({}));
+    await api.get('/api/v1/admin/groups');
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-acme');
+    await request('post', '/api/v1/admin/users', { body: {} });
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-acme');
+    expect(lastCall().headers[CSRF_HEADER]).toBe('1');
+  });
+
+  it('leaves the header out while no organization is known', async () => {
+    fetchMock.mockImplementation(async () => json({}));
+    await api.get('/api/v1/me');
+    expect(TENANT_HEADER in lastCall().headers).toBe(false);
+    setActiveTenant('t-acme');
+    setActiveTenant(null);
+    await api.get('/api/v1/me');
+    expect(TENANT_HEADER in lastCall().headers).toBe(false);
+    setActiveTenant('');
+    await api.get('/api/v1/me');
+    expect(TENANT_HEADER in lastCall().headers).toBe(false);
+  });
+
+  it('reports 409 tenant_changed to its handler and still rejects', async () => {
+    const changed = vi.fn();
+    const unauthorized = vi.fn();
+    setTenantChangedHandler(changed);
+    setUnauthorizedHandler(unauthorized);
+    fetchMock.mockResolvedValue(apiError(409, 'tenant_changed'));
+    const error = (await api.get('/api/v1/admin/groups').catch((e: unknown) => e)) as ApiError;
+    expect(error).toMatchObject({ status: 409, code: 'tenant_changed' });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(unauthorized).not.toHaveBeenCalled();
+  });
+
+  it('does not take other conflicts for a changed organization', async () => {
+    const changed = vi.fn();
+    setTenantChangedHandler(changed);
+    fetchMock.mockResolvedValue(apiError(409, 'username_taken'));
+    await request('post', '/x').catch(() => {});
+    fetchMock.mockResolvedValue(apiError(403, 'tenant_changed'));
+    await request('post', '/x').catch(() => {});
+    expect(changed).not.toHaveBeenCalled();
   });
 });
 

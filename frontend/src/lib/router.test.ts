@@ -93,6 +93,16 @@ describe('loginPath and signInUrl', () => {
     expect(loginPath({ path: '/', search: '' })).toBe('/login');
   });
 
+  it('can say that a session has expired, and still remembers the page', () => {
+    expect(loginPath({ path: '/', search: '' }, { expired: true })).toBe('/login?expired=1');
+    expect(loginPath({ path: '/admin/users', search: '?page=2' }, { expired: true })).toBe(
+      '/login?expired=1&return_to=%2Fadmin%2Fusers%3Fpage%3D2',
+    );
+    expect(loginPath({ path: '/app/1', search: '' }, { expired: false })).toBe(
+      '/login?return_to=%2Fapp%2F1',
+    );
+  });
+
   it('builds the backend sign-in address with a safe return path', () => {
     expect(signInUrl('/app/1')).toBe('/api/auth/login?return_to=%2Fapp%2F1');
     expect(signInUrl('https://evil.example')).toBe('/api/auth/login?return_to=%2F');

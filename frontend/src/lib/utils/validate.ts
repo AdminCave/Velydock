@@ -5,7 +5,8 @@
 // The same rules the API applies (backend/velydock/schemas.py), checked in the form first
 // so the explanation is in the user's language and next to the field.
 
-const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$|^[a-z0-9]{2,3}$/;
+// 3–64 characters: the identity provider refuses shorter names.
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$/;
 const EMAIL_RE = /^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s.]{2,}$/;
 
 export function isValidUsername(value: string): boolean {

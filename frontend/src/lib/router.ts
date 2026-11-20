@@ -133,10 +133,16 @@ export function safeReturnPath(value: string | null | undefined): string {
   return value.slice(0, 500);
 }
 
-/** Address of the login page that remembers where the user was. */
-export function loginPath(from: RouteLocation): string {
+/**
+ * Address of the login page that remembers where the user was. `expired` makes it say
+ * that a session which was in use has ended.
+ */
+export function loginPath(from: RouteLocation, options: { expired?: boolean } = {}): string {
   const back = safeReturnPath(from.path + from.search);
-  return back === '/' ? '/login' : `/login?return_to=${encodeURIComponent(back)}`;
+  const query: string[] = [];
+  if (options.expired) query.push('expired=1');
+  if (back !== '/') query.push(`return_to=${encodeURIComponent(back)}`);
+  return query.length > 0 ? `/login?${query.join('&')}` : '/login';
 }
 
 /** Backend address that starts the sign-in (a full page navigation, not a fetch). */

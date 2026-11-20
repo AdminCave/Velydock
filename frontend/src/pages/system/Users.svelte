@@ -23,8 +23,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import Tag from '$lib/components/ui/Tag.svelte';
   import { language, t } from '$lib/i18n';
-  import { me, refreshMe } from '$lib/stores/session';
+  import { hasPermission } from '$lib/nav';
+  import { me, permissions, refreshMe } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
+  import { loadApps } from '$lib/stores/workspace';
   import { formatDateTime } from '$lib/utils/datetime';
   import AddMemberModal from '../../modals/AddMemberModal.svelte';
 
@@ -90,12 +92,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
     return user.id === $me?.user.id;
   }
 
+  // A change to the own account changes what the shell shows: the list of organizations,
+  // the role in the active one and, with it, the apps in the dock.
+  function refreshSelf() {
+    refreshMe()
+      .then(() => {
+        if (hasPermission($permissions, 'workspace:use')) return loadApps();
+      })
+      .catch(showError);
+  }
+
   function onAdded(user: SystemUser, tenant: Tenant) {
     adding = null;
     showToast($t('systemUsers.added', { name: user.display_name, tenant: tenant.name }));
     void load();
-    // Adding yourself changes your own list of organizations.
-    if (isSelf(user)) refreshMe().catch(showError);
+    if (isSelf(user)) refreshSelf();
   }
 
   async function setSystemAdmin(user: SystemUser, grant: boolean) {
@@ -119,6 +130,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         $t(grant ? 'systemUsers.granted' : 'systemUsers.revoked', { name: user.display_name }),
       );
       await load();
+      if (isSelf(user)) refreshSelf();
     } catch (err) {
       showError(err);
     }

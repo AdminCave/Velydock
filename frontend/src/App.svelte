@@ -18,7 +18,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { hasPermission, isAdminArea } from '$lib/nav';
   import { location, loginPath, navigate, startRouter } from '$lib/router';
   import { resolveRoute } from '$lib/routing';
-  import { loadSession, me, permissions, session } from '$lib/stores/session';
+  import {
+    loadSession,
+    me,
+    permissions,
+    session,
+    sessionExpired,
+    startSessionWatch,
+  } from '$lib/stores/session';
   import { showError } from '$lib/stores/toasts';
   import { loadApps, resetWorkspace, workspace } from '$lib/stores/workspace';
   import { startThemeSync } from '$lib/theme';
@@ -28,10 +35,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
   onMount(() => {
     const stopRouter = startRouter();
     const stopTheme = startThemeSync();
+    const stopWatch = startSessionWatch();
     void loadSession();
     return () => {
       stopRouter();
       stopTheme();
+      stopWatch();
     };
   });
 
@@ -40,12 +49,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const activeAppId = $derived(resolved.kind === 'app' ? (resolved.params.id ?? null) : null);
 
   // Without a session every page but the login page leads to the login page, which
-  // remembers where the user wanted to go.
+  // remembers where the user wanted to go and, if a session that was in use has just
+  // ended, says so.
   $effect(() => {
     if (status !== 'anonymous' || resolved.kind === 'public') return;
     const from = untrack(() => $location);
+    const expired = untrack(() => $sessionExpired);
     cancelConfirm();
-    navigate(loginPath(from), { replace: true });
+    navigate(loginPath(from, { expired }), { replace: true });
   });
 
   $effect(() => {
@@ -110,18 +121,22 @@ SPDX-License-Identifier: GPL-3.0-or-later
   <Shell me={$me} path={$location.path} {activeAppId}>
     {#if resolved.kind === 'page'}
       {@const Page = resolved.route.component}
-      {#if isAdminArea($location.path)}
-        <div class="page">
-          <SubNav
-            path={$location.path}
-            permissions={$permissions}
-            tenantName={$me.active_tenant?.name}
-          />
-          {#if Page}<Page />{/if}
-        </div>
-      {:else if Page}
-        <Page />
-      {/if}
+      <!-- A page shows data of the active organization: when that changes (switched here
+           or in another tab, deactivated, membership removed), the page starts over. -->
+      {#key tenantId}
+        {#if isAdminArea($location.path)}
+          <div class="page">
+            <SubNav
+              path={$location.path}
+              permissions={$permissions}
+              tenantName={$me.active_tenant?.name}
+            />
+            {#if Page}<Page />{/if}
+          </div>
+        {:else if Page}
+          <Page />
+        {/if}
+      {/key}
     {:else if resolved.kind === 'forbidden'}
       <NotFound forbidden />
     {:else if resolved.kind === 'not-found'}

@@ -84,9 +84,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     if (entering) return;
     entering = true;
     try {
-      await switchTenant(tenant.id);
+      await switchTenant(tenant.id, () => navigate('/'));
       showToast($t('tenants.entered', { name: tenant.name }), 'info');
-      navigate('/');
     } catch (err) {
       showError(err);
     } finally {

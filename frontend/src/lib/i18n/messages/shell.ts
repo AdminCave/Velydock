@@ -13,6 +13,28 @@ export const shell = {
     'You will be taken to the sign-in and come back here afterwards.',
   ],
   'login.signedOut': ['Du bist abgemeldet. Bis später.', 'You are signed out. See you later.'],
+  'login.sessionExpired': [
+    'Deine Sitzung ist abgelaufen. Melde dich erneut an, dann geht es dort weiter, wo du warst.',
+    'Your session has expired. Sign in again and you will be back where you were.',
+  ],
+
+  // ── Session ──────────────────────────────────────────────────────────
+  'session.tenantChanged': [
+    'Die aktive Organisation hat sich geändert, zum Beispiel in einem anderen Fenster. Du arbeitest jetzt in „{name}“.',
+    'The active organization has changed, for example in another window. You are now working in “{name}”.',
+  ],
+  'session.tenantChanged.refused': [
+    'Die aktive Organisation hat sich geändert, zum Beispiel in einem anderen Fenster. Deine letzte Anfrage wurde deshalb nicht ausgeführt. Du arbeitest jetzt in „{name}“.',
+    'The active organization has changed, for example in another window. Your last request was therefore not carried out. You are now working in “{name}”.',
+  ],
+  'session.signOutFailed': [
+    'Die Abmeldung hat nicht geklappt, du bist weiterhin angemeldet. Bitte versuch es noch einmal.',
+    'Signing out did not work, you are still signed in. Please try again.',
+  ],
+  'session.tenantGone': [
+    'Die Organisation, in der du gearbeitet hast, steht dir nicht mehr zur Verfügung.',
+    'The organization you were working in is no longer available to you.',
+  ],
 
   // ── Dock ─────────────────────────────────────────────────────────────
   'shell.skip': ['Zum Inhalt springen', 'Skip to content'],

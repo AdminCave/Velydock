@@ -64,8 +64,8 @@ src/
     theme.ts            theme preference → resolved theme, live system preference
     audit.ts            audit entries as readable text
     appIcons.ts         the curated Lucide icons for apps
-    stores/             session (me), workspace (apps, frames), toasts, media queries
-    utils/              slug, validation, date, clipboard, storage
+    stores/             session (me, session watch), workspace (apps, frames), toasts, media queries
+    utils/              slug, validation, forms, roving tabindex, date, clipboard, storage
     components/
       ui/               Button, Input, Select, Switch, Checkbox, Modal, ConfirmDialog, Toast,
                         Menu, Segmented, MultiPicker, Pagination, Callout, … (adapted from
@@ -83,9 +83,30 @@ src/
 **API client** (`lib/api/client.ts`). `api.get/post/put/patch/delete(path, { path, query,
 body })` is typed against the generated OpenAPI types. Requests are same-origin with the
 session cookie; every non-GET request carries `X-Velydock-CSRF: 1`. Error answers become an
-`ApiError` with `status`, `code`, `details`; `errorMessage()` maps the code to translated
-text (`error.<code>` in `lib/i18n/messages/errors.ts`) and falls back to a generic message.
-A 401 on any request ends the session in the UI and leads to `/login?return_to=…`.
+`ApiError` with `status`, `code`, `details` (an answer without the JSON envelope, as a reverse
+proxy sends it, gets its code from the status: 401, 413, 429); `errorMessage()` maps the code
+to translated text (`error.<code>` in `lib/i18n/messages/errors.ts`) and falls back to a
+generic message.
+A 401 on any request ends the session in the UI and leads to `/login?return_to=…`; if the
+session was in use until then, the address also carries `expired=1` and the login page says
+that the session has expired.
+
+**The organization a page acts on.** The active organization belongs to the session, which
+all tabs share. While `me.active_tenant` is known, every request names it in
+`X-Velydock-Tenant` (`TENANT_HEADER`, set from the session store). If the session has moved
+to another organization meanwhile (switched in another tab, deactivated, membership
+removed), the API refuses permission-scoped requests with `409 tenant_changed`. The client
+then reads `/me` once, tells the user in a toast which organization is active now, and the
+refused call fails with the text for `tenant_changed`. Pages are keyed by the organization
+(`{#key tenantId}` in `App.svelte`): they start over when it changes.
+
+**Keeping the session current** (`startSessionWatch()` in `lib/stores/session.ts`, started by
+`App.svelte`). `/me` is read again, at most every 30 seconds, when the tab becomes visible,
+and every five minutes while the window is visible and focused. The latter doubles as a sign
+of life: working inside an embedded app sends no request to Velydock, and the session would
+otherwise run into its idle timeout. A page restored from the browser's back/forward cache
+(`pageshow` with `persisted`) is reloaded, so Back after signing out never shows the
+signed-in page again; `signOut()` also switches to the splash before it leaves.
 
 **After a write.** A page reads its list once more after a write: sorting, paging, totals
 and counts are the server's business. Where the answer of a write is the complete new state
@@ -105,6 +126,14 @@ allow-popups allow-popups-to-escape-sandbox"`, `referrerpolicy="no-referrer"` an
 attribute. **Never add `allow-same-origin` to a custom-app frame**: it is the security
 boundary between administrator-written code and Velydock. `frames.test.ts` and
 `AppFrame.test.ts` guard this.
+
+**Dialogs** (`Modal.svelte`). Escape and a click beside a dialog close it, with three
+exceptions. A click only counts if the mouse button went down _and_ up on the backdrop
+(selecting text and overshooting is no click). A dialog with `dirty` (the form dialogs pass
+whether their fields differ from what they opened with) ignores the click and asks before
+Escape discards the input; "Abbrechen" and the X close at once. A dialog with
+`dismissible={false}` (the one-time password) closes through its button only. A filled
+search field takes Escape for itself and empties.
 
 **Theme and language.** The effective settings come from `GET /api/v1/me` and are mirrored
 to `localStorage` (`velydock-theme`, `velydock-language`) so `public/theme-init.js` can apply
@@ -126,10 +155,10 @@ matches. On top of that:
 
 ### Sign-in
 
-| Hook            | Element                                                                           |
-| --------------- | --------------------------------------------------------------------------------- |
-| `login-button`  | the "Anmelden" button; navigates to `/api/auth/login?return_to=…`                 |
-| `login-message` | message for `?error=<code>` (`role="alert"`) or `?signed_out=1` (`role="status"`) |
+| Hook            | Element                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------- |
+| `login-button`  | the "Anmelden" button; navigates to `/api/auth/login?return_to=…`                               |
+| `login-message` | message for `?error=<code>` (`role="alert"`), `?expired=1` or `?signed_out=1` (`role="status"`) |
 
 ### Shell
 
@@ -179,27 +208,28 @@ await expect(page.getByTestId('dock')).toHaveAttribute('data-nav', 'right');
 
 ### Administration
 
-| Hook                  | Element                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users-table`         | `/admin/users`; rows carry `data-user-id`, `data-username`                                                                                    |
-| `users-filter-role`   | `<select>`: `all`, `member`, `user_manager`, `tenant_admin`                                                                                   |
-| `users-filter-status` | `<select>`: `all`, `active`, `inactive`                                                                                                       |
-| `user-actions`        | row menu button (Bearbeiten, Passwort zurücksetzen, Sitzungen beenden, Deaktivieren/Reaktivieren, Konto löschen / Aus Organisation entfernen) |
-| `temp-password`       | the one-time password, shown once after creating a user without e-mail or resetting a password                                                |
-| `identity-locked`     | explanation in the edit dialog when name and e-mail are read-only                                                                             |
-| `groups-table`        | `/admin/groups`; rows carry `data-group-id`; row menu `group-actions`                                                                         |
-| `apps-table`          | `/admin/apps`; rows carry `data-app-id`; row menu `app-actions`; move buttons are named "… nach oben" / "… nach unten"                        |
-| `app-type`            | radio group in the app dialog: `embedded`, `external`, `custom`                                                                               |
-| `app-audience`        | radio group in the app dialog: `all`, `selected`                                                                                              |
-| `embed-check`         | result of "Einbettbarkeit prüfen"                                                                                                             |
-| `app-icon-preview`    | the chosen icon in the app dialog; the icon grid is a radio group, each icon named by its Lucide name                                         |
-| `tenant-nav-position` | `<select>` on `/admin/settings`: `system`, `left`, `right`, `top`, `bottom`                                                                   |
-| `audit-table`         | `/admin/audit` and `/system/audit`; rows carry `data-action`                                                                                  |
-| `tenants-table`       | `/system/tenants`; rows carry `data-tenant-id`, `data-slug`; row menu `tenant-actions`                                                        |
-| `system-users-table`  | `/system/users`; rows carry `data-user-id`, `data-username`; row menu `system-user-actions`                                                   |
-| `smtp-status`         | the "konfiguriert" indicator on `/system/settings`, `data-configured="true\|false"`                                                           |
+| Hook                  | Element                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users-table`         | `/admin/users`; rows carry `data-user-id`, `data-username`                                                                                                                                    |
+| `users-filter-role`   | `<select>`: `all`, `member`, `user_manager`, `tenant_admin`                                                                                                                                   |
+| `users-filter-status` | `<select>`: `all`, `active`, `inactive`                                                                                                                                                       |
+| `user-actions`        | row menu button (Bearbeiten, Passwort zurücksetzen, Sitzungen beenden, Deaktivieren/Reaktivieren, Konto löschen / Aus Organisation entfernen); the own row only offers "Bearbeiten"           |
+| `temp-password`       | the one-time password, shown once after creating a user without e-mail or resetting a password; its dialog closes only through "Notiert, schließen"                                           |
+| `identity-locked`     | explanation in the edit dialog when name and e-mail are read-only                                                                                                                             |
+| `groups-table`        | `/admin/groups`; rows carry `data-group-id`; row menu `group-actions`; in the group dialog the checkbox of a member who outranks the administrator (`can_edit_membership: false`) is disabled |
+| `apps-table`          | `/admin/apps`; rows carry `data-app-id`; row menu `app-actions`; move buttons are named "… nach oben" / "… nach unten"                                                                        |
+| `app-type`            | radio group in the app dialog: `embedded`, `external`, `custom`                                                                                                                               |
+| `app-audience`        | radio group in the app dialog: `all`, `selected`                                                                                                                                              |
+| `embed-check`         | result of "Einbettbarkeit prüfen"                                                                                                                                                             |
+| `app-icon-preview`    | the chosen icon in the app dialog; the icon grid is a radio group, each icon named by its Lucide name (one Tab stop; arrow keys, Home, End move, Enter or Space choose)                       |
+| `tenant-nav-position` | `<select>` on `/admin/settings`: `system`, `left`, `right`, `top`, `bottom`                                                                                                                   |
+| `audit-table`         | `/admin/audit` and `/system/audit`; rows carry `data-action`                                                                                                                                  |
+| `tenants-table`       | `/system/tenants`; rows carry `data-tenant-id`, `data-slug`; row menu `tenant-actions`                                                                                                        |
+| `system-users-table`  | `/system/users`; rows carry `data-user-id`, `data-username`; row menu `system-user-actions`                                                                                                   |
+| `smtp-status`         | the "konfiguriert" indicator on `/system/settings`, `data-configured="true\|false"`                                                                                                           |
 
 Confirmations are dialogs named by their title (for example "Konto löschen", "Gruppe
 löschen", "App löschen", "Organisation deaktivieren"); the confirming button repeats the
-action. Deleting an organization needs its short name typed into the dialog's text field
+action. Escape in a form dialog that holds input opens "Eingaben verwerfen?" with
+"Verwerfen" and "Weiter bearbeiten". Deleting an organization needs its short name typed into the dialog's text field
 before "Endgültig löschen" is enabled.

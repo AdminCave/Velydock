@@ -14,7 +14,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Input from '$lib/components/ui/Input.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid } from '$lib/utils/forms';
+  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
   import { SLUG_MAX_LENGTH, slugProblem, suggestSlug } from '$lib/utils/slug';
 
   interface Props {
@@ -35,6 +35,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let saving = $state(false);
   let errors = $state<Record<string, string>>({});
   let failure = $state('');
+
+  // With input in it the dialog does not close on a stray click or key (see Modal).
+  const dirty = $derived(formChanged([name, slug], [tenant?.name ?? '', tenant?.slug ?? '']));
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
   $effect(() => {
@@ -105,6 +108,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   title={tenant ? $t('tenants.rename.title', { name: tenant.name }) : $t('tenants.create.title')}
   width="520px"
   error={failure}
+  {dirty}
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>

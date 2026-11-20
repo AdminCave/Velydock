@@ -37,8 +37,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Tag from '$lib/components/ui/Tag.svelte';
   import { language, t } from '$lib/i18n';
   import { hasPermission } from '$lib/nav';
-  import { me, permissions } from '$lib/stores/session';
+  import { me, permissions, refreshMe } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
+  import { loadApps } from '$lib/stores/workspace';
   import { formatDateTime } from '$lib/utils/datetime';
   import TempPasswordModal from '../../modals/TempPasswordModal.svelte';
   import UserCreateModal from '../../modals/UserCreateModal.svelte';
@@ -166,6 +167,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
     editing = null;
     showToast($t('users.saved', { name: user.display_name }));
     void load();
+    // The own row: name and e-mail are shown in the dock and on the profile page, and the
+    // own groups decide which apps the dock offers.
+    if (isSelf(user)) {
+      refreshMe().catch(showError);
+      if (hasPermission($permissions, 'workspace:use')) loadApps().catch(showError);
+    }
   }
 
   async function setActive(user: User, active: boolean) {
@@ -355,26 +362,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
                   <MenuItem icon={Pencil} onSelect={() => (editing = user)}>
                     {$t('action.edit')}
                   </MenuItem>
-                  {#if user.can_edit_identity}
-                    <!-- The own password is changed on the account page, not reset here. -->
-                    {#if !isSelf(user)}
-                      <MenuItem icon={KeyRound} onSelect={() => void resetPassword(user)}>
-                        {$t('users.action.resetPassword')}
-                      </MenuItem>
-                    {/if}
+                  <!-- Not for the own account: the API refuses all three there (`self_action`).
+                       The own password is changed on the account page, and signing out ends
+                       the own session. -->
+                  {#if user.can_edit_identity && !isSelf(user)}
+                    <MenuItem icon={KeyRound} onSelect={() => void resetPassword(user)}>
+                      {$t('users.action.resetPassword')}
+                    </MenuItem>
                     <MenuItem icon={LogOut} onSelect={() => void endSessions(user)}>
                       {$t('users.action.endSessions')}
                     </MenuItem>
-                    {#if !isSelf(user)}
-                      {#if user.active}
-                        <MenuItem icon={UserX} onSelect={() => void setActive(user, false)}>
-                          {$t('users.action.deactivate')}
-                        </MenuItem>
-                      {:else}
-                        <MenuItem icon={UserCheck} onSelect={() => void setActive(user, true)}>
-                          {$t('users.action.reactivate')}
-                        </MenuItem>
-                      {/if}
+                    {#if user.active}
+                      <MenuItem icon={UserX} onSelect={() => void setActive(user, false)}>
+                        {$t('users.action.deactivate')}
+                      </MenuItem>
+                    {:else}
+                      <MenuItem icon={UserCheck} onSelect={() => void setActive(user, true)}>
+                        {$t('users.action.reactivate')}
+                      </MenuItem>
                     {/if}
                   {/if}
                   {#if canRemove(user)}

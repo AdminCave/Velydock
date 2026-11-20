@@ -46,8 +46,8 @@ export const admin = {
     'Nobody matches this search. A typo – or the person does not exist here yet.',
   ],
   'users.username.hint': [
-    '2–64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich, Unterstrich. Damit meldet sich die Person an; später nicht änderbar.',
-    '2–64 characters: lowercase letters, digits, dot, dash, underscore. The person signs in with it; it cannot be changed later.',
+    '3–64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich, Unterstrich. Damit meldet sich die Person an; später nicht änderbar.',
+    '3–64 characters: lowercase letters, digits, dot, dash, underscore. The person signs in with it; it cannot be changed later.',
   ],
   'users.email.hint': [
     'Optional. Nötig, wenn der Link zum Passwort-Setzen per E-Mail verschickt werden soll.',
@@ -185,6 +185,10 @@ export const admin = {
   'groups.members.hint': [
     'Mitglieder der Gruppe sehen alle Apps, die für die Gruppe freigegeben sind.',
     'Members of the group see all apps that are shared with the group.',
+  ],
+  'groups.members.locked': [
+    'Ausgegraute Konten haben mehr Rechte als du; ihre Mitgliedschaft kannst du nicht ändern.',
+    'Greyed-out accounts outrank you; you cannot change their membership.',
   ],
   'groups.members.search': ['Person suchen', 'Search people'],
   'groups.members.empty': [

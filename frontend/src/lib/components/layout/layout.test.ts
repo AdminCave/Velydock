@@ -179,6 +179,23 @@ describe('Dock', () => {
     await fireEvent.keyDown(menu, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   });
+
+  it('closes an open menu when the window loses the focus, as on a click into an app frame', async () => {
+    renderDock();
+    const trigger = screen.getByTestId('user-menu');
+    await fireEvent.click(trigger);
+    await screen.findByRole('menu');
+    // A click inside an <iframe> never reaches this document; the blur of the window does.
+    window.dispatchEvent(new Event('blur'));
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the full instance name available when the dock has to shorten it', () => {
+    const name = 'Stadtwerke Musterstadt Arbeitsplatz';
+    renderDock({ me: makeMe({ instance_name: name }), position: 'top', edge: 'top' });
+    expect(screen.getByText(name)).toHaveAttribute('title', name);
+  });
 });
 
 describe('SubNav', () => {

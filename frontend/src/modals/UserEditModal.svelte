@@ -17,7 +17,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid } from '$lib/utils/forms';
+  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
   import { isValidEmail } from '$lib/utils/validate';
 
   interface Props {
@@ -44,6 +44,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let errors = $state<Record<string, string>>({});
   let failure = $state('');
 
+  // With changes in it the dialog does not close on a stray click or key (see Modal).
+  const fields = () => [firstName, lastName, email, role, [...groupIds]];
+  let pristine = $state.raw<unknown[]>([]);
+  const dirty = $derived(formChanged(fields(), pristine));
+
   // A field marked invalid gets the focus, so the message is seen even in a long form.
   $effect(() => {
     if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
@@ -61,6 +66,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       saving = false;
       errors = {};
       failure = '';
+      pristine = fields();
     });
   });
 
@@ -138,6 +144,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   title={$t('users.edit.title', { name: user?.display_name ?? '' })}
   width="620px"
   error={failure}
+  {dirty}
   {onClose}
 >
   {#if user}
