@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { attemptSignIn } from '../support/keycloak';
+import { attemptSignIn, chooseNewPassword } from '../support/keycloak';
+import { MAIL_SMTP, mailTo } from '../support/mail';
 import { AUTH_URL, DOCK_URL, PASSWORD } from '../support/stack';
 import { dockApp, dockAppNames } from '../support/ui';
 import { apiAs, contextAs, firstSignIn, signIn, unique, world } from '../support/world';
@@ -59,6 +60,61 @@ test.describe('Verwaltung einer Organisation', () => {
     await page.reload();
     await expect(row(page, 'data-username', username)).not.toContainText('noch nie');
     await admin.close();
+  });
+
+  test('mit E-Mail-Versand setzt die neue Person ihr Passwort über den Link aus der E-Mail', async ({ browser }) => {
+    const username = unique('post');
+    const address = `${username}@velydock.test`;
+    const root = await apiAs('root');
+    expect((await root.patch('/api/v1/system/settings', { data: { smtp: MAIL_SMTP } })).status()).toBe(200);
+    try {
+      const admin = await contextAs(browser, 'anna');
+      const page = await admin.newPage();
+      await page.goto('/admin/users');
+      await page.getByRole('button', { name: 'Benutzer anlegen' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Benutzer anlegen' });
+      await dialog.getByLabel('Benutzername', { exact: true }).fill(username);
+      await dialog.getByLabel('Vorname', { exact: true }).fill('Paula');
+      await dialog.getByLabel('Nachname', { exact: true }).fill('Post');
+      await dialog.getByLabel('E-Mail-Adresse', { exact: true }).fill(address);
+      await dialog.getByText('Link zum Passwort-Setzen per E-Mail senden').click();
+      await dialog.getByRole('button', { name: 'Konto anlegen' }).click();
+
+      // No one-time password this time: the administrator never learns a password.
+      await expect(page.locator('body')).toContainText('Die E-Mail zum Passwort-Setzen ist unterwegs');
+      await expect(page.getByTestId('temp-password')).toHaveCount(0);
+      await expect(row(page, 'data-username', username)).toBeVisible();
+      await admin.close();
+
+      // The e-mail really arrives and carries a link to Keycloak.
+      const text = await mailTo(address);
+      const link = text.match(/https:\/\/\S+\/login-actions\/action-token\?\S+/);
+      expect(link, text).not.toBeNull();
+      expect(link![0].startsWith(`${AUTH_URL}/realms/velydock/`)).toBe(true);
+
+      // The recipient opens it in their own browser, confirms and chooses a password.
+      const fresh = await browser.newContext();
+      const userPage = await fresh.newPage();
+      await userPage.goto(link![0]);
+      await userPage.locator('#kc-info-message a, #kc-content a').first().click();
+      await chooseNewPassword(userPage);
+      // From Keycloak's confirmation a link leads back to Velydock.
+      await userPage.locator(`a[href^="${DOCK_URL}"]`).first().click();
+      await expect(userPage).toHaveURL(new RegExp(`^${DOCK_URL}/`));
+
+      // And the password works.
+      await fresh.clearCookies();
+      await signIn(userPage, username);
+      expect((await dockAppNames(userPage)).length).toBeGreaterThan(0);
+      await fresh.close();
+    } finally {
+      await root.patch('/api/v1/system/settings', { data: { smtp: { host: '' } } });
+      const anna = await apiAs('anna');
+      const found = (await (await anna.get(`/api/v1/admin/users?search=${username}`)).json()) as { items: { id: string }[] };
+      for (const user of found.items) await anna.delete(`/api/v1/admin/users/${user.id}`);
+      await anna.dispose();
+      await root.dispose();
+    }
   });
 
   test('Benutzer lassen sich suchen, bearbeiten und deaktivieren – Deaktivierte kommen nicht mehr hinein', async ({ browser }) => {

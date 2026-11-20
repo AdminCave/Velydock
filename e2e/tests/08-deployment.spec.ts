@@ -1,5 +1,6 @@
+import { request as https } from 'node:https';
 import { expect, test } from '@playwright/test';
-import { AUTH_URL, DOCK_URL, compose } from '../support/stack';
+import { AUTH_URL, DOCK_URL, SANDBOX_URL, compose } from '../support/stack';
 
 test.describe('Die Docker-Installation', () => {
   test('alle Dienste laufen und melden sich gesund', async ({ request }) => {
@@ -90,6 +91,53 @@ test.describe('Die Docker-Installation', () => {
     expect(failed).toEqual([]);
   });
 
+  test('Überwachung per HEAD bekommt eine Antwort', async ({ request }) => {
+    expect((await request.head('/')).status()).toBe(200);
+    expect((await request.head('/api/health')).status()).toBe(200);
+  });
+
+  test('übergroße Anfragen werden abgewiesen, auch ohne Anmeldung', async ({ request }) => {
+    const response = await request.post('/api/auth/backchannel-logout', {
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      data: 'logout_token=' + 'a'.repeat(5 * 1024 * 1024),
+    });
+    expect(response.status()).toBe(413);
+  });
+
+  test('ein kodierter Schrägstrich führt nicht an den Proxy-Regeln vorbei', async ({ request }) => {
+    // The backend would read "/api%2Fhealth" as "/api/health"; the proxy must not pass it on.
+    expect((await request.get('/api%2Fhealth')).status()).toBe(400);
+    expect((await request.get('/api%2fv1/me')).status()).toBe(400);
+  });
+
+  test('der Sandbox-Host bleibt Sandbox, auch mit Punkt am Ende des Namens', async () => {
+    // "sandbox.example.com." is the same host. Sent as Host header to the same address.
+    const sandbox = new URL(SANDBOX_URL);
+    const status = (path: string) =>
+      new Promise<number>((resolve, reject) => {
+        const req = https(
+          {
+            host: '127.0.0.1',
+            port: sandbox.port,
+            servername: sandbox.hostname,
+            path,
+            method: 'GET',
+            headers: { Host: `${sandbox.hostname}.:${sandbox.port}` },
+            rejectUnauthorized: false,
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+    expect(await status('/api/health')).toBe(404);
+    expect(await status('/api/v1/public')).toBe(404);
+    expect(await status('/')).toBe(404);
+  });
+
   test('der Anwendungscontainer läuft unprivilegiert auf schreibgeschütztem Dateisystem', async () => {
     expect(compose('exec', '-T', 'velydock', 'id', '-u').trim()).toBe('10001');
     expect(compose('exec', '-T', 'velydock', 'velydock', 'version').trim()).toMatch(/^\d+\.\d+\.\d+$/);
@@ -103,5 +151,25 @@ test.describe('Die Docker-Installation', () => {
       "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' " +
       "AND c.relkind = 'r' AND relname <> 'alembic_version' AND NOT (relrowsecurity AND relforcerowsecurity)";
     expect(compose('exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'velydock', '-Atc', unprotected).trim()).toBe('0');
+  });
+
+  // Last on purpose: it uses up the allowance of this client address for a few seconds.
+  test('der Proxy begrenzt Anfragen an die API, nicht aber an die Oberfläche', async ({ request }) => {
+    let limited = 0;
+    let served = 0;
+    for (let round = 0; round < 12 && limited === 0; round++) {
+      const statuses = await Promise.all(
+        Array.from({ length: 300 }, () => request.get('/api/health').then((response) => response.status())),
+      );
+      limited += statuses.filter((status) => status === 429).length;
+      served += statuses.filter((status) => status === 200).length;
+    }
+    expect(limited, 'a burst is throttled').toBeGreaterThan(0);
+    expect(served, 'normal use is not').toBeGreaterThanOrEqual(300);
+    // The page itself is not behind the limit: it loads while the API allowance is used up.
+    expect((await request.get('/login')).status()).toBe(200);
+    // Let the allowance recover before anything else talks to the API.
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    expect((await request.get('/api/health')).status()).toBe(200);
   });
 });

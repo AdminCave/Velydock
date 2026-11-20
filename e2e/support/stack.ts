@@ -25,3 +25,20 @@ export function compose(...args: string[]): string {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
+
+/** Run SQL as the database superuser in the development stack and return the output. */
+export function sql(statement: string): string {
+  return compose('exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'velydock', '-Atc', statement).trim();
+}
+
+/**
+ * Make the Velydock sessions of a user look idle for longer than the idle timeout - what happens
+ * on its own when nobody touches Velydock for two hours. The Keycloak session is not affected.
+ */
+export function letSessionsExpire(username: string): void {
+  if (!/^[a-z0-9._-]+$/.test(username)) throw new Error('unexpected user name');
+  sql(
+    "UPDATE sessions SET last_seen_at = now() - interval '5 hours' " +
+      `WHERE user_id = (SELECT id FROM users WHERE username = '${username}')`,
+  );
+}

@@ -59,6 +59,56 @@ test.describe('Systemverwaltung', () => {
     await context.close();
   });
 
+  test('ein Fenster, das noch die alte Organisation zeigt, schreibt nicht in die neue', async ({ browser }) => {
+    const { tenants, apps } = world();
+    const context = await contextAs(browser, 'root');
+    try {
+      // Window A: the settings of the first organization, loaded and ready to save.
+      const windowA = await context.newPage();
+      await windowA.goto('/admin/settings');
+      await expect(windowA.getByRole('button', { name: 'Speichern' })).toBeVisible();
+      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Admin Cave');
+
+      // Window B: the same session enters Globex.
+      const windowB = await context.newPage();
+      await windowB.goto('/');
+      await windowB.getByTestId('tenant-switcher').click();
+      await windowB.getByRole('menuitem', { name: /Globex AG/ }).click();
+      await expect(dockApp(windowB, apps.globexCrm)).toBeVisible();
+
+      // Window A was in view the whole time and still shows the first organization. Saving
+      // there must not change Globex.
+      await windowA.getByText('Position für alle festlegen').click();
+      const refused = windowA.waitForResponse(
+        (response) => response.url().endsWith('/api/v1/admin/tenant') && response.request().method() === 'PATCH',
+      );
+      await windowA.getByRole('button', { name: 'Speichern' }).click();
+      const answer = await refused;
+      expect(answer.status()).toBe(409);
+      expect((await answer.json()).error.code).toBe('tenant_changed');
+
+      // The window says what happened and now shows the organization the session is really in.
+      await expect(windowA.locator('body')).toContainText('Deine letzte Anfrage wurde deshalb nicht ausgeführt');
+      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Globex AG');
+      await expect(dockApp(windowA, apps.globexCrm)).toBeVisible();
+
+      // Neither organization was changed.
+      const gina = await apiAs('gina');
+      expect((await (await gina.get('/api/v1/admin/tenant')).json()).nav_position_locked).toBe(false);
+      await gina.dispose();
+      const root = await apiAs('root');
+      expect((await root.post('/api/v1/me/active-tenant', { data: { tenant_id: tenants.main } })).status()).toBe(200);
+      expect((await (await root.get('/api/v1/admin/tenant')).json()).nav_position_locked).toBe(false);
+      await root.dispose();
+    } finally {
+      // The other tests expect this session in its first organization.
+      const root = await apiAs('root');
+      await root.post('/api/v1/me/active-tenant', { data: { tenant_id: tenants.main } });
+      await root.dispose();
+      await context.close();
+    }
+  });
+
   test('der Name der Installation erscheint auf der Anmeldeseite', async ({ browser }) => {
     const name = `Admin Cave Dock ${Date.now() % 1000}`;
     const root = await apiAs('root');

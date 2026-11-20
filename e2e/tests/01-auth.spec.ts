@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { keycloakAdmin, keycloakUserId, submitCredentials } from '../support/keycloak';
-import { AUTH_URL } from '../support/stack';
+import { AUTH_URL, letSessionsExpire } from '../support/stack';
 import { apiAs, removeUser, signIn, stateFile, throwawayUser } from '../support/world';
 
 test.describe('Anmeldung und Sitzung', () => {
@@ -90,6 +90,62 @@ test.describe('Anmeldung und Sitzung', () => {
     // The Keycloak session is gone as well: no silent sign-in.
     await user.page.getByTestId('login-button').click();
     await expect(user.page.locator('#username')).toBeVisible();
+    await user.context.close();
+    await removeUser(user.id);
+  });
+
+  test('läuft die Sitzung ab, sagt die Anmeldeseite das – und danach geht es dort weiter', async ({ browser }) => {
+    const user = await throwawayUser(browser);
+    await user.page.goto('/settings');
+    await expect(user.page.getByTestId('setting-theme')).toBeVisible();
+    letSessionsExpire(user.username);
+
+    // The next thing that needs the server notices: here, changing a setting.
+    await user.page.getByTestId('setting-theme').locator('label:has(input[value="light"])').click();
+    await expect(user.page).toHaveURL(/\/login\?expired=1/);
+    await expect(user.page.getByTestId('login-message')).toContainText('Sitzung ist abgelaufen');
+    await expect(user.page.getByTestId('dock')).toHaveCount(0);
+
+    // Keycloak still knows the user (its session lasts longer), so one click brings them back
+    // to the page they were on.
+    await user.page.getByTestId('login-button').click();
+    await expect(user.page).toHaveURL(/\/settings$/);
+    await expect(user.page.getByTestId('setting-theme')).toBeVisible();
+    await user.context.close();
+    await removeUser(user.id);
+  });
+
+  test('„Abmelden“ beendet die Keycloak-Sitzung auch dann, wenn die Velydock-Sitzung schon abgelaufen war', async ({ browser }) => {
+    const user = await throwawayUser(browser);
+    letSessionsExpire(user.username);
+
+    await user.page.getByTestId('user-menu').click();
+    await user.page.getByRole('menuitem', { name: 'Abmelden' }).click();
+    await expect(user.page).toHaveURL(/\/login\?signed_out=1/);
+    await expect(user.page.getByTestId('login-message')).toContainText('abgemeldet');
+
+    // Signed out for real: the next person at this browser is asked for the credentials.
+    await user.page.getByTestId('login-button').click();
+    await expect(user.page).toHaveURL(new RegExp(`^${AUTH_URL}/realms/velydock/`));
+    await expect(user.page.locator('#username')).toBeVisible();
+    await user.context.close();
+    await removeUser(user.id);
+  });
+
+  test('wer Verwaltungsrechte erhält, meldet sich neu an, bevor sie gelten', async ({ browser }) => {
+    const user = await throwawayUser(browser);
+    const anna = await apiAs('anna');
+    expect((await anna.patch(`/api/v1/admin/users/${user.id}`, { data: { role: 'user_manager' } })).status()).toBe(200);
+    await anna.dispose();
+
+    // The session that began as a plain member is over.
+    expect((await user.page.request.get('/api/v1/me')).status()).toBe(401);
+    await user.page.goto('/admin/users');
+    await expect(user.page).toHaveURL(/\/login/);
+    // With a new sign-in (where a required second factor would be set up) the rights are there.
+    await user.page.getByTestId('login-button').click();
+    await expect(user.page).toHaveURL(/\/admin\/users$/);
+    await expect(user.page.getByRole('button', { name: 'Benutzer anlegen' })).toBeVisible();
     await user.context.close();
     await removeUser(user.id);
   });
