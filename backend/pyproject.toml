@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "velydock"
+version = "0.1.0"
+description = "Velydock – multi-tenant workspace platform that brings web apps together behind one sign-in."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "uvloop>=0.21",
+    "httptools>=0.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "pyjwt[crypto]>=2.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pip-tools>=7.4",
+]
+
+[project.scripts]
+velydock = "velydock.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["velydock*"]
+
+[tool.setuptools.package-data]
+velydock = ["migrations/*.mako", "migrations/versions/*.py", "py.typed"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "ASYNC", "PT"]
+ignore = [
+    "S101",   # assert is fine in tests and for invariants
+    "B008",   # FastAPI Depends() in defaults
+    "PT018",  # several facts in one assert keep the tests readable
+    "RUF001", "RUF002", "RUF003",  # German text contains characters ruff considers ambiguous
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S104", "S105", "S106", "S311", "S608", "E501", "PT022", "SIM105"]
+"velydock/migrations/**" = ["S608", "E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "keycloak: needs a running Keycloak (set VELYDOCK_TEST_KEYCLOAK_URL)",
+]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["velydock/migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true

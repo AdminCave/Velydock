@@ -1,0 +1,126 @@
+"""Database access and the row-level-security context.
+
+Every transaction carries three transaction-local settings that the RLS policies read:
+
+* ``app.scope``     – ``tenant`` (normal requests), ``system`` (trusted internal code) or ``none``
+* ``app.tenant_id`` – the tenant the request acts in
+* ``app.user_id``   – the acting user
+
+They are set with ``set_config(..., is_local => true)``, so they vanish at commit/rollback and can
+never leak to another request through the connection pool. With nothing set, the policies deny.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from enum import StrEnum
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from velydock.config import get_settings
+
+
+class Scope(StrEnum):
+    NONE = "none"
+    TENANT = "tenant"
+    SYSTEM = "system"
+
+
+_engine: AsyncEngine | None = None
+_sessionmaker: async_sessionmaker[AsyncSession] | None = None
+
+
+def init_engine(database_url: str, **engine_options: Any) -> AsyncEngine:
+    """Create the engine explicitly (the application factory and tests do this)."""
+    global _engine, _sessionmaker
+    engine_options.setdefault("pool_pre_ping", True)
+    _engine = create_async_engine(database_url, **engine_options)
+    _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+    return _engine
+
+
+def get_engine() -> AsyncEngine:
+    if _engine is None:
+        return init_engine(get_settings().database_url)
+    return _engine
+
+
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    if _sessionmaker is None:
+        get_engine()
+    assert _sessionmaker is not None
+    return _sessionmaker
+
+
+def engine_initialized() -> bool:
+    return _engine is not None
+
+
+async def dispose_engine() -> None:
+    global _engine, _sessionmaker
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _sessionmaker = None
+
+
+_SET_CONTEXT = text(
+    "SELECT set_config('app.scope', :scope, true), "
+    "set_config('app.tenant_id', :tenant, true), "
+    "set_config('app.user_id', :user, true)"
+)
+
+
+async def set_rls_context(
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    tenant_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
+) -> None:
+    await session.execute(
+        _SET_CONTEXT,
+        {
+            "scope": scope.value,
+            "tenant": str(tenant_id) if tenant_id else "",
+            "user": str(user_id) if user_id else "",
+        },
+    )
+    session.info["rls"] = (scope, tenant_id, user_id)
+
+
+def current_context(session: AsyncSession) -> tuple[Scope, uuid.UUID | None, uuid.UUID | None]:
+    ctx: tuple[Scope, uuid.UUID | None, uuid.UUID | None] = session.info.get("rls", (Scope.NONE, None, None))
+    return ctx
+
+
+@asynccontextmanager
+async def system_scope(session: AsyncSession) -> AsyncIterator[None]:
+    """Temporarily lift tenant isolation for trusted code (authentication, system administration).
+
+    Each use is a deliberate, reviewable exception to the tenant boundary. On an error the
+    surrounding transaction is rolled back anyway, so the previous context is only restored on
+    success.
+    """
+    scope, tenant_id, user_id = current_context(session)
+    await session.flush()
+    await set_rls_context(session, scope=Scope.SYSTEM, tenant_id=tenant_id, user_id=user_id)
+    yield
+    await session.flush()
+    await set_rls_context(session, scope=scope, tenant_id=tenant_id, user_id=user_id)
+
+
+@asynccontextmanager
+async def transaction(
+    scope: Scope = Scope.SYSTEM,
+    tenant_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
+) -> AsyncIterator[AsyncSession]:
+    """One transaction with an RLS context, for code outside the request cycle (CLI, startup)."""
+    async with get_sessionmaker()() as session, session.begin():
+        await set_rls_context(session, scope=scope, tenant_id=tenant_id, user_id=user_id)
+        yield session
