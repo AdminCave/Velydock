@@ -102,6 +102,8 @@ jobs:
         run: npx playwright test
       - name: Backup and restore round trip
         run: bash scripts/tests/backup-restore.sh
+      - name: Installation as documented (production Compose file, first administrator with second factor)
+        run: bash scripts/tests/install-smoke.sh
       - name: Logs on failure
         if: failure()
         run: $COMPOSE logs --no-color --tail 300

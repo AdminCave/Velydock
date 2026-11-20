@@ -79,6 +79,14 @@ test.describe('Die Docker-Installation', () => {
     // Installed under a content hash, so browsers never keep an outdated copy.
     expect(styles.some((href) => /\/login\/velydock\/v-[0-9a-f]{12}\/css\/velydock\.css$/.test(href))).toBe(true);
     expect(await page.locator('#kc-page-title').evaluate((el) => getComputedStyle(el).fontFamily)).toContain('Geist');
+    // One centred card at every width (the stock theme narrows it on wide screens).
+    for (const width of [1440, 1280, 800, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      const card = (await page.locator('.pf-v5-c-login__main').boundingBox())!;
+      expect(card.width, `card at ${width}px`).toBeGreaterThanOrEqual(Math.min(width - 40, 380));
+      expect(card.width, `card at ${width}px`).toBeLessThanOrEqual(420);
+      expect(Math.abs(card.x + card.width / 2 - width / 2), `centred at ${width}px`).toBeLessThan(12);
+    }
     expect(failed).toEqual([]);
   });
 

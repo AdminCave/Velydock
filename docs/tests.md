@@ -10,6 +10,7 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 | Unit-Tests Frontend | Vitest, Testing Library | 263 Tests | nichts |
 | Browser-Tests (End-to-End) | Playwright, Chromium | 54 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
+| Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` |
 
 ## Ausführen
 
@@ -26,6 +27,9 @@ cd frontend && npm run check && npm run lint && npm run test:unit
 
 # Backup und Wiederherstellung am laufenden Entwicklungs-Stack
 ./scripts/tests/backup-restore.sh
+
+# Installation nach Anleitung mit der Produktiv-Compose-Datei (eigener, kurzlebiger Stack)
+./scripts/tests/install-smoke.sh
 ```
 
 Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
@@ -63,7 +67,7 @@ Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
 | 8 | Benutzereinstellungen bleiben gespeichert | `TestSettings::test_personal_settings_persist` | `03-navigation`: Neuladen und frisches Browserprofil |
 | 9 | Benutzerdefinierte Anwendungen werden sicher isoliert | `test_embed_and_custom_apps.py::TestCustomAppLockdown`, `…::TestSandboxHost` | `04-custom-app-isolation` (7 Tests) |
 | 10 | Logout und Session-Ablauf funktionieren | `test_auth_flow.py::TestSessionLifetime`, `TestSignOut`, `TestBackChannelLogout` | `01-auth`: Abmeldung, Back-Channel-Logout, Sitzungen beenden |
-| 11 | Die Docker-Installation funktioniert | – | `08-deployment`, `scripts/tests/backup-restore.sh` |
+| 11 | Die Docker-Installation funktioniert | – | `08-deployment`, `scripts/tests/install-smoke.sh`, `scripts/tests/backup-restore.sh` |
 
 ## Sicherheitstests im Einzelnen
 
@@ -133,6 +137,16 @@ Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
 - Der Anwendungscontainer läuft als unprivilegierter Benutzer auf schreibgeschütztem Dateisystem;
   die Datenbankrolle hat keine Sonderrechte.
 
+**Installation nach Anleitung** (`scripts/tests/install-smoke.sh`)
+
+Folgt [installation.md](installation.md) mit der unveränderten Produktiv-Compose-Datei in einem
+eigenen Stack: `install.sh` erzeugt `.env` (nur für den Besitzer lesbar, kein Geheimnis leer, kein
+Überschreiben), `docker compose up -d`, `velydock setup-admin`. Im Browser: Anmeldung mit dem
+Einmalpasswort, erzwungener Passwortwechsel, erzwungene Einrichtung einer Authenticator-App, dann
+Zugang als Systemadministrator; die erneute Anmeldung verlangt Passwort und Code, das
+Einmalpasswort ist wertlos. Geprüft wird außerdem, dass weder Datenbank noch Keycloak einen Port
+veröffentlichen.
+
 **Backup und Wiederherstellung** (`scripts/tests/backup-restore.sh`)
 
 Sichert, zerstört Daten in beiden Datenbanken, weist ein beschädigtes Backup ab, stellt wieder
@@ -148,6 +162,7 @@ Richtlinien mit dem Zustand vor dem Backup.
 | Die Einbettungsprüfung meldete „nicht erreichbar“, wenn ein Hostname zuerst auf eine unerreichbare IPv6-Adresse auflöste. | Test gegen lokalen Webserver |
 | Keycloak und Browser lieferten nach einer Theme-Änderung weiter die alte Datei aus. | Sichtprüfung per Screenshot; jetzt `test_theme_install.py` und `08-deployment` |
 | Keycloak 26.8 lehnt Admin-API-Tokens ohne den Scope `kc-admin-api` ab. | Probe am echten Keycloak; jetzt `keycloak/…::TestRealmProvisioning` |
+| Die Anmeldeseite war auf Bildschirmen ab 1200 px Breite nur halb so breit wie vorgesehen. | Installations-Rauchtest (Screenshot); jetzt `08-deployment` bei vier Breiten |
 
 ## Continuous Integration
 
@@ -156,7 +171,8 @@ Richtlinien mit dem Zustand vor dem Backup.
 1. **Backend:** Lint, Formatierung, Typprüfung (mypy strict), Aktualität der API-Beschreibung, alle
    Backend-Tests gegen PostgreSQL und Keycloak aus dem Entwicklungs-Stack.
 2. **Frontend:** Aktualität der erzeugten API-Typen, `svelte-check`, Lint, Unit-Tests, Build.
-3. **End-to-End:** Image bauen, Stack starten, Browser-Tests, Backup-Rundlauf.
+3. **End-to-End:** Image bauen, Stack starten, Browser-Tests, Backup-Rundlauf, Installation nach
+   Anleitung.
 
 `.github/workflows/release.yml` veröffentlicht bei einem Versions-Tag das Image auf GHCR.
 
