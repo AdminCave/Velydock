@@ -1,0 +1,33 @@
+# Secrets and local configuration
+.env
+.env.local
+*.pem
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Playwright
+e2e/test-results/
+e2e/playwright-report/
+e2e/.auth/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
