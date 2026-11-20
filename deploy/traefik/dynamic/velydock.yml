@@ -1,5 +1,9 @@
 # Traefik routing for Velydock (file provider – no access to the Docker socket needed).
 # Values come from the environment of the traefik container; see docker-compose.yml.
+#
+# The directory this file lies in is mounted into the container as a whole and watched: a changed
+# file (for example after `git pull`) is applied without restarting Traefik. Only files directly
+# in this directory are watched, so routes must not move into a sub-directory.
 
 http:
   routers:
@@ -21,6 +25,10 @@ http:
       # The API additionally gets a per-client rate limit (sign-in attempts themselves are
       # throttled by Keycloak's brute-force protection).
       rule: "Host(`{{ env "VELYDOCK_HOST" }}`) && PathPrefix(`/api/`)"
+      # Must be set: without it Traefik prefers the router with the longer rule text, which is
+      # "velydock" above for every sandbox host name of 11 or more characters – the rate limit
+      # would never apply. Any value above the length of that rule will do.
+      priority: 1000
       entryPoints: [websecure]
       service: velydock
       middlewares: [api-ratelimit, compress]
@@ -48,10 +56,12 @@ http:
   middlewares:
     compress:
       compress: {}
+    # Per client address. Generous on purpose: a whole office usually shares one address, and
+    # one page load is a handful of calls plus one per uploaded app icon.
     api-ratelimit:
       rateLimit:
-        average: 50
-        burst: 100
+        average: 100
+        burst: 300
         period: 1s
 
   services:

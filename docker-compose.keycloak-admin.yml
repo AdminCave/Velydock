@@ -6,6 +6,12 @@
 #   docker compose exec velydock velydock keycloak-admin --username <your Velydock user>
 #   ssh -L 8081:127.0.0.1:8081 <server>   then open http://localhost:8081/admin/velydock/console/
 #
+# With your own reverse proxy (docker-compose.override.yml) name that file as well: with explicit
+# -f options Compose no longer loads it by itself, and Keycloak would lose the port of your proxy.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#                  -f docker-compose.keycloak-admin.yml up -d keycloak
+#
 # Close it again with a plain `docker compose up -d`.
 
 services:

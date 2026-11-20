@@ -3,16 +3,20 @@
 #
 #   ./scripts/restore.sh backups/velydock-20260101T000000Z
 #
+# A relative path is taken from the directory you call the script from.
 # Everything currently stored is overwritten. The .env of the backup is NOT restored
 # automatically: copy <backup>/env to .env first if you rebuild a server (the databases only
 # work together with the secrets they were created with).
 set -euo pipefail
 
+# Resolved before changing into the checkout, so a relative path means what the caller sees.
+source_dir=${1:?usage: $0 <backup-directory>}
+[[ $source_dir == /* ]] || source_dir=${PWD%/}/$source_dir
+
 cd "$(dirname "$0")/.."
 compose=(docker compose)
 [[ -n ${VELYDOCK_COMPOSE_ARGS:-} ]] && read -r -a extra <<<"$VELYDOCK_COMPOSE_ARGS" && compose+=("${extra[@]}")
 
-source_dir=${1:?usage: $0 <backup-directory>}
 for file in velydock.dump keycloak.dump SHA256SUMS; do
   [[ -f $source_dir/$file ]] || { echo "error: $source_dir/$file is missing." >&2; exit 1; }
 done

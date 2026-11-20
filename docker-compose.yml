@@ -1,11 +1,11 @@
 # Velydock – production stack.
 #
-#   ./scripts/install.sh        creates .env with random secrets
-#   docker compose up -d        starts everything
+#   ./scripts/install.sh            creates .env with random secrets
+#   docker compose up -d --wait     starts everything and returns when it is ready
 #
 # Services: traefik (TLS, routing) · velydock (UI + API) · keycloak (sign-in) · postgres.
 # Only traefik publishes ports. Bring your own reverse proxy by removing "proxy" from
-# COMPOSE_PROFILES in .env (see docs/deployment.md).
+# COMPOSE_PROFILES in .env (see docs/betrieb.md).
 
 name: velydock
 
@@ -25,6 +25,10 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
+      # Traefik matches "/api%2F…" as one path segment while the application behind it decodes
+      # it to "/api/…": such a request would reach the API past the router that rate-limits it.
+      # No address of Velydock or Keycloak carries an encoded slash in its path, so refuse them.
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedslash=false
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -41,7 +45,9 @@ services:
       - "${HTTP_BIND:-0.0.0.0:80}:80"
       - "${HTTPS_BIND:-0.0.0.0:443}:443"
     volumes:
-      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic/velydock.yml:ro
+      # The whole directory, not single files: a file replaced on the host (git pull, an editor)
+      # is a new file, which a single-file mount would never show to the running container.
+      - ./deploy/traefik/dynamic:/etc/traefik/dynamic:ro
       - traefik-acme:/acme
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
@@ -88,12 +94,15 @@ services:
         condition: service_healthy
     networks: [edge, internal]
 
-  # Copies the Velydock login theme into the volume Keycloak reads its themes from.
+  # Copies the Velydock login theme into the volume Keycloak reads its themes from. Runs once per
+  # start, as root (it writes into the volume and sets the file modes there), without network.
   theme:
     image: ${VELYDOCK_IMAGE:-ghcr.io/admincave/velydock:latest}
     restart: "no"
     command: ["install-theme", "/themes"]
     user: "0:0"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - keycloak-themes:/themes
     network_mode: none
@@ -144,7 +153,10 @@ services:
       VELYDOCK_DB_PASSWORD: ${VELYDOCK_DB_PASSWORD:?}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d velydock"]
+      # Over TCP on purpose: while the data directory is being initialised, a temporary server
+      # answers on the Unix socket only. Asking the socket would report "healthy" before
+      # deploy/postgres/init-databases.sh has created the roles and databases.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d velydock"]
       interval: 5s
       timeout: 3s
       retries: 30

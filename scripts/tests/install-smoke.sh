@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installation smoke test: follows docs/installation.md with the production Compose file.
 #
-#   scripts/install.sh  →  docker compose up -d  →  velydock setup-admin  →  first sign-in
+#   scripts/install.sh  →  docker compose up -d --wait  →  velydock setup-admin  →  first sign-in
 #
 # Runs as its own Compose project ("velydock-install") on local ports and removes it afterwards.
 # Uses the image velydock:dev (build it first: ./scripts/dev-stack.sh build).

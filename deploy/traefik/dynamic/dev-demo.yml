@@ -1,4 +1,9 @@
 # Development only: a tiny demo web app to embed in Velydock (see docker-compose.dev.yml).
+#
+# The file lies next to the production routes because Traefik watches exactly one directory.
+# It renders to nothing unless DEMO_HOST is set in the environment of the traefik container,
+# which only docker-compose.dev.yml does: a production installation gets no demo route.
+{{- if env "DEMO_HOST" }}
 
 http:
   routers:
@@ -13,3 +18,4 @@ http:
       loadBalancer:
         servers:
           - url: "http://demo:80"
+{{- end }}

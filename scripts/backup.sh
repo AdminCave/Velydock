@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Velydock backup: dumps both databases (Velydock and Keycloak) and saves the configuration.
 #
-#   ./scripts/backup.sh [target-directory]        default: ./backups
+#   ./scripts/backup.sh [target-directory]        default: backups/ in this checkout
 #
+# A relative target directory is taken from the directory you call the script from.
 # The result is one directory per run. It contains every secret of the installation – store it
 # encrypted and away from this server.
 set -euo pipefail
+
+# Resolved before changing into the checkout, so "../offsite" means what the caller sees.
+target_root=${1:-}
+[[ -z $target_root || $target_root == /* ]] || target_root=${PWD%/}/$target_root
 
 cd "$(dirname "$0")/.."
 compose=(docker compose)
 [[ -n ${VELYDOCK_COMPOSE_ARGS:-} ]] && read -r -a extra <<<"$VELYDOCK_COMPOSE_ARGS" && compose+=("${extra[@]}")
 
-target=${1:-backups}/velydock-$(date -u +%Y%m%dT%H%M%SZ)
+target=${target_root:-$PWD/backups}/velydock-$(date -u +%Y%m%dT%H%M%SZ)
 umask 077
 mkdir -p "$target"
 

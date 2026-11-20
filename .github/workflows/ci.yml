@@ -42,17 +42,17 @@ jobs:
         run: mypy velydock
       - name: API description is up to date
         run: velydock openapi | diff - openapi.json
-      - name: Start PostgreSQL and Keycloak
+      - name: Start PostgreSQL, Keycloak and the mail catcher
         working-directory: .
         # Keycloak normally waits for the "theme" container, which needs the built image; the
         # backend tests do not need the theme.
-        run: $COMPOSE up -d --no-deps --wait postgres keycloak
+        run: $COMPOSE up -d --no-deps --wait postgres keycloak mail
       - name: Tests (unit, API with PostgreSQL, security, real Keycloak)
         run: pytest -q
       - name: Logs on failure
         if: failure()
         working-directory: .
-        run: $COMPOSE logs --no-color --tail 200 postgres keycloak
+        run: $COMPOSE logs --no-color --tail 200 postgres keycloak mail
 
   frontend:
     name: Frontend (check, lint, unit tests, build)

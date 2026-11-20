@@ -5,16 +5,17 @@
 #
 # (scripts/dev-stack.sh wraps this.) Differences to production: the image is built from this
 # checkout, TLS uses Traefik's self-signed certificate, PostgreSQL and Keycloak are reachable on
-# localhost for the test suites, and a small demo web app is available to embed.
+# localhost for the test suites, a small demo web app is available to embed, and a mail catcher
+# receives whatever Keycloak sends.
 
 services:
   traefik:
     environment:
+      # Switches on the route in deploy/traefik/dynamic/dev-demo.yml. That directory is mounted
+      # exactly as in production; without this variable the file renders to nothing.
       DEMO_HOST: demo.velydock.localhost
     ports: !override
       - "127.0.0.1:${DEV_HTTPS_PORT:-8443}:443"
-    volumes:
-      - ./deploy/traefik/dev-demo.yml:/etc/traefik/dynamic/dev-demo.yml:ro
 
   velydock:
     build: .
@@ -46,3 +47,15 @@ services:
     image: traefik/whoami:v1.11.0
     restart: unless-stopped
     networks: [edge]
+
+  # Catches every e-mail sent in development and tests; nothing leaves the machine. Configure it
+  # in Velydock under "Systemeinstellungen" as server "mail", port 1025, no encryption.
+  # Inbox and API: http://localhost:18025
+  mail:
+    image: axllent/mailpit:v1.34.0
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    ports:
+      - "127.0.0.1:${DEV_MAIL_PORT:-18025}:8025"
+    networks: [internal, edge]

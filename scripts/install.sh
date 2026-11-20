@@ -4,7 +4,7 @@
 #   ./scripts/install.sh dock.example.com auth.example.com sandbox.example.com admin@example.com
 #
 # Nothing is started and nothing existing is overwritten. Afterwards:
-#   docker compose up -d
+#   docker compose up -d --wait
 #   docker compose exec velydock velydock setup-admin --username <name> --email <address>
 set -euo pipefail
 
@@ -19,10 +19,12 @@ if [[ $# -lt 3 ]]; then
   exit 2
 fi
 
-velydock_host=$1 keycloak_host=$2 sandbox_host=$3 acme_email=${4:-}
+# Host names are written in lower case: browsers send them that way, and Velydock compares the
+# address a request comes from with the configured one letter by letter.
+velydock_host=${1,,} keycloak_host=${2,,} sandbox_host=${3,,} acme_email=${4:-}
 
 for host in "$velydock_host" "$keycloak_host" "$sandbox_host"; do
-  if [[ ! $host =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+  if [[ ! $host =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
     echo "error: '$host' is not a host name (no scheme, no path)." >&2
     exit 2
   fi
@@ -39,6 +41,13 @@ secret() {
     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
   fi
 }
+
+# The containers read these as other users: PostgreSQL runs the init script as its own user,
+# and Traefik has no capability to bypass file permissions. In a checkout made with a restrictive
+# umask (027, 077) the first start would otherwise fail – and leave a database directory that
+# looks initialised but holds no databases.
+chmod a+rX deploy/postgres/init-databases.sh deploy/traefik/dynamic deploy/traefik/dynamic/*.yml ||
+  echo "warning: could not make the files under deploy/ readable for the containers; check their permissions." >&2
 
 umask 077
 cat > .env <<ENV
@@ -67,5 +76,5 @@ echo "Created .env (readable only by you)."
 echo
 echo "Next steps:"
 echo "  1. Point DNS for $velydock_host, $keycloak_host and $sandbox_host to this server."
-echo "  2. docker compose up -d"
+echo "  2. docker compose up -d --wait        (returns when everything is ready; the first start takes one to two minutes)"
 echo "  3. docker compose exec velydock velydock setup-admin --username <name> --email <address>"
