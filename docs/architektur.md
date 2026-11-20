@@ -34,7 +34,7 @@ Proxy ist von außen erreichbar.
 
 | Dienst | Image | Aufgabe |
 |---|---|---|
-| `traefik` | `traefik:v3` | TLS mit Let's Encrypt, Routing nach Hostname. Konfiguration über Dateien (`deploy/traefik/dynamic.yml`), kein Zugriff auf den Docker-Socket. Abschaltbar, wenn ein eigener Proxy vorhanden ist. |
+| `traefik` | `traefik:v3` | TLS mit Let's Encrypt, Routing nach Hostname, Ratenbegrenzung der API. Konfiguration über Dateien im Verzeichnis `deploy/traefik/dynamic/`, das Traefik beobachtet (Änderungen gelten ohne Neustart); kein Zugriff auf den Docker-Socket. Abschaltbar, wenn ein eigener Proxy vorhanden ist. |
 | `velydock` | `ghcr.io/admincave/velydock` | Oberfläche, API, Anmeldung und die Auslieferung eigener Apps. Ein Prozess, zwei ASGI-Anwendungen (siehe unten). |
 | `theme` | dasselbe Image | Läuft einmal beim Start und kopiert das Login-Theme in das Volume, aus dem Keycloak Themes lädt. |
 | `keycloak` | `quay.io/keycloak/keycloak:26.x` | Identity Provider: Anmeldeseite, Passwörter, Zwei-Faktor, Sitzungen, OIDC für Velydock und angebundene Apps. |
@@ -54,7 +54,7 @@ Proxy ist von außen erreichbar.
 | `idp/` | Schnittstelle zum Identity Provider (`base.py`) und die Keycloak-Umsetzung inklusive Realm-Einrichtung (`keycloak.py`). |
 | `sandbox.py` | Die Anwendung für den Sandbox-Host: liefert ausschließlich eigene Apps aus. |
 | `db.py`, `models.py`, `migrations/` | Datenbankzugriff, Row-Level-Security-Kontext, Modelle, Migrationen. |
-| `cli.py` | `velydock run|migrate|bootstrap|setup-admin|install-theme|openapi`. |
+| `cli.py` | Das Kommando `velydock` mit den Befehlen `run`, `serve`, `migrate`, `bootstrap`, `setup-admin`, `keycloak-admin`, `install-theme`, `version` und `openapi`. |
 
 Das Frontend (`frontend/`, Svelte 5, TypeScript, Vite) wird beim Image-Build übersetzt und vom
 Backend als statische Dateien ausgeliefert. Es spricht ausschließlich mit `/api`.

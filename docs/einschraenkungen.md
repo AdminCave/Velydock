@@ -8,9 +8,10 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 |---|---|---|
 | **Gemeinsamer Realm: jeder Benutzer kann sich an jedem OIDC-Client anmelden.** | Eine per SSO angebundene App eines Kunden akzeptiert ohne weitere Konfiguration auch Benutzer anderer Mandanten. | Den Client auf die Organization beschränken ([sso.md](sso.md#apps-eines-einzelnen-kunden-abgrenzen)). Velydock richtet das nicht automatisch ein. |
 | **Benutzernamen und E-Mail-Adressen sind über alle Mandanten eindeutig.** | Beim Anlegen erfährt ein Mandantenadministrator, dass ein Name oder eine Adresse bereits irgendwo vergeben ist. | Bei Bedarf Namensschema je Kunde verwenden (z. B. `kunde.vorname`). |
-| **Eine Passwort-Richtlinie für alle Mandanten.** | Einzelne Kunden können keine strengere Richtlinie bekommen. | Die Richtlinie in Keycloak für alle anheben. |
+| **Eine Passwort-Richtlinie für alle Mandanten.** | Einzelne Kunden können keine strengere Richtlinie bekommen. | Die Richtlinie in Keycloak für alle anheben ([betrieb.md](betrieb.md#zugang-zur-keycloak-verwaltung)). Velydock setzt beim Anlegen des Realms nur den Ausgangswert (mindestens 12 Zeichen) und ändert die Richtlinie danach nicht mehr. |
 | **Der Heimat-Mandant beherrscht die Identität.** | Administratoren des Heimat-Mandanten können das Passwort einer Person zurücksetzen, die in anderen Mandanten Gast ist, und damit deren Gastzugänge nutzen. | Gäste nur aus vertrauenswürdigen Mandanten zulassen; Gastmitgliedschaften vergibt nur der Systemadministrator. |
 | **Zwei-Faktor wird nur für Rollen mit Verwaltungsrechten erzwungen.** | Mitglieder können sich ohne zweiten Faktor anmelden. | Für alle erzwingen: in Keycloak die Aktion „Configure OTP“ als Standard setzen. |
+| **Der Leerlauf-Ablauf verlangt kein neues Passwort.** | Nach 120 Minuten ohne Aktivität endet die Velydock-Session, die Keycloak-Sitzung besteht aber bis zu 12 Stunden. Wer an einen verlassenen, nicht gesperrten Rechner kommt, ist mit einem Klick auf „Anmelden“ wieder drin – und ein sichtbares Velydock-Fenster mit Fokus hält die Session ohnehin aktiv. | Beim Verlassen des Platzes abmelden oder den Bildschirm sperren. „Abmelden“ beendet beide Sitzungen. Kürzere Zeiten: `VELYDOCK_SESSION_MAX_HOURS` senken. |
 | **Der Dienstzugang von Velydock kann jedes Benutzerpasswort zurücksetzen.** | Wer den Velydock-Container übernimmt, kann alle Konten des Realms übernehmen. | Bauartbedingt für eine Benutzerverwaltung. Der Zugang ist nur im internen Netz nutzbar. |
 | **Der Bootstrap-Zugang im Realm `master` bleibt nach der Installation bestehen.** | Wer `.env` lesen kann, hat volle Kontrolle über Keycloak – allerdings nur aus dem internen Netz. | `.env` schützen. Der Zugang wird für `keycloak-admin` und den Tausch des Dienstzugang-Geheimnisses gebraucht. |
 | **Einbettungsprüfung mit `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE=true`.** | Mandantenadministratoren können erkennen, ob interne Adressen antworten und welche Framing-Header sie senden. | Standard ist `false`. |
@@ -47,6 +48,8 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - **Eine Instanz.** Mehrere parallele `velydock`-Container und Keycloak im Cluster sind nicht
   getestet.
 - **Kein Zurückrollen von Datenbankmigrationen** durch das Produkt. Vor Updates sichern.
+- **Jedes Update unterbricht den Betrieb für etwa eine Minute,** weil mit dem neuen
+  Velydock-Image auch Keycloak neu startet ([betrieb.md](betrieb.md#update)).
 - **Keycloak-Updates** sind Aufgabe des Betreibers (Versionsnummer in `docker-compose.yml`).
 - **Der Zugang zu Keycloaks Konsole** führt über einen SSH-Tunnel ([betrieb.md](betrieb.md)).
 
@@ -54,7 +57,8 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 
 - Die Anbindung konkreter Produkte (Nextcloud, OpenProject, mailcow, SOGo) per OIDC.
 - LDAP/AD-Föderation und externe Identity Provider.
-- Der Versand von E-Mails über einen echten SMTP-Server.
+- Der Versand von E-Mails über den SMTP-Server eines Anbieters mit Anmeldung und TLS. Getestet
+  ist der Weg über einen lokalen Mail-Empfänger ohne beides ([tests.md](tests.md)).
 - Let's-Encrypt-Zertifikate (die Tests laufen mit Traefiks selbstsigniertem Zertifikat).
 - Andere Browser als Chromium.
 - Der Betrieb hinter einem fremden Reverse Proxy.

@@ -34,7 +34,7 @@ Voraussetzungen: Docker mit Compose und drei DNS-Namen, die auf den Server zeige
 git clone https://github.com/AdminCave/Velydock.git && cd Velydock
 docker build -t ghcr.io/admincave/velydock:latest .    # nur solange kein Release veröffentlicht ist
 ./scripts/install.sh dock.example.com auth.example.com sandbox.example.com admin@example.com
-docker compose up -d
+docker compose up -d --wait    # kehrt zurück, sobald alles bereit ist (erster Start: ein bis zwei Minuten)
 docker compose exec velydock velydock setup-admin --username admin --email admin@example.com
 ```
 

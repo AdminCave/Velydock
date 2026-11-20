@@ -57,8 +57,8 @@ filtern.
 
 | Feld | Hinweis |
 |---|---|
-| **Benutzername** | 2 bis 64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich, Unterstrich. Lässt sich später nicht ändern. In der ganzen Installation eindeutig. |
-| **Vorname**, **Nachname** | Pflicht. |
+| **Benutzername** | 3 bis 64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich, Unterstrich. Lässt sich später nicht ändern. In der ganzen Installation eindeutig. |
+| **Vorname**, **Nachname** | Pflicht, je höchstens 100 Zeichen. Nicht erlaubt sind Klammern, Schrägstriche und die Zeichen `< > & " $ % ! # ? § ; * ~ | ^ =` – Keycloak lehnt sie in Namen ab. Ein Zusatz wie „extern“ gehört deshalb mit Bindestrich oder Komma an den Namen, nicht in Klammern. |
 | **E-Mail-Adresse** | Optional (für Konten ohne Postfach). In der ganzen Installation eindeutig. |
 | **Rolle** | Andere Rollen als „Mitglied“ kann nur vergeben, wer selbst „Administration“ hat. |
 | **Gruppen** | Bestimmen, welche Apps die Person sieht. |
@@ -66,8 +66,8 @@ filtern.
 
 Nach „Konto anlegen“ zeigt Velydock ein **Einmalpasswort** – nur dieses eine Mal. Gib es der
 Person auf sicherem Weg weiter. Bei der ersten Anmeldung muss sie ein eigenes Passwort wählen
-(mindestens 12 Zeichen). Mit der E-Mail-Option erhält sie stattdessen einen Link und es wird kein
-Passwort angezeigt.
+(mindestens 12 Zeichen). Mit der E-Mail-Option erhält sie stattdessen einen Link (drei Tage
+gültig), über den sie ihr Passwort selbst setzt, und es wird kein Passwort angezeigt.
 
 Meldet Velydock, dass Benutzername oder E-Mail-Adresse vergeben sind, existiert das Konto bereits
 – möglicherweise in einer anderen Organisation. Soll diese Person auch bei dir arbeiten, fügt sie
@@ -84,7 +84,17 @@ ein Systemadministrator hinzu (siehe „Gäste“).
 | **Konto löschen** | Löscht das Konto endgültig, auch in Keycloak. |
 | **Aus Organisation entfernen** | Nur bei Gästen: beendet die Mitgliedschaft; das Konto bleibt bestehen. |
 
-Das eigene Passwort setzt man nicht hier zurück, sondern unter *Profil → Passwort & Sicherheit*.
+Für das eigene Konto gibt es „Passwort zurücksetzen“ und „Sitzungen beenden“ hier nicht: Das
+eigene Passwort ändert man unter *Profil → Passwort & Sicherheit*, die eigene Sitzung beendet
+„Abmelden“.
+
+Wer die Rolle „Benutzerverwaltung“ oder „Administration“ neu erhält, wird abgemeldet und meldet
+sich neu an. Erst dann gelten die neuen Rechte – und dabei wird, falls verlangt, der zweite Faktor
+eingerichtet. Dasselbe gilt für neue Systemadministratoren.
+
+Mit der Rolle „Benutzerverwaltung“ lassen sich Konten mit höherer Rolle nicht verändern. Das gilt
+auch für deren Gruppen: In einer Gruppe kannst du solche Mitglieder weder hinzufügen noch
+entfernen.
 
 ### Gäste
 
@@ -186,5 +196,7 @@ Systemeinstellungen, Systemadministrator-Rechte), stehen im **Systemprotokoll**.
 ## Was nur in Keycloak geht
 
 Apps per Single Sign-On anbinden, Verzeichnisse (LDAP/AD) und externe Identity Provider
-einrichten, die Passwort-Richtlinie ändern: siehe [sso.md](sso.md) und
-[betrieb.md](betrieb.md#zugang-zur-keycloak-verwaltung).
+einrichten, die Passwort-Richtlinie oder die Schwellenwerte des Brute-Force-Schutzes ändern: siehe
+[sso.md](sso.md) und [betrieb.md](betrieb.md#zugang-zur-keycloak-verwaltung). Passwort-Richtlinie
+und Schwellenwerte setzt Velydock nur beim Anlegen des Realms; eine in Keycloak geänderte
+Einstellung bleibt bestehen.

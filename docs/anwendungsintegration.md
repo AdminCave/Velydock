@@ -27,7 +27,7 @@ Velydock prüft das beim Speichern der App und mit der Schaltfläche „Einbettb
 |---|---|
 | Einbettbar | Kein Verbot gefunden, oder Velydocks Adresse ist ausdrücklich erlaubt. |
 | Blockiert | Die App verbietet das Einbetten. Velydock zeigt statt eines leeren Frames einen Hinweis mit „In neuem Tab öffnen“. Empfehlung: Typ auf „Neuer Tab“ stellen oder die App umkonfigurieren. |
-| Unbekannt | Die Adresse war vom Server aus nicht prüfbar (privates Netz, nicht erreichbar, Weiterleitung auf eine andere Adresse, etwa eine Anmeldeseite). Velydock versucht die Einbettung. |
+| Ungeprüft | Die Adresse war vom Server aus nicht prüfbar (privates Netz, nicht erreichbar, Weiterleitung auf eine andere Adresse, etwa eine Anmeldeseite). Velydock versucht die Einbettung. |
 
 Die Prüfung sieht nur die Antwort auf die eingegebene Adresse. Leitet eine App erst nach der
 Anmeldung auf eine Seite mit Verbot, bleibt das unentdeckt.

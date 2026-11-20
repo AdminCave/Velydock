@@ -14,7 +14,8 @@ Tests stehen in [tests.md](tests.md).
 | Eingeschleustes Skript in der Oberfläche (XSS) | Strikte Content Security Policy, keine Tokens im Browser |
 | Eigene Apps greifen auf Velydock zu | Fremder Hostname, Sandbox ohne eigenen Origin, keine Cookies |
 | Clickjacking | `frame-ancestors 'none'` und `X-Frame-Options: DENY` |
-| Server ruft interne Adressen ab (SSRF) | Einbettungsprüfung nur gegen öffentliche Adressen, keine Weiterleitungen |
+| Server ruft interne Adressen ab (SSRF) | Einbettungsprüfung nur gegen öffentliche Adressen, Weiterleitungen nur innerhalb desselben Hosts |
+| Überlastung durch einzelne Anfragen | Größenbegrenzung für Anfragen, Zeit- und Mengenbegrenzung der Einbettungsprüfung, Rate-Limit am Proxy |
 | Übernahme eines Administratorkontos | Zwei-Faktor-Pflicht, Brute-Force-Schutz, kein Standardpasswort |
 
 ## Mandantentrennung
@@ -60,13 +61,19 @@ Das Init-Skript legt sie so an.
 
 Zusätzliche Regeln:
 
-- Niemand ändert die eigene Rolle, sperrt oder entfernt sich selbst.
+- Niemand ändert die eigene Rolle, sperrt oder entfernt sich selbst – auch Systemadministratoren
+  nicht. Das eigene Passwort und die eigenen Sitzungen laufen nicht über die Benutzerverwaltung,
+  sondern über Keycloaks Kontoseite und „Abmelden“.
 - Niemand vergibt eine Rolle oberhalb der eigenen und niemand verwaltet ein Konto mit höherem
-  Rang. Ein Benutzerverwalter kann daher nicht das Passwort eines Administrators zurücksetzen.
+  Rang. Ein Benutzerverwalter kann daher nicht das Passwort eines Administrators zurücksetzen und
+  dessen Gruppen nicht ändern – weder in der Benutzerverwaltung noch über die Gruppe selbst.
 - Profil, E-Mail, Passwort und Sperre einer Identität ändert nur der Mandant, dem sie gehört.
 - Systemadministratoren sind für Mandantenadministratoren unantastbar.
-- Der letzte Systemadministrator kann sein Recht nicht verlieren; der Mandant eines
-  Systemadministrators kann nicht gelöscht oder deaktiviert werden.
+- Der letzte aktive Systemadministrator kann weder sein Recht verlieren noch gesperrt oder
+  gelöscht werden – auch nicht, wenn zwei Administratoren das gleichzeitig beieinander versuchen.
+  Der Mandant eines Systemadministrators kann nicht gelöscht oder deaktiviert werden.
+- Wer Verwaltungsrechte neu erhält, wird abgemeldet: Die Rechte gelten erst in einer neuen
+  Session, an deren Beginn die Zwei-Faktor-Pflicht geprüft wird.
 
 ## Sitzungen
 
@@ -75,6 +82,14 @@ Zusätzliche Regeln:
 - In der Datenbank steht nur der SHA-256 des Cookie-Werts.
 - Leerlauf- und Maximaldauer, Back-Channel-Logout, sofortiges Beenden bei Sperre oder
   Passwort-Reset ([sso.md](sso.md)).
+- „Abmelden“ beendet die Keycloak-Sitzung auch dann, wenn die Velydock-Session schon abgelaufen ist.
+- Nach der Abmeldung zeigt der Zurück-Knopf des Browsers keine alte Seite mit Daten: Die
+  Oberfläche lädt neu, sobald der Browser sie aus seinem Seitenspeicher wiederherstellt.
+- Die aktive Organisation gehört zur Session. Ein Tab, der noch eine andere anzeigt, wird von der
+  API abgewiesen, statt in der falschen Organisation zu schreiben ([sso.md](sso.md), „Mehrere Tabs“).
+- Die Client-Adresse im Protokoll stammt aus `X-Forwarded-For`. Geglaubt wird dem Header nur von
+  Proxys in privaten Netzen (`VELYDOCK_TRUSTED_PROXIES`); was keine IP-Adresse ist, wird nicht
+  gespeichert.
 
 ## CSRF
 
@@ -114,6 +129,10 @@ für sie einschaltet.
 ## Eingaben
 
 - Alle Anfragen werden gegen ein Schema geprüft; unbekannte Felder führen zu einem Fehler.
+- Anfragen über 4 MB werden abgewiesen, bevor sie gelesen werden – auch ohne Anmeldung.
+- NUL-Zeichen werden in Adresse und Inhalt abgelehnt.
+- Vor- und Nachnamen dürfen die Zeichen nicht enthalten, die auch Keycloak ablehnt
+  (`< > & " $ % ! # ? § ; * ~ / \ | ^ = [ ] { } ( )`); Benutzernamen haben mindestens drei Zeichen.
 - App-Adressen: nur `http`/`https`, keine Zugangsdaten in der Adresse; eingebettete Apps nur `https`.
 - Icons: höchstens 256 KB; der Typ wird am Inhalt erkannt, nicht an der Angabe. Icons werden mit
   einer eigenen sandboxenden CSP ausgeliefert, sodass ein Skript in einer SVG-Datei nie läuft.
@@ -123,8 +142,16 @@ für sie einschaltet.
 
 Die Prüfung ruft eine von Administratoren eingegebene Adresse vom Server aus ab. Dabei gilt: nur
 `http`/`https`, jede aufgelöste Adresse muss öffentlich sein, die Verbindung geht an genau die
-geprüfte Adresse, Weiterleitungen werden nicht verfolgt, der Inhalt wird weder gelesen noch
-zurückgegeben. Private Netze lassen sich mit `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE=true` freigeben;
+geprüfte Adresse, der Inhalt wird weder gelesen noch zurückgegeben. Weiterleitungen werden nur
+innerhalb desselben Hosts verfolgt (höchstens drei, an dieselbe geprüfte Adresse) – so zählt die
+Seite, die der Browser am Ende zeigt, etwa die Anmeldeseite der App. Eine Weiterleitung auf einen
+anderen Host beendet die Prüfung mit „ungeprüft“.
+
+Eine Prüfung dauert höchstens zwölf Sekunden, und es laufen höchstens drei gleichzeitig; weitere
+enden sofort mit „ungeprüft“. Ohne diese Grenzen könnte eine Seite, die ihre Antwort tröpfchenweise
+sendet, Datenbankverbindungen der ganzen Installation binden.
+
+Private Netze lassen sich mit `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE=true` freigeben;
 dann können Mandantenadministratoren erkennen, ob interne Adressen antworten.
 
 ## Administration
@@ -142,16 +169,19 @@ dann können Mandantenadministratoren erkennen, ob interne Adressen antworten.
 - Der Dienstzugang von Velydock hat nur die Rollen, die er braucht (Benutzer, Organizations,
   Realm-Einstellungen, eigene Clients) – nicht `realm-admin`, nicht Impersonation.
 - Realm: Registrierung aus, Brute-Force-Schutz an, Passwörter mindestens 12 Zeichen und weder
-  Benutzername noch E-Mail, Anmeldeereignisse 30 Tage.
+  Benutzername noch E-Mail, Anmeldeereignisse 30 Tage. Passwort-Richtlinie und Schwellenwerte des
+  Brute-Force-Schutzes sind Ausgangswerte beim Anlegen des Realms; wer sie in Keycloak verschärft,
+  behält seine Einstellung.
 - Die E-Mail-Adresse ändern nur Administratoren. Eine selbst geänderte Adresse könnte in
   angebundenen Apps zur Übernahme fremder Konten führen.
 
 ## Container
 
 Kein Dienst läuft privilegiert, alle mit `no-new-privileges`. `velydock` läuft als eigener
-Benutzer ohne Capabilities auf schreibgeschütztem Dateisystem. Traefik hat keinen Zugriff auf den
-Docker-Socket. PostgreSQL ist nur im internen Netz erreichbar. Python-Abhängigkeiten sind mit
-Hashes festgeschrieben.
+Benutzer ohne Capabilities auf schreibgeschütztem Dateisystem. Der Dienst `theme` läuft bei jedem
+Start einmal kurz als root und ohne Netzwerk: Er kopiert das Login-Theme in ein Volume und setzt
+dort die Dateirechte. Traefik hat keinen Zugriff auf den Docker-Socket. PostgreSQL ist nur im
+internen Netz erreichbar. Python-Abhängigkeiten sind mit Hashes festgeschrieben.
 
 ## Sicherheitsrelevante Einschränkungen
 

@@ -29,7 +29,7 @@ schreibt einen Eintrag ins Protokoll (`audit.record`). Das ist die Stelle für:
   blockiert.
 - **Einladungen:** eine ausstehende Mitgliedschaft, die der Benutzer bestätigt.
 
-### 3. App-Typen (`models.AppType`, `services/apps.py`, Frontend `AppView`)
+### 3. App-Typen (`models.AppType`, `services/apps.py`, Frontend `AppStage` und `AppFrame`)
 
 Ein neuer Typ braucht einen Wert in `AppType`, die Validierung in `services/apps.py`, die
 Darstellung im Frontend und eine Migration nur, wenn neue Felder nötig sind. Denkbar:
@@ -67,10 +67,10 @@ Host) und Traefik die Hostnamen dynamisch erhalten, etwa über seinen HTTP-Provi
 
 ## Die API als Erweiterungsweg
 
-Die REST-API unter `/api/v1` ist vollständig in `backend/openapi.json` beschrieben; in
-Entwicklungsumgebungen zusätzlich unter `/api/docs`. Sie ist die Schnittstelle der Oberfläche und
-verwendet deren Session. Für Automatisierung von außen fehlen noch API-Schlüssel – eine
-naheliegende Erweiterung an der Stelle, an der heute `get_principal` die Session auswertet.
+Die REST-API unter `/api/v1` ist vollständig in `backend/openapi.json` beschrieben. Sie ist die
+Schnittstelle der Oberfläche und verwendet deren Session. Für Automatisierung von außen fehlen
+noch API-Schlüssel – eine naheliegende Erweiterung an der Stelle, an der heute `get_principal`
+die Session auswertet.
 
 ## Regeln für Erweiterungen
 

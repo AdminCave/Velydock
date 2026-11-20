@@ -110,6 +110,9 @@ erst, wenn der zweite Faktor existiert.
 Begründung: Die Prüfung bei jeder Anmeldung greift auch, wenn jemand seinen zweiten Faktor
 später wieder löscht.
 
+Folge: Weil die Regel an der Anmeldung hängt, dürfen laufende Sessions keine Verwaltungsrechte
+hinzugewinnen. Wer befördert wird, verliert deshalb seine Sessions und meldet sich neu an.
+
 ## 9. Login-Theme unter Inhalts-Hash
 
 `velydock install-theme` legt die Theme-Dateien in ein Verzeichnis, dessen Name ein Hash ihres
@@ -118,7 +121,32 @@ Inhalts ist.
 Begründung: Keycloak lässt Browser Theme-Dateien 30 Tage cachen und hält selbst komprimierte
 Kopien, beides nur nach Pfad. Ohne Hash bliebe nach einem Update das alte Aussehen sichtbar.
 
-## 10. Abweichungen vom freigegebenen Vorschlag
+## 10. Die aktive Organisation gehört zur Session; der Client nennt, welche er anzeigt
+
+Die Organisation einer Anfrage stammt ausschließlich aus der Session (Entscheidung 5). Eine
+Session kann aber in mehreren Tabs offen sein, und ein Wechsel in einem Tab gilt sofort für alle.
+Damit ein Tab, der noch die vorige Organisation zeigt, nicht in der neuen schreibt, schickt die
+Oberfläche die angezeigte Organisation als `X-Velydock-Tenant` mit; die API vergleicht sie mit
+der Session und antwortet bei Abweichung mit `409 tenant_changed`.
+
+Begründung: Der Header wählt nichts aus – er kann eine Anfrage nur scheitern lassen. Das Prinzip
+„der Client benennt keinen Mandanten“ bleibt damit erhalten. Verworfen wurde, die Organisation in
+die Adresse aufzunehmen (`/t/<kurzname>/…`): Dann müsste jede Anfrage einen vom Client gewählten
+Mandanten gegen die Mitgliedschaft prüfen, und ein Fehler dabei wäre ein Mandantendurchgriff.
+
+## 11. Leerlauf-Ablauf als Schutz der Session, nicht als Abmeldung
+
+Die Velydock-Session endet nach 120 Minuten ohne Aktivität, die Keycloak-Sitzung erst nach der
+Maximaldauer. Ein sichtbares Velydock-Fenster mit Fokus gilt als Aktivität, weil Benutzer
+stundenlang in eingebetteten Apps arbeiten, ohne dass Velydock davon eine Anfrage sieht.
+
+Begründung: Würde auch die Keycloak-Sitzung nach 120 Minuten Leerlauf enden, müssten sich
+Benutzer bei jeder App, die sie später am Tag öffnen, neu anmelden – das Gegenteil von Single
+Sign-On. Der Ablauf begrenzt daher, wie lange ein unbenutztes Session-Cookie gültig bleibt; er
+ersetzt weder das Abmelden noch die Bildschirmsperre
+([einschraenkungen.md](einschraenkungen.md#sicherheitsrelevant)).
+
+## 12. Abweichungen vom freigegebenen Vorschlag
 
 - Python 3.13 statt 3.14: identisch mit der Entwicklungs- und Testumgebung.
 - Bits UI wurde nicht benötigt; die Komponenten basieren auf denen von AdminHelper.

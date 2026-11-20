@@ -36,9 +36,14 @@ stehen in `.env.dev` (öffentliche Test-Geheimnisse, nicht für den Produktivbet
 | `https://demo.velydock.localhost:8443` | Kleine Demo-Anwendung zum Einbetten |
 | `http://localhost:18080/admin/velydock/console/` | Keycloaks Konsole |
 | `127.0.0.1:15432` | PostgreSQL (Superuser `postgres`, Passwort aus `.env.dev`) |
+| `http://localhost:18025` | Posteingang des Mail-Empfängers (Mailpit): fängt jede E-Mail ab, die Keycloak verschickt. In den Systemeinstellungen als Server `mail`, Port `1025`, ohne Verschlüsselung eintragen. |
 
 `*.localhost` löst im Browser ohne DNS-Eintrag auf `127.0.0.1` auf. Das Zertifikat ist Traefiks
 selbstsigniertes; der Browser warnt beim ersten Aufruf je Hostname.
+
+Die Routing-Regeln liegen in `deploy/traefik/dynamic/`; Traefik beobachtet das Verzeichnis und
+übernimmt Änderungen ohne Neustart. Die Route der Demo-Anwendung (`dev-demo.yml`) ist nur aktiv,
+wenn `DEMO_HOST` gesetzt ist – das tut allein `docker-compose.dev.yml`.
 
 Ersten Administrator anlegen:
 
@@ -68,10 +73,10 @@ python3 -m venv .venv
 
 Die Tests legen in der PostgreSQL-Instanz des Entwicklungs-Stacks eine eigene Wegwerf-Datenbank
 und in Keycloak einen eigenen Realm an; sie verändern die Entwicklungsdaten nicht. Für sie genügen
-zwei Dienste:
+drei Dienste (der Mail-Empfänger nimmt die Einladungs-Mail des Keycloak-Tests entgegen):
 
 ```bash
-./scripts/dev-stack.sh up -d --no-deps --wait postgres keycloak
+./scripts/dev-stack.sh up -d --no-deps --wait postgres keycloak mail
 ```
 
 ### Abhängigkeiten ändern

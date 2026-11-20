@@ -18,7 +18,7 @@ erreichbar.
 ## Update
 
 ```bash
-git pull                      # neue Compose-Datei und Skripte
+git pull                      # neue Compose-Datei, Skripte und Routing-Regeln
 docker compose pull           # neues Image
 docker compose up -d
 ```
@@ -27,9 +27,20 @@ Wer das Image selbst baut (kein veröffentlichtes Release): statt `docker compos
 `docker build -t ghcr.io/admincave/velydock:latest .` ausführen.
 
 Beim Start wendet Velydock ausstehende Datenbankmigrationen an und gleicht die Realm-Einstellungen
-in Keycloak ab. Enthält das Update ein geändertes Login-Theme, startet Compose Keycloak
-automatisch neu (Abhängigkeit vom Dienst `theme`); die Anmeldung ist dann für etwa eine Minute
-nicht erreichbar.
+in Keycloak ab.
+
+**Wartungsfenster einplanen:** Jedes neue Velydock-Image startet auch Keycloak neu, nicht nur
+eines mit geändertem Login-Theme. Der Dienst `theme` verwendet dasselbe Image wie `velydock`;
+wird er neu angelegt, startet Compose Keycloak neu, und der neue `velydock`-Container startet
+erst, wenn Keycloak wieder bereit ist. Anmeldung und Oberfläche sind bei jedem Update etwa eine
+Minute lang nicht erreichbar.
+
+**Routing-Regeln:** Traefik liest das Verzeichnis `deploy/traefik/dynamic/` aus dem Checkout und
+beobachtet es. Geänderte Regeln gelten deshalb schon wenige Sekunden nach `git pull`, ohne
+Neustart von Traefik – die drei Befehle also zusammen ausführen. Auf Servern mit restriktiver
+umask (027, 077) nach `git pull` die Leserechte wiederherstellen: `chmod -R o+rX deploy`. Kann
+Traefik eine geänderte Datei nicht lesen, behält es die bisherigen Regeln und meldet den Fehler
+in `docker compose logs traefik`.
 
 Empfehlung: in `.env` eine feste Version eintragen (`VELYDOCK_IMAGE=ghcr.io/admincave/velydock:0.1.0`)
 und vor jedem Update ein Backup anlegen.
@@ -41,12 +52,13 @@ regelmäßigen Wartung.
 ## Backup
 
 ```bash
-./scripts/backup.sh               # schreibt nach ./backups/velydock-<Zeitstempel>/
+./scripts/backup.sh               # schreibt nach backups/velydock-<Zeitstempel>/ im Checkout
 ./scripts/backup.sh /mnt/backup   # anderes Zielverzeichnis
 ```
 
 Das Skript sichert im laufenden Betrieb beide Datenbanken (`pg_dump`, Custom-Format) und kopiert
-`.env`. Jedes Backup ist ein Verzeichnis mit Prüfsummen:
+`.env`. Ein relativer Pfad gilt – wie bei `restore.sh` – ab dem Verzeichnis, aus dem das Skript
+aufgerufen wird. Jedes Backup ist ein Verzeichnis mit Prüfsummen:
 
 ```
 velydock.dump   keycloak.dump   env   SHA256SUMS
@@ -75,7 +87,7 @@ Auf einem neuen Server:
 ```bash
 git clone https://github.com/AdminCave/Velydock.git && cd Velydock
 cp /mnt/backup/velydock-20261120T020000Z/env .env
-docker compose up -d                      # legt leere Datenbanken an
+docker compose up -d --wait               # legt leere Datenbanken an
 ./scripts/restore.sh /mnt/backup/velydock-20261120T020000Z
 ```
 
@@ -113,8 +125,15 @@ Regeln für den Proxy:
 | `KEYCLOAK_HOST` | `keycloak:8080` | **nur** die Pfade `/realms/velydock/` und `/resources/` weiterleiten |
 
 Außerdem: TLS terminieren, `X-Forwarded-For`, `X-Forwarded-Proto` und `X-Forwarded-Host` setzen,
-keine Antwort-Header entfernen. Die Pfade `/admin/` und `/realms/master/` von Keycloak dürfen von
+keine Antwort-Header entfernen. Velydock glaubt `X-Forwarded-For` nur von Proxys in privaten
+Netzen; steht der Proxy unter einer öffentlichen Adresse, gehört diese in
+`VELYDOCK_TRUSTED_PROXIES`. Anfragen über 4 MB weist Velydock selbst ab. Die Pfade `/admin/` und `/realms/master/` von Keycloak dürfen von
 außen nicht erreichbar sein.
+
+Zwei Dinge erledigt sonst der mitgelieferte Traefik, ein eigener Proxy sollte sie übernehmen: Er
+begrenzt die Anfragen an `/api/` je Client-Adresse (im Mittel 100 pro Sekunde, kurzzeitig bis 300) und
+weist Anfragen ab, deren Pfad einen kodierten Schrägstrich (`%2F`) enthält. Velydock dekodiert
+ihn zu `/`; ein Proxy, der Regeln nach Pfad anwendet, ließe sich sonst mit `/api%2F…` umgehen.
 
 ## Zugang zur Keycloak-Verwaltung
 
@@ -138,6 +157,16 @@ Die Anmeldung läuft über die normale Anmeldeseite mit den normalen Zugangsdate
 zweitem Faktor); nur die Konsole selbst kommt durch den Tunnel. Der Port lässt sich mit
 `KEYCLOAK_ADMIN_PORT` in `.env` ändern.
 
+**Mit eigenem Reverse Proxy** die `docker-compose.override.yml` im ersten Schritt mit angeben.
+Sobald `-f` verwendet wird, lädt Compose sie nicht mehr von selbst; Keycloak verlöre sonst den
+Port, über den der eigene Proxy es erreicht, und die Anmeldung fiele aus, solange die Konsole
+offen ist:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+               -f docker-compose.keycloak-admin.yml up -d keycloak
+```
+
 Danach wieder schließen:
 
 ```bash
@@ -151,9 +180,13 @@ Keycloak alles ändern – auch Passwörter aller Benutzer. Der Befehl braucht
 
 Was Velydock bei jedem Start wieder auf seinen Sollzustand setzt (weil es das selbst verwaltet):
 die Realm-Optionen aus `realm_settings` in `backend/velydock/idp/keycloak.py`, den Client
-`velydock` und die Regel, dass nur Administratoren E-Mail-Adressen ändern. Alles andere –
-weitere Clients, Föderationen, Identity Provider, eigene Authentifizierungsabläufe – bleibt
-unangetastet.
+`velydock` und die Regel, dass nur Administratoren E-Mail-Adressen ändern.
+
+Die Passwort-Richtlinie (mindestens 12 Zeichen, weder Benutzername noch E-Mail-Adresse) und die
+Schwellenwerte des Brute-Force-Schutzes gehören nicht dazu. Velydock setzt sie nur einmal, beim
+Anlegen des Realms, als Ausgangswerte. Wer sie in Keycloak verschärft, behält seine Einstellung;
+Velydock setzt sie nicht zurück. Alles andere – weitere Clients, Föderationen, Identity Provider,
+eigene Authentifizierungsabläufe – bleibt ebenfalls unangetastet.
 
 ## Protokolle und Diagnose
 
@@ -166,7 +199,7 @@ docker compose logs -f keycloak
 | Symptom | Ursache und Abhilfe |
 |---|---|
 | `velydock` startet nicht, Meldung „waiting for Keycloak“ | Keycloak braucht beim ersten Start länger; nach drei Minuten bricht Velydock ab und Compose startet es neu. |
-| Anmeldung endet mit „Die Anmeldung konnte nicht geprüft werden“ | `KEYCLOAK_HOST` in `.env` stimmt nicht mit der Adresse überein, unter der Keycloak erreichbar ist, oder die Uhrzeit des Servers ist falsch. |
+| Anmeldung endet mit „Die Anmeldung wurde abgelehnt. Bitte versuch es erneut.“ | Velydock konnte die Antwort von Keycloak nicht prüfen. Den Grund nennt die Zeile `sign-in rejected: …` in `docker compose logs velydock`; eine falsche Uhrzeit des Servers gehört zu den Ursachen. |
 | „The Velydock realm is not set up and no bootstrap credentials are configured“ | `KEYCLOAK_BOOTSTRAP_SECRET` fehlt beim ersten Start. |
 | Anmeldeseite ohne Velydock-Aussehen | Der Dienst `theme` ist fehlgeschlagen: `docker compose logs theme`. |
 | Eingebettete App bleibt leer | Die App verbietet das Einbetten oder liegt unter einer fremden Domain; siehe [anwendungsintegration.md](anwendungsintegration.md). |

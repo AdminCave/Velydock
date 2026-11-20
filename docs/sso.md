@@ -36,29 +36,52 @@ Was geprüft wird (`security/oidc.py`, `api/auth.py`):
 - Ziel nach der Anmeldung: nur lokale Pfade.
 
 Zuordnung zur Velydock-Identität über die Keycloak-Benutzer-ID (`sub`). Name und E-Mail werden bei
-jeder Anmeldung aus dem Token übernommen. Eine unbekannte Identität wird ohne Mandant angelegt;
-trägt sie einen bereits vergebenen Benutzernamen oder eine vergebene E-Mail, wird die Anmeldung
-abgelehnt (`account_conflict`), statt Konten stillschweigend zu verknüpfen.
+jeder Anmeldung aus dem Token übernommen. Eine unbekannte Identität wird ohne Mandant angelegt –
+auch ohne E-Mail-Adresse, wie sie bei Konten aus einem Verzeichnis vorkommt. Trägt sie einen
+bereits vergebenen Benutzernamen oder eine vergebene E-Mail, wird die Anmeldung abgelehnt
+(`account_conflict`), statt Konten stillschweigend zu verknüpfen. Namen, die länger sind als in
+Velydock vorgesehen (100 Zeichen), werden gekürzt; ein Benutzername über 150 Zeichen wird
+abgelehnt.
 
 ## Sessions und Abmeldung
 
 | Ereignis | Wirkung |
 |---|---|
-| Leerlauf (Standard 120 min) oder Maximaldauer (Standard 12 h) | Session ungültig, nächste Anfrage erhält 401. |
-| „Abmelden“ in Velydock | Session wird gelöscht, der Browser wird zu Keycloaks End-Session-Adresse geschickt; damit endet auch die Keycloak-Sitzung. |
+| Leerlauf (Standard 120 min) oder Maximaldauer (Standard 12 h) | Session ungültig, nächste Anfrage erhält 401; die Anmeldeseite sagt, dass die Sitzung abgelaufen ist. |
+| „Abmelden“ in Velydock | Session wird gelöscht, der Browser wird zu Keycloaks End-Session-Adresse geschickt; damit endet auch die Keycloak-Sitzung. Das gilt auch dann, wenn die Velydock-Session zu diesem Zeitpunkt schon abgelaufen war. |
 | Abmeldung oder Sitzungsende in Keycloak | Keycloak ruft `POST /api/auth/backchannel-logout` mit einem signierten Logout-Token auf; Velydock beendet die zugehörige Session. |
 | Administrator deaktiviert das Konto, setzt das Passwort zurück oder beendet Sitzungen | Velydock löscht die Sessions sofort und meldet den Benutzer in Keycloak ab. |
+| Ein Konto erhält Verwaltungsrechte (Rolle Benutzerverwaltung oder Administration, Systemadministrator) | Velydock beendet die laufenden Sessions dieses Kontos. Die neuen Rechte gelten erst nach erneuter Anmeldung – dort greift die Zwei-Faktor-Pflicht. |
+
+**Was als Aktivität zählt.** Jede Anfrage an die Velydock-API. Zusätzlich meldet sich die
+Oberfläche alle fünf Minuten, solange das Velydock-Fenster sichtbar ist und den Fokus hat – also
+auch, während jemand in einer eingebetteten App arbeitet. Ein Fenster im Hintergrund oder ein
+gesperrter Bildschirm zählt nicht.
+
+**Was der Leerlauf-Ablauf nicht ist.** Er beendet die Velydock-Session, nicht die Keycloak-Sitzung.
+Solange diese besteht (bis zur Maximaldauer), genügt nach dem Ablauf ein Klick auf „Anmelden“ ohne
+Passwort. Wer einen Arbeitsplatz verlässt, meldet sich ab; „Abmelden“ beendet beide Sitzungen.
 
 Die Keycloak-Sitzung ist so lang eingestellt wie die maximale Velydock-Session. So melden sich
 Apps, die später am Tag geöffnet werden, weiterhin ohne Rückfrage an.
 
+**Mehrere Tabs.** Die aktive Organisation gehört zur Session, nicht zum Tab. Wechselt sie in einem
+Tab, schickt ein anderer Tab mit jeder Anfrage weiterhin die Organisation mit, die er anzeigt
+(`X-Velydock-Tenant`). Stimmt sie nicht mehr, lehnt die API die Anfrage mit `409 tenant_changed`
+ab, statt die Änderung in der anderen Organisation auszuführen; der Tab lädt daraufhin die neue
+Organisation. Der Header kann keine Organisation auswählen, nur eine Anfrage scheitern lassen.
+
 ## Erste Anmeldung und Zwei-Faktor
 
 - Neue Konten erhalten ein Einmalpasswort (oder einen Link per E-Mail). Keycloak erzwingt bei der
-  ersten Anmeldung ein eigenes Passwort.
+  ersten Anmeldung ein eigenes Passwort. Der Link aus der E-Mail führt auf eine Seite von Keycloak,
+  auf der die Person ihr Passwort setzt; von dort geht es zurück zu Velydock.
 - Ist „Zwei-Faktor für Administratoren“ aktiv, müssen Systemadministratoren,
   Mandantenadministratoren und Benutzerverwalter eine Authenticator-App einrichten, bevor sie
   hineinkommen. Mitglieder richten den zweiten Faktor freiwillig über „Passwort & Sicherheit“ ein.
+  Wer befördert wird, während er angemeldet ist, wird abgemeldet und richtet den zweiten Faktor
+  bei der nächsten Anmeldung ein. Wird die Pflicht eingeschaltet, gilt sie für bereits
+  angemeldete Verwalter ab deren nächster Anmeldung.
 - Passwort, zweiter Faktor und Passkeys verwaltet jeder Benutzer in Keycloaks Kontoseite; Velydock
   verlinkt dorthin.
 

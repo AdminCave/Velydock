@@ -26,23 +26,28 @@ Drittanbieter-Cookies. Hintergrund in [anwendungsintegration.md](anwendungsinteg
 git clone https://github.com/AdminCave/Velydock.git
 cd Velydock
 ./scripts/install.sh dock.example.com auth.example.com sandbox.example.com admin@example.com
-docker compose up -d
+docker compose up -d --wait
 ```
 
 **Image:** Die Compose-Datei verwendet `ghcr.io/admincave/velydock:latest`. Dieses Image wird
 erst mit einem Release veröffentlicht (ein Tag `v…` löst den Workflow `release.yml` aus). Solange
-es noch keines gibt, baust du es vor `docker compose up -d` einmal selbst aus dem Quelltext:
+es noch keines gibt, baust du es vor dem Start einmal selbst aus dem Quelltext:
 
 ```bash
 docker build -t ghcr.io/admincave/velydock:latest .
 ```
 
 `install.sh` legt die Datei `.env` mit zufällig erzeugten Geheimnissen an (nur für den eigenen
-Benutzer lesbar). Es startet nichts und überschreibt keine vorhandene `.env`. Die vierte Angabe
-ist die E-Mail-Adresse für Let's Encrypt.
+Benutzer lesbar). Es startet nichts und überschreibt keine vorhandene `.env`. Die Hostnamen
+schreibt es klein; die vierte Angabe ist die E-Mail-Adresse für Let's Encrypt. Außerdem macht es
+die Dateien unter `deploy/`, die PostgreSQL und Traefik aus dem Checkout lesen, für andere
+Benutzer lesbar – nach einem `git clone` mit restriktiver umask (027, 077) könnten die Container
+sie sonst nicht öffnen.
 
 Der erste Start dauert ein bis zwei Minuten: PostgreSQL legt die Datenbanken an, Keycloak
-initialisiert sich, Velydock richtet den Realm ein. Der Fortschritt:
+initialisiert sich, Velydock richtet den Realm ein. Mit `--wait` kehrt der Befehl erst zurück,
+wenn alle Dienste bereit sind – erst dann lässt sich der erste Administrator anlegen. Den
+Fortschritt zeigt ein zweites Terminal:
 
 ```bash
 docker compose ps                 # alle Dienste "healthy"?
@@ -68,7 +73,24 @@ Danach:
    Administratoren standardmäßig Pflicht).
 
 **Zugang verloren?** Derselbe Befehl mit einem vorhandenen Benutzernamen setzt dessen Passwort
-zurück, aktiviert das Konto und macht es zum Systemadministrator.
+zurück, aktiviert das Konto und macht es zum Systemadministrator. Einen eingerichteten zweiten
+Faktor lässt er unverändert.
+
+**Zweiten Faktor verloren?** Velydock kann einen eingerichteten zweiten Faktor nicht entfernen;
+das geht nur in Keycloaks Konsole. Hat kein anderer Systemadministrator mehr Zugang, führt
+dieser Weg zurück:
+
+1. Mit einem neuen Benutzernamen ein zweites Administratorkonto anlegen, zum Beispiel
+   `docker compose exec velydock velydock setup-admin --username notfall` (`--email` nur mit
+   einer Adresse, die noch kein Konto verwendet). Damit anmelden und Passwort und zweiten Faktor
+   einrichten.
+2. Diesem Konto den Zugang zu Keycloaks Konsole geben und die Konsole öffnen
+   ([betrieb.md](betrieb.md#zugang-zur-keycloak-verwaltung)).
+3. In der Konsole unter *Users* das alte Konto öffnen und im Reiter *Credentials* den Eintrag
+   des zweiten Faktors löschen. Ist die Zwei-Faktor-Pflicht für Administratoren eingeschaltet,
+   richtet das alte Konto bei der nächsten Anmeldung einen neuen ein.
+4. Den Konsolenzugang wieder entziehen und das zweite Konto löschen, wenn es nicht mehr gebraucht
+   wird.
 
 ## Erste Schritte in der Oberfläche
 
@@ -88,7 +110,7 @@ Alle Einstellungen stehen in `.env`. Nach einer Änderung: `docker compose up -d
 
 | Variable | Bedeutung |
 |---|---|
-| `VELYDOCK_HOST`, `KEYCLOAK_HOST`, `SANDBOX_HOST` | Die drei Hostnamen (ohne `https://`). Sie müssen sich unterscheiden. |
+| `VELYDOCK_HOST`, `KEYCLOAK_HOST`, `SANDBOX_HOST` | Die drei Hostnamen (klein geschrieben, ohne `https://`). Sie müssen sich unterscheiden. |
 | `ACME_EMAIL` | E-Mail-Adresse für Let's Encrypt. |
 | `COMPOSE_PROFILES` | `proxy` startet den mitgelieferten Traefik. Leer lassen für einen eigenen Proxy. |
 | `HTTP_BIND`, `HTTPS_BIND` | Adresse und Port, an die Traefik bindet (Standard `0.0.0.0:80` und `0.0.0.0:443`). |
@@ -119,9 +141,10 @@ solange `KEYCLOAK_BOOTSTRAP_SECRET` gesetzt ist. Die Datenbank-Passwörter lasse
 | Variable | Standard | Bedeutung |
 |---|---|---|
 | `VELYDOCK_REQUIRE_ADMIN_2FA` | `true` | Zwei-Faktor-Pflicht für Rollen mit Verwaltungsrechten. Lässt sich in der Oberfläche überschreiben (System → Systemeinstellungen). |
-| `VELYDOCK_SESSION_IDLE_MINUTES` | `120` | Sitzung endet nach dieser Zeit ohne Aktivität. |
+| `VELYDOCK_SESSION_IDLE_MINUTES` | `120` | Sitzung endet nach dieser Zeit ohne Aktivität. Ein sichtbares Velydock-Fenster mit Fokus gilt als Aktivität ([sso.md](sso.md#sessions-und-abmeldung)). |
 | `VELYDOCK_SESSION_MAX_HOURS` | `12` | Sitzung endet spätestens nach dieser Zeit. |
 | `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE` | `false` | Erlaubt der Einbettungsprüfung, Adressen in privaten Netzen abzurufen. |
+| `VELYDOCK_TRUSTED_PROXIES` | private Netze und `127.0.0.1` | Adressen und Netze (kommagetrennt), deren `X-Forwarded-For` geglaubt wird. Daraus stammt die Client-Adresse im Protokoll. Der Standard passt für den mitgelieferten Traefik und für einen Proxy auf demselben Server; nur ein Proxy mit öffentlicher Adresse muss hier eingetragen werden. |
 | `VELYDOCK_LOG_LEVEL` | `INFO` | Protokollstufe des Backends. |
 
 Weitere Einstellungen (Instanzname, Standardsprache, Standard-Design, Navigationsposition,
