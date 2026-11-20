@@ -17,6 +17,7 @@ from velydock.config import Settings
 from velydock.db import Scope, set_rls_context, system_scope, transaction
 from velydock.idp.base import IdentityProvider, IdpError
 from velydock.models import Membership, Role, User
+from velydock.schemas import LogoutOut
 from velydock.security import sessions
 from velydock.security.oidc import IdTokenClaims, OidcClient, OidcError, new_pkce_pair
 from velydock.security.tokens import TokenError, random_token, sign, verify
@@ -169,7 +170,7 @@ async def callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     oidc: OidcClient = Depends(get_oidc),
     idp: IdentityProvider = Depends(get_idp),
@@ -232,10 +233,10 @@ async def callback(
     return response
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=LogoutOut)
 async def logout(
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     oidc: OidcClient = Depends(get_oidc),
 ) -> Response:

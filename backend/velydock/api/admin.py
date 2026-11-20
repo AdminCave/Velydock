@@ -62,7 +62,7 @@ async def list_users(
     page: Page = 1,
     page_size: PageSize = 25,
     principal: Principal = Depends(require(Permission.USERS_READ)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> UserPage:
     return await users_service.list_users(
         db,
@@ -80,7 +80,7 @@ async def list_users(
 async def create_user(
     data: UserCreate,
     principal: Principal = Depends(require(Permission.USERS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> UserCreated:
     smtp_configured = False
@@ -96,7 +96,7 @@ async def create_user(
 async def get_user(
     user_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.USERS_READ)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> UserOut:
     return await users_service.get_user(db, principal, user_id)
 
@@ -106,7 +106,7 @@ async def update_user(
     user_id: uuid.UUID,
     data: UserUpdate,
     principal: Principal = Depends(require(Permission.USERS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> UserOut:
     return await users_service.update_user(db, idp, principal, user_id, data)
@@ -116,7 +116,7 @@ async def update_user(
 async def reset_password(
     user_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.USERS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> PasswordReset:
     return PasswordReset(temporary_password=await users_service.reset_password(db, idp, principal, user_id))
@@ -126,7 +126,7 @@ async def reset_password(
 async def end_sessions(
     user_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.USERS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> Response:
     await users_service.end_sessions(db, idp, principal, user_id)
@@ -137,7 +137,7 @@ async def end_sessions(
 async def remove_user(
     user_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.USERS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> UserRemoved:
     return UserRemoved(deleted_identity=await users_service.remove_user(db, idp, principal, user_id))
@@ -149,7 +149,7 @@ async def remove_user(
 @router.get("/groups", response_model=list[GroupOut])
 async def list_groups(
     principal: Principal = Depends(require(Permission.GROUPS_READ)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> list[GroupOut]:
     return await groups_service.list_groups(db, principal)
 
@@ -158,7 +158,7 @@ async def list_groups(
 async def create_group(
     data: GroupCreate,
     principal: Principal = Depends(require(Permission.GROUPS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> GroupDetail:
     return await groups_service.create_group(db, principal, data)
 
@@ -167,7 +167,7 @@ async def create_group(
 async def get_group(
     group_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.GROUPS_READ)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> GroupDetail:
     return await groups_service.get_group(db, principal, group_id)
 
@@ -177,7 +177,7 @@ async def update_group(
     group_id: uuid.UUID,
     data: GroupUpdate,
     principal: Principal = Depends(require(Permission.GROUPS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> GroupDetail:
     return await groups_service.update_group(db, principal, group_id, data)
 
@@ -186,7 +186,7 @@ async def update_group(
 async def delete_group(
     group_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.GROUPS_WRITE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> Response:
     await groups_service.delete_group(db, principal, group_id)
     return Response(status_code=204)
@@ -198,7 +198,7 @@ async def delete_group(
 @router.get("/apps", response_model=list[AppOut])
 async def list_apps(
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> list[AppOut]:
     return await apps_service.list_apps(db, principal)
 
@@ -207,7 +207,7 @@ async def list_apps(
 async def create_app(
     data: AppCreate,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> AppOut:
     return await apps_service.create_app(db, principal, settings, data)
@@ -227,7 +227,7 @@ async def check_embed(
 async def reorder_apps(
     data: AppOrder,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> list[AppOut]:
     return await apps_service.reorder_apps(db, principal, data.app_ids)
 
@@ -236,7 +236,7 @@ async def reorder_apps(
 async def get_app(
     app_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> AppOut:
     return await apps_service.get_app(db, principal, app_id)
 
@@ -246,7 +246,7 @@ async def update_app(
     app_id: uuid.UUID,
     data: AppUpdate,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> AppOut:
     return await apps_service.update_app(db, principal, settings, app_id, data)
@@ -256,7 +256,7 @@ async def update_app(
 async def recheck_app(
     app_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> AppOut:
     return await apps_service.recheck_app(db, principal, settings, app_id)
@@ -266,7 +266,7 @@ async def recheck_app(
 async def delete_app(
     app_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> Response:
     await apps_service.delete_app(db, principal, app_id)
     return Response(status_code=204)
@@ -286,7 +286,7 @@ async def get_tenant_settings(
 async def update_tenant_settings(
     data: TenantSettingsUpdate,
     principal: Principal = Depends(require(Permission.TENANT_SETTINGS)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> TenantSettingsOut:
     return await settings_service.update_tenant_settings(db, principal, data)
 
@@ -296,6 +296,6 @@ async def audit_log(
     page: Page = 1,
     page_size: PageSize = 50,
     principal: Principal = Depends(require(Permission.AUDIT_READ)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> AuditPage:
     return await audit_service.list_entries(db, principal.require_tenant().id, page=page, page_size=page_size)

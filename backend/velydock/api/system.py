@@ -38,7 +38,7 @@ PageSize = Annotated[int, Query(ge=1, le=200)]
 
 @router.get("/tenants", response_model=list[TenantOut])
 async def list_tenants(
-    _: Principal = Depends(require_system_admin), db: AsyncSession = Depends(get_db)
+    _: Principal = Depends(require_system_admin), db: AsyncSession = Depends(get_db, scope="function")
 ) -> list[TenantOut]:
     return await tenants_service.list_tenants(db)
 
@@ -47,7 +47,7 @@ async def list_tenants(
 async def create_tenant(
     data: TenantCreate,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> TenantOut:
     return await tenants_service.create_tenant(db, idp, principal, data)
@@ -58,7 +58,7 @@ async def update_tenant(
     tenant_id: uuid.UUID,
     data: TenantUpdate,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> TenantOut:
     return await tenants_service.update_tenant(db, idp, principal, tenant_id, data)
@@ -69,7 +69,7 @@ async def delete_tenant(
     tenant_id: uuid.UUID,
     data: TenantDelete,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> Response:
     """Deleting needs the short name typed out, hence a POST with a body rather than DELETE."""
@@ -82,7 +82,7 @@ async def add_member(
     tenant_id: uuid.UUID,
     data: MemberAdd,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     idp: IdentityProvider = Depends(get_idp),
 ) -> SystemUserOut:
     return await users_service.add_member(db, idp, principal, tenant_id, data.user_id, data.role)
@@ -94,7 +94,7 @@ async def list_users(
     page: Page = 1,
     page_size: PageSize = 25,
     _: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> SystemUserPage:
     return await users_service.list_all_users(db, search=search, page=page, page_size=page_size)
 
@@ -104,7 +104,7 @@ async def update_user(
     user_id: uuid.UUID,
     data: SystemUserUpdate,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> SystemUserOut:
     return await users_service.set_system_admin(db, principal, user_id, data.is_system_admin)
 
@@ -112,7 +112,7 @@ async def update_user(
 @router.get("/settings", response_model=SystemSettingsOut)
 async def get_system_settings(
     _: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     idp: IdentityProvider = Depends(get_idp),
 ) -> SystemSettingsOut:
@@ -123,7 +123,7 @@ async def get_system_settings(
 async def update_system_settings(
     data: SystemSettingsUpdate,
     principal: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     idp: IdentityProvider = Depends(get_idp),
 ) -> SystemSettingsOut:
@@ -135,7 +135,7 @@ async def system_audit(
     page: Page = 1,
     page_size: PageSize = 50,
     _: Principal = Depends(require_system_admin),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> AuditPage:
     """Entries that belong to no tenant: tenant lifecycle, system settings, administrator rights."""
     async with system_scope(db):

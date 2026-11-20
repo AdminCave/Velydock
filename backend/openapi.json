@@ -958,6 +958,21 @@
         "title": "LaunchOut",
         "type": "object"
       },
+      "LogoutOut": {
+        "additionalProperties": false,
+        "properties": {
+          "redirect_url": {
+            "description": "Navigate here to end the identity provider's session as well.",
+            "title": "Redirect Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirect_url"
+        ],
+        "title": "LogoutOut",
+        "type": "object"
+      },
       "MeOut": {
         "additionalProperties": false,
         "properties": {
@@ -2305,7 +2320,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutOut"
+                }
               }
             },
             "description": "Successful Response"

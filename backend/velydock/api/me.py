@@ -38,7 +38,7 @@ router = APIRouter(prefix="/api/v1", tags=["me"])
 
 @router.get("/public", response_model=PublicInfo)
 async def public_info(
-    db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)
+    db: AsyncSession = Depends(get_db, scope="function"), settings: Settings = Depends(get_settings)
 ) -> PublicInfo:
     """What the sign-in page needs before anyone is authenticated."""
     system = await settings_service.load_system(db, settings)
@@ -100,7 +100,7 @@ async def _me(db: AsyncSession, principal: Principal, settings: Settings) -> MeO
 @router.get("/me", response_model=MeOut)
 async def me(
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> MeOut:
     return await _me(db, principal, settings)
@@ -110,7 +110,7 @@ async def me(
 async def update_settings(
     data: SettingsUpdate,
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> MeOut:
     await settings_service.update_own(db, principal, data)
@@ -121,7 +121,7 @@ async def update_settings(
 async def update_profile(
     data: ProfileUpdate,
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
     idp: IdentityProvider = Depends(get_idp),
 ) -> MeOut:
@@ -144,7 +144,7 @@ async def update_profile(
 async def switch_tenant(
     data: ActiveTenantUpdate,
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> MeOut:
     """Enter another organization. Members may only enter organizations they belong to."""
@@ -187,7 +187,7 @@ async def switch_tenant(
 @router.get("/workspace/apps", response_model=list[WorkspaceApp])
 async def workspace_apps(
     principal: Principal = Depends(require(Permission.WORKSPACE_USE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> list[WorkspaceApp]:
     return [apps_service.workspace_view(app) for app in await apps_service.visible_apps(db, principal)]
 
@@ -202,7 +202,7 @@ async def launch_app(
     app_id: uuid.UUID,
     data: LaunchIn,
     principal: Principal = Depends(require(Permission.WORKSPACE_USE)),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> LaunchOut:
     return await apps_service.launch(
@@ -214,7 +214,7 @@ async def launch_app(
 async def app_icon(
     app_id: uuid.UUID,
     principal: Principal = Depends(get_principal),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> Response:
     tenant = principal.tenant
     if tenant is None:

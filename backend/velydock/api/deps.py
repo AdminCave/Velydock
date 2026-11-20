@@ -62,7 +62,13 @@ def get_oidc(request: Request) -> OidcClient:
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
-    """One transaction per request. It starts without any tenant context (deny by default)."""
+    """One transaction per request. It starts without any tenant context (deny by default).
+
+    Always declare it as ``Depends(get_db, scope="function")``: the transaction must be committed
+    before the response is sent. With the default scope FastAPI finishes the dependency only
+    after the client already has the answer, and an immediate follow-up request (the page that
+    reloads a list, the browser following the sign-in redirect) could still see the old state.
+    """
     async with get_sessionmaker()() as session, session.begin():
         await set_rls_context(session, scope=Scope.NONE)
         yield session
@@ -113,7 +119,7 @@ async def resolve_tenant(
 
 async def get_principal(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> Principal:
     cookie = request.cookies.get(settings.session_cookie)

@@ -115,6 +115,10 @@ class ActiveTenantUpdate(Model):
     tenant_id: uuid.UUID
 
 
+class LogoutOut(Model):
+    redirect_url: str = Field(description="Navigate here to end the identity provider's session as well.")
+
+
 class PublicInfo(Model):
     instance_name: str
     default_language: Language
