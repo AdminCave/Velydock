@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+log = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -39,6 +43,24 @@ def conflict(code: str, message: str) -> ApiError:
 
 def invalid(message: str, code: str = "validation", details: dict[str, Any] | None = None) -> ApiError:
     return ApiError(422, code, message, details)
+
+
+def database_unavailable(exc: BaseException) -> ApiError:
+    """The database cannot be reached: one line in the log and an answer the client understands.
+
+    Without this every request during an outage would fail with a full traceback in the log -
+    a few hundred lines each, burying whatever explains the outage.
+    """
+    reason = str(exc).strip().splitlines()[0][:200] if str(exc).strip() else type(exc).__name__
+    log.error("database unreachable (%s): %s", type(exc).__name__, reason)
+    return ApiError(503, "unavailable", "The service is temporarily unavailable.")
+
+
+def is_connection_failure(exc: BaseException) -> bool:
+    """Is this the database being away (as opposed to a statement that is wrong)?"""
+    if isinstance(exc, (OSError, SATimeoutError, InterfaceError, OperationalError)):
+        return True
+    return isinstance(exc, DBAPIError) and bool(exc.connection_invalidated)
 
 
 def idp_unavailable() -> ApiError:
@@ -78,13 +100,19 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DBAPIError)
     async def _database(_: Request, exc: DBAPIError) -> JSONResponse:
         # Two changes that got in each other's way (PostgreSQL ended one of them to resolve a
-        # deadlock, or could not serialize them). Nothing was changed; repeating the request works.
+        # deadlock, or could not serialize them). The database took nothing of this request;
+        # repeating it works, and also completes whatever it had already told the identity
+        # provider.
         state = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
         if state in ("40P01", "40001"):
             return JSONResponse(
                 _body("try_again", "Another change happened at the same moment. Please try again."),
                 status_code=409,
             )
+        if is_connection_failure(exc):
+            # The connection broke in the middle of a request.
+            unavailable = database_unavailable(exc)
+            return JSONResponse(_body(unavailable.code, unavailable.message), status_code=unavailable.status)
         raise exc
 
     @app.exception_handler(StarletteHTTPException)

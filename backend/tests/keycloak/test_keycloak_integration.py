@@ -4,6 +4,12 @@ These tests provision their own realm in a running Keycloak, exercise the Admin 
 walk through the browser sign-in exactly as a user would (HTML forms and redirects), ending in
 Velydock's real callback handler. The realm is deleted afterwards.
 
+The rule for this suite: whatever depends on how Keycloak behaves is tested here, against
+Keycloak, and by its outcome - the page it serves, the redirect it answers with - not by the
+value that was stored. The stand-ins used elsewhere (tests/support/fake_idp.py, mini_idp.py)
+accept everything; two fixes that were only tested against them did nothing at the real thing
+(a return address Keycloak refuses, an escaped name Keycloak decodes again).
+
     VELYDOCK_TEST_KEYCLOAK_URL          default http://127.0.0.1:18080 (the dev stack)
     VELYDOCK_TEST_KEYCLOAK_PUBLIC_URL   the KC_HOSTNAME of that Keycloak
     VELYDOCK_TEST_KEYCLOAK_BOOTSTRAP_SECRET
@@ -28,6 +34,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 import jwt
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from tests.conftest import World, unavailable
@@ -36,9 +43,16 @@ from tests.support.mini_idp import MiniIdp
 from velydock.app import create_app
 from velydock.config import Settings
 from velydock.db import Scope, transaction
-from velydock.idp.base import IdpConflict, IdpInvalid, IdpNotFound, SmtpConfig
-from velydock.idp.keycloak import PASSWORD_POLICY, SERVICE_ACCOUNT_ROLES, KeycloakIdp, ensure_realm
+from velydock.idp.base import AccountState, IdpConflict, IdpInvalid, IdpNotFound, SmtpConfig
+from velydock.idp.keycloak import (
+    EARLIER_PASSWORD_POLICIES,
+    PASSWORD_POLICY,
+    SERVICE_ACCOUNT_ROLES,
+    KeycloakIdp,
+    ensure_realm,
+)
 from velydock.models import AuditLog, Role, Tenant, User
+from velydock.schemas import SystemSettingsUpdate
 from velydock.security.oidc import OidcClient
 
 pytestmark = pytest.mark.keycloak
@@ -47,6 +61,8 @@ INTERNAL = os.environ.get("VELYDOCK_TEST_KEYCLOAK_URL", "http://127.0.0.1:18080"
 PUBLIC = os.environ.get("VELYDOCK_TEST_KEYCLOAK_PUBLIC_URL", "https://auth.velydock.localhost:8443")
 BOOTSTRAP_SECRET = os.environ.get("VELYDOCK_TEST_KEYCLOAK_BOOTSTRAP_SECRET", "dev-keycloak-bootstrap-secret")
 PASSWORD = "Correct-Horse-Battery-42"
+# What an administrator hands out. The permanent password has to differ from it (password history).
+ONE_TIME_PASSWORD = "Einmal-Passwort-zum-Start-7"
 # With organizations enabled Keycloak asks for the user name first; the second page carries the
 # password field (and, depending on the flow, the pre-filled user name).
 PASSWORD_PAGES = ("login-login", "login-login-password")
@@ -144,7 +160,7 @@ class TestRealmProvisioning:
     async def test_works_without_bootstrap_credentials_once_set_up(
         self, kc_settings: Settings, http: httpx.AsyncClient
     ) -> None:
-        """The master-realm bootstrap secret may be removed from the environment after the first start."""
+        """Velydock itself no longer needs the master-realm bootstrap secret after the first start."""
         without = kc_settings.model_copy(
             update={"idp_bootstrap_client_id": None, "idp_bootstrap_client_secret": None}
         )
@@ -435,8 +451,17 @@ def totp(secret_base32: str, at: float | None = None) -> str:
 
 
 @pytest.fixture
-async def stack(kc_settings: Settings, http: httpx.AsyncClient, clean_db: None) -> World:
+async def stack(
+    kc_settings: Settings, http: httpx.AsyncClient, clean_db: None, monkeypatch: pytest.MonkeyPatch
+) -> World:
     """The Velydock application wired to the real Keycloak (identity provider and relying party)."""
+    from velydock.security import sessions
+
+    # Tests that put a session straight into the database have no session at Keycloak for it.
+    # The periodic check against Keycloak would end those at once; ``TestWhatKeycloakKnows``
+    # covers the check itself, with real sign-ins.
+    if not getattr(stack, "check_sessions", False):
+        monkeypatch.setattr(sessions, "idp_check_due", lambda session: False)
     idp = KeycloakIdp(kc_settings, http)
     app = create_app(kc_settings, idp=idp, oidc=OidcClient(kc_settings, http))
     return World(settings=kc_settings, idp=FakeIdp(), mini=MiniIdp(kc_settings), app=app)
@@ -458,7 +483,7 @@ async def make_account(
         email=f"{username}@acme.example",
         first_name="Test",
         last_name="User",
-        temporary_password=PASSWORD,
+        temporary_password=ONE_TIME_PASSWORD,
     )
     token = await service_token(settings, http)
     reset = await http.put(
@@ -506,6 +531,64 @@ async def sign_in_through_keycloak(
     await browser.submit({"username": username}, stop_at=callback)
     assert browser.page_id() in PASSWORD_PAGES, browser.page[:800]
     return await browser.submit({"password": PASSWORD}, stop_at=callback)
+
+
+async def enrol_authenticator(browser: Browser, *, stop_at: str) -> tuple[httpx.Response, str]:
+    """On Keycloak's "set up authenticator" page: read the secret, answer with a valid code."""
+    manual = re.search(r'href="([^"]+mode=manual[^"]*)"', browser.page)
+    assert manual, "link to show the secret key"
+    await browser.request("GET", urljoin(PUBLIC, html.unescape(manual.group(1))))
+    secret = re.search(r'id="kc-totp-secret-key"[^>]*>([^<]+)<', browser.page)
+    assert secret, browser.page[:3000]
+    hidden = re.search(
+        r'name="totpSecret"\s+value="([^"]+)"|value="([^"]+)"\s+name="totpSecret"', browser.page
+    )
+    assert hidden
+    response = await browser.submit(
+        {
+            "totp": totp(secret.group(1)),
+            "totpSecret": hidden.group(1) or hidden.group(2),
+            "userLabel": "test",
+        },
+        stop_at=stop_at,
+    )
+    return response, secret.group(1)
+
+
+MAIL_API = os.environ.get("VELYDOCK_TEST_MAIL_URL", "http://127.0.0.1:18025")
+# How Keycloak reaches the mail catcher of the development stack.
+MAIL_SMTP_HOST = os.environ.get("VELYDOCK_TEST_MAIL_SMTP_HOST", "mail")
+
+
+@pytest.fixture
+async def mail(idp: KeycloakIdp, http: httpx.AsyncClient) -> AsyncIterator[None]:
+    """Keycloak sends its e-mail to the mail catcher of the development stack."""
+    try:
+        (await http.get(f"{MAIL_API}/api/v1/info")).raise_for_status()
+    except httpx.HTTPError as exc:
+        unavailable(f"mail catcher not reachable at {MAIL_API} ({exc}); start the dev stack's 'mail' service")
+    await idp.set_smtp(
+        SmtpConfig(
+            host=MAIL_SMTP_HOST,
+            port=1025,
+            from_address="velydock@velydock.test",
+            from_name="Velydock",
+            encryption="none",
+        )
+    )
+    yield
+    await idp.set_smtp(SmtpConfig())
+
+
+async def received_mail(http: httpx.AsyncClient, address: str) -> str:
+    """The text of the newest e-mail sent to ``address`` (waits for it)."""
+    for _ in range(40):
+        found = (await http.get(f"{MAIL_API}/api/v1/search", params={"query": f"to:{address}"})).json()
+        if found["messages"]:
+            message = await http.get(f"{MAIL_API}/api/v1/message/{found['messages'][0]['ID']}")
+            return str(message.json()["Text"])
+        await asyncio.sleep(0.25)
+    raise AssertionError(f"no e-mail for {address} arrived")
 
 
 class TestBrowserSignIn:
@@ -598,11 +681,57 @@ class TestBrowserSignIn:
             response = await browser.submit({"password": PASSWORD}, stop_at=callback)
             assert response.status_code == 200
             assert browser.page_id() == "login-login-update-password"
+            # "A password of one's own" - not the handed-over one again: the administrator who
+            # gave it out still knows it.
+            kept = await browser.submit(
+                {"password-new": PASSWORD, "password-confirm": PASSWORD}, stop_at=callback
+            )
+            assert kept.status_code == 200 and browser.page_id() == "login-login-update-password", (
+                "the one-time password was accepted as the permanent one"
+            )
             changed = await browser.submit(
                 {"password-new": PASSWORD + "-new", "password-confirm": PASSWORD + "-new"}, stop_at=callback
             )
             assert changed.status_code == 302 and "code=" in changed.headers["location"]
         await idp.delete_user(idp_id)
+
+    async def test_a_refused_sign_in_ends_keycloaks_session_and_returns_to_the_login_page(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient
+    ) -> None:
+        """Keycloak accepts the sign-in, Velydock does not (here: the account is deactivated in
+        Velydock only). The way back leads through Keycloak's end-session address - and Keycloak
+        is particular about return addresses: one with a parameter named "error" it refuses."""
+        name = unique("refused")
+        user = await make_account(stack, idp, http, name, Role.MEMBER)
+        async with transaction(Scope.SYSTEM) as db:
+            (await db.execute(select(User).where(User.id == user.id))).scalar_one().active = False
+        browser = Browser(http)
+        async with stack.client() as client:
+            redirect = await sign_in_through_keycloak(stack, browser, client, name)
+            answer = await client.get(redirect.headers["location"])
+            assert (
+                answer.status_code == 302 and "/protocol/openid-connect/logout?" in answer.headers["location"]
+            )
+            # Keycloak ends its session without asking and sends the browser back to Velydock …
+            back = await browser.request("GET", answer.headers["location"])
+            assert back.status_code == 302, f"Keycloak refused the way back:\n{browser.page[:600]}"
+            assert back.headers["location"] == "https://dock.test/api/auth/refused/disabled"
+            assert await idp.account_state(user.idp_id, None) is not AccountState.DISABLED
+            # … which shows the login page with the reason.
+            shown = await client.get("/api/auth/refused/disabled")
+            assert (shown.status_code, shown.headers["location"]) == (302, "/login?error=disabled")
+            assert (await client.get("/api/v1/me")).status_code == 401
+            # The session at Keycloak is gone: the next attempt asks for the user name again
+            # instead of running silently into the same refusal.
+            again = Browser(http)
+            again.cookies = dict(browser.cookies)
+            start = await client.get("/api/auth/login")
+            await again.follow(
+                await again.request("GET", start.headers["location"]),
+                stop_at="https://dock.test/api/auth/callback",
+            )
+            assert again.page_id() == "login-login-username"
+        await idp.delete_user(user.idp_id)
 
     async def test_administrators_must_enrol_a_second_factor(
         self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient
@@ -627,24 +756,7 @@ class TestBrowserSignIn:
             # … which now insists on setting up an authenticator app.
             await browser.follow(await browser.request("GET", first.headers["location"]), stop_at=callback)
             assert browser.page_id() == "login-login-config-totp", browser.page[:600]
-
-            manual = re.search(r'href="([^"]+mode=manual[^"]*)"', browser.page)
-            assert manual, "link to show the secret key"
-            await browser.request("GET", urljoin(PUBLIC, html.unescape(manual.group(1))))
-            secret = re.search(r'id="kc-totp-secret-key"[^>]*>([^<]+)<', browser.page)
-            assert secret, browser.page[:3000]
-            hidden = re.search(
-                r'name="totpSecret"\s+value="([^"]+)"|value="([^"]+)"\s+name="totpSecret"', browser.page
-            )
-            assert hidden
-            enrolled = await browser.submit(
-                {
-                    "totp": totp(secret.group(1)),
-                    "totpSecret": hidden.group(1) or hidden.group(2),
-                    "userLabel": "test",
-                },
-                stop_at=callback,
-            )
+            enrolled, _secret = await enrol_authenticator(browser, stop_at=callback)
             assert enrolled.status_code == 302 and "code=" in enrolled.headers["location"], browser.page[
                 :1500
             ]
@@ -668,7 +780,7 @@ class TestOrganizationClaim:
 
         name = unique("member")
         user_id = await idp.create_user(
-            username=name, email=None, first_name="A", last_name="B", temporary_password=PASSWORD
+            username=name, email=None, first_name="A", last_name="B", temporary_password=ONE_TIME_PASSWORD
         )
         await http.put(
             f"{realm_api}/users/{user_id}/reset-password",
@@ -745,6 +857,19 @@ class TestWhatOperatorsChangeInKeycloak:
         finally:
             await admin_put(kc_settings, http, "", {"passwordPolicy": PASSWORD_POLICY, "failureFactor": 8})
 
+    async def test_a_policy_nobody_changed_moves_on_with_velydock(
+        self, kc_settings: Settings, http: httpx.AsyncClient
+    ) -> None:
+        """An installation of an earlier version still has that version's policy, under which the
+        one-time password could be kept as the permanent one. Untouched, it is brought up to date."""
+        for earlier in EARLIER_PASSWORD_POLICIES:
+            await admin_put(kc_settings, http, "", {"passwordPolicy": earlier})
+            try:
+                await ensure_realm(kc_settings, http)
+                assert (await admin_get(kc_settings, http, "")).json()["passwordPolicy"] == PASSWORD_POLICY
+            finally:
+                await admin_put(kc_settings, http, "", {"passwordPolicy": PASSWORD_POLICY})
+
 
 class TestRulesVelydockMirrors:
     """Velydock validates input before it calls Keycloak. Where Keycloak is stricter, the user
@@ -752,8 +877,6 @@ class TestRulesVelydockMirrors:
 
     async def test_the_rule_for_names_is_keycloaks_rule(self, idp: KeycloakIdp) -> None:
         import string
-
-        from pydantic import ValidationError
 
         from velydock.schemas import UserCreate
 
@@ -784,8 +907,6 @@ class TestRulesVelydockMirrors:
         assert disagreements == []
 
     async def test_user_names_need_three_characters(self, idp: KeycloakIdp) -> None:
-        from pydantic import ValidationError
-
         from velydock.schemas import UserCreate
 
         short = "z" + secrets.choice("abcdefghijkmnpqrstuvwxyz")
@@ -873,44 +994,9 @@ class TestSetupAdmin:
         assert [u.username for u in users] == [arguments.username]
 
 
-MAIL_API = os.environ.get("VELYDOCK_TEST_MAIL_URL", "http://127.0.0.1:18025")
-# How Keycloak reaches the mail catcher of the development stack.
-MAIL_SMTP_HOST = os.environ.get("VELYDOCK_TEST_MAIL_SMTP_HOST", "mail")
-
-
 class TestInvitationEmail:
     """The link with which a new user sets the first password - sent through a real SMTP server
     (the mail catcher of the development stack) and followed like the recipient would."""
-
-    @pytest.fixture
-    async def mail(self, idp: KeycloakIdp, http: httpx.AsyncClient) -> AsyncIterator[None]:
-        try:
-            (await http.get(f"{MAIL_API}/api/v1/info")).raise_for_status()
-        except httpx.HTTPError as exc:
-            unavailable(
-                f"mail catcher not reachable at {MAIL_API} ({exc}); start the dev stack's 'mail' service"
-            )
-        await idp.set_smtp(
-            SmtpConfig(
-                host=MAIL_SMTP_HOST,
-                port=1025,
-                from_address="velydock@velydock.test",
-                from_name="Velydock",
-                encryption="none",
-            )
-        )
-        yield
-        await idp.set_smtp(SmtpConfig())
-
-    async def received(self, http: httpx.AsyncClient, address: str) -> str:
-        """The text of the e-mail sent to ``address`` (waits for it)."""
-        for _ in range(40):
-            found = (await http.get(f"{MAIL_API}/api/v1/search", params={"query": f"to:{address}"})).json()
-            if found["messages"]:
-                message = await http.get(f"{MAIL_API}/api/v1/message/{found['messages'][0]['ID']}")
-                return str(message.json()["Text"])
-            await asyncio.sleep(0.25)
-        raise AssertionError(f"no e-mail for {address} arrived")
 
     async def test_the_invited_user_sets_a_password_through_the_link_and_signs_in(
         self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, mail: None
@@ -948,7 +1034,7 @@ class TestInvitationEmail:
         assert created.status_code == 201, created.text
         assert created.json()["email_sent"] is True and created.json()["temporary_password"] is None
 
-        text = await self.received(http, address)
+        text = await received_mail(http, address)
         link = re.search(r"https?://\S+/login-actions/action-token\?\S+", text)
         assert link, text
         # The recipient opens the link: Keycloak names what is about to happen, then asks for
@@ -976,3 +1062,287 @@ class TestInvitationEmail:
             assert (await client.get(redirect.headers["location"])).headers["location"] == "/"
             me = (await client.get("/api/v1/me")).json()
         assert me["user"]["username"] == name and me["user"]["email"] == address
+
+
+class TestConcurrentChangesAtKeycloak:
+    async def test_a_lock_is_never_undone_by_a_change_made_at_the_same_moment(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient
+    ) -> None:
+        """Keycloak does not merge two changes to one account that arrive together: the later
+        one writes the whole account back, including the "enabled" it read before. A locked-out
+        user could keep the account open by saving the own profile in a loop. Velydock therefore
+        lets changes to one account take turns."""
+        admin = await make_account(stack, idp, http, unique("chef"), Role.TENANT_ADMIN)
+        async with await stack.login(admin) as boss, await stack.login(admin) as colleague:
+            for attempt in range(5):
+                name = unique("race")
+                created = await boss.post(
+                    "/api/v1/admin/users", json={"username": name, "first_name": "Alt", "last_name": "Alt"}
+                )
+                assert created.status_code == 201, created.text
+                user_id = created.json()["user"]["id"]
+                async with transaction(Scope.SYSTEM) as db:
+                    target = (await db.execute(select(User).where(User.username == name))).scalar_one()
+                async with await stack.login(target) as own:
+                    # Many writers around the lock, as a user saving in a loop would produce.
+                    writers = [
+                        own.patch("/api/v1/me/profile", json={"first_name": f"Selbst{n}", "last_name": "Alt"})
+                        for n in range(8)
+                    ]
+                    writers += [
+                        colleague.patch(f"/api/v1/admin/users/{user_id}", json={"last_name": f"Neu{n}"})
+                        for n in range(6)
+                    ]
+                    results = await asyncio.gather(
+                        *writers[:7],
+                        boss.patch(f"/api/v1/admin/users/{user_id}", json={"active": False}),
+                        *writers[7:],
+                    )
+                assert results[7].status_code == 200, results[7].text
+                account = await idp._api.json("GET", f"/users/{target.idp_id}")
+                async with transaction(Scope.SYSTEM) as db:
+                    row = (await db.execute(select(User).where(User.username == name))).scalar_one()
+                assert account["enabled"] is False and row.active is False, (
+                    f"attempt {attempt}: the lock was lost"
+                )
+                assert (account["firstName"], account["lastName"]) == (row.first_name, row.last_name)
+
+    async def test_an_address_typed_by_an_administrator_is_not_asserted_as_verified(
+        self, idp: KeycloakIdp
+    ) -> None:
+        name = unique("mail")
+        user_id = await idp.create_user(
+            username=name,
+            email=f"{name}@acme.example",
+            first_name="A",
+            last_name="B",
+            temporary_password=PASSWORD,
+        )
+        assert (await idp._api.json("GET", f"/users/{user_id}"))["emailVerified"] is False
+        await idp.update_user(user_id, email=f"{name}-2@acme.example")
+        account = await idp._api.json("GET", f"/users/{user_id}")
+        assert (account["email"], account["emailVerified"]) == (f"{name}-2@acme.example", False)
+        await idp.delete_user(user_id)
+
+
+class TestWhatKeycloakKnows:
+    """The periodic question to Keycloak whether an account and its session still stand."""
+
+    async def test_account_and_session_states(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, kc_settings: Settings
+    ) -> None:
+        name = unique("state")
+        user = await make_account(stack, idp, http, name, Role.MEMBER)
+        browser = Browser(http)
+        async with stack.client() as client:
+            redirect = await sign_in_through_keycloak(stack, browser, client, name)
+            assert (await client.get(redirect.headers["location"])).headers["location"] == "/"
+        async with transaction(Scope.SYSTEM) as db:
+            from velydock.models import AuthSession
+
+            sid = (await db.execute(select(AuthSession.idp_sid))).scalar_one()
+        assert sid, "the sign-in recorded Keycloak's session id"
+
+        assert await idp.account_state(user.idp_id, sid) is AccountState.ACTIVE
+        assert await idp.account_state(user.idp_id, "no-such-session") is AccountState.SESSION_ENDED
+        # What an operator does in the console, none of which sends a logout notification:
+        token = await service_token(kc_settings, http)
+        realm_api = f"{INTERNAL}/admin/realms/{kc_settings.keycloak_realm}"
+        ended = await http.delete(f"{realm_api}/sessions/{sid}", headers={"Authorization": f"Bearer {token}"})
+        assert ended.status_code == 204, ended.text
+        assert await idp.account_state(user.idp_id, sid) is AccountState.SESSION_ENDED
+        await idp.set_enabled(user.idp_id, False)
+        assert await idp.account_state(user.idp_id, sid) is AccountState.DISABLED
+        await idp.delete_user(user.idp_id)
+        assert await idp.account_state(user.idp_id, sid) is AccountState.DELETED
+
+    async def test_velydock_ends_the_session_of_an_account_disabled_in_keycloak(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from velydock.security import sessions
+
+        name = unique("gone")
+        user = await make_account(stack, idp, http, name, Role.MEMBER)
+        browser = Browser(http)
+        async with stack.client() as client:
+            redirect = await sign_in_through_keycloak(stack, browser, client, name)
+            await client.get(redirect.headers["location"])
+            assert (await client.get("/api/v1/me")).status_code == 200
+            await idp.set_enabled(user.idp_id, False)  # in Keycloak only; Velydock is not told
+            # The next periodic check (here: at once) notices.
+            monkeypatch.setattr(sessions, "idp_check_due", lambda session: True)
+            assert (await client.get("/api/v1/me")).status_code == 401
+        async with transaction(Scope.SYSTEM) as db:
+            row = (await db.execute(select(User).where(User.id == user.id))).scalar_one()
+        assert row.active is False
+
+
+class TestRealmHardening:
+    async def test_the_password_grant_of_the_built_in_public_client_is_closed(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, kc_settings: Settings
+    ) -> None:
+        """Otherwise anyone could post password guesses straight to the token endpoint - and lock
+        any account with a handful of wrong ones."""
+        name = unique("grant")
+        await make_account(stack, idp, http, name, Role.MEMBER)
+        response = await http.post(
+            f"{kc_settings.realm_internal_url}/protocol/openid-connect/token",
+            data={"grant_type": "password", "client_id": "admin-cli", "username": name, "password": PASSWORD},
+        )
+        assert response.status_code in (400, 401), response.text
+        assert response.json()["error"] in ("unauthorized_client", "invalid_client"), response.text
+
+    async def test_forgot_password_asks_for_the_existing_second_factor(
+        self, kc_settings: Settings, http: httpx.AsyncClient
+    ) -> None:
+        """Keycloak's own flow would let someone with the mailbox enrol a new authenticator."""
+        realm = (await admin_get(kc_settings, http, "")).json()
+        assert realm["resetCredentialsFlow"] == "velydock reset credentials"
+        executions = (
+            await admin_get(
+                kc_settings, http, "/authentication/flows/velydock%20reset%20credentials/executions"
+            )
+        ).json()
+        steps = [(e.get("providerId"), e.get("requirement")) for e in executions if e.get("providerId")]
+        assert ("auth-otp-form", "REQUIRED") in steps
+        assert "reset-otp" not in [provider for provider, _ in steps]
+        # The step is inside the "only if the user has a second factor" part, after the others.
+        assert steps.index(("conditional-user-configured", "REQUIRED")) < steps.index(
+            ("auth-otp-form", "REQUIRED")
+        )
+        # Setting it up again changes nothing.
+        await ensure_realm(kc_settings, http)
+        again = (
+            await admin_get(
+                kc_settings, http, "/authentication/flows/velydock%20reset%20credentials/executions"
+            )
+        ).json()
+        assert [(e.get("providerId"), e.get("requirement")) for e in again if e.get("providerId")] == steps
+
+    async def test_a_mailbox_alone_does_not_get_into_an_account_with_a_second_factor(
+        self, stack: World, idp: KeycloakIdp, http: httpx.AsyncClient, mail: None
+    ) -> None:
+        name = unique("otp")
+        user = await make_account(stack, idp, http, name, Role.TENANT_ADMIN)
+        callback = "https://dock.test/api/auth/callback"
+        # The owner enrols an authenticator.
+        await idp.require_second_factor_setup(user.idp_id)
+        owner = Browser(http)
+        async with stack.client() as client:
+            await sign_in_through_keycloak(stack, owner, client, name)
+            assert owner.page_id() == "login-login-config-totp", owner.page[:600]
+            enrolled, _ = await enrol_authenticator(owner, stop_at=callback)
+            assert enrolled.status_code == 302
+        assert await idp.has_second_factor(user.idp_id) is True
+
+        # Someone who can read the mailbox, without password and without the authenticator.
+        intruder = Browser(http)
+        async with stack.client() as client:
+            start = await client.get("/api/auth/login")
+            await intruder.follow(await intruder.request("GET", start.headers["location"]), stop_at=callback)
+            await intruder.submit({"username": name}, stop_at=callback)
+            forgot = re.search(r'href="([^"]*reset-credentials[^"]*)"', intruder.page)
+            assert forgot, "the sign-in page offers 'forgot password' once mail is configured"
+            await intruder.follow(
+                await intruder.request("GET", urljoin(PUBLIC, html.unescape(forgot.group(1)))),
+                stop_at=callback,
+            )
+            await intruder.submit({"username": name}, stop_at=callback)
+            text = await received_mail(http, f"{name}@acme.example")
+            link = re.search(r"https?://\S+", text)
+            assert link, text
+            await intruder.follow(await intruder.request("GET", link.group(0)), stop_at=callback)
+            proceed = re.search(r'<a[^>]*href="([^"]+)"', intruder.page.split("<main", 1)[-1])
+            if intruder.page_id() == "login-info" and proceed:
+                await intruder.follow(
+                    await intruder.request("GET", urljoin(PUBLIC, html.unescape(proceed.group(1)))),
+                    stop_at=callback,
+                )
+            # Keycloak now wants the code of the existing authenticator - not a new enrolment,
+            # and not yet a new password.
+            assert intruder.page_id() == "login-login-otp", (intruder.page_id(), intruder.page[:800])
+            assert 'name="totpSecret"' not in intruder.page and 'name="password-new"' not in intruder.page
+            assert (await client.get("/api/v1/me")).status_code == 401
+        credentials = await idp._api.json("GET", f"/users/{user.idp_id}/credentials")
+        assert [c["type"] for c in credentials].count("otp") == 1, "no second authenticator was enrolled"
+
+    async def test_the_instance_name_appears_on_keycloaks_pages_as_it_was_typed(
+        self, stack: World, http: httpx.AsyncClient, idp: KeycloakIdp
+    ) -> None:
+        """Every name Velydock accepts is shown literally in the header of the sign-in page."""
+
+        async def header_of_the_sign_in_page() -> str:
+            browser = Browser(http)
+            async with stack.client() as client:
+                start = await client.get("/api/auth/login")
+                await browser.follow(
+                    await browser.request("GET", start.headers["location"]),
+                    stop_at="https://dock.test/api/auth/callback",
+                )
+            header = re.search(r'id="kc-header-wrapper"[^>]*>(.*?)</div>', browser.page, re.DOTALL)
+            assert header, browser.page[:2000]
+            return header.group(1).strip()
+
+        try:
+            for name in ('Müller & Söhne "Intranet"', "AT&T R&D - Tom's Dock", "a&b &c; 100% & mehr"):
+                assert SystemSettingsUpdate(instance_name=name).instance_name == name
+                await idp.set_realm_display_name(name)
+                shown = await header_of_the_sign_in_page()
+                assert "<" not in shown, shown
+                assert html.unescape(shown) == name
+
+            # Why the rule for this name exists (schemas.InstanceName): Keycloak decodes character
+            # references before it looks for markup, so an escaped link arrives as a link. Should
+            # this assertion ever fail, Keycloak has changed and the rule can be relaxed.
+            await idp.set_realm_display_name('<a href="https://elsewhere.example/">Weiter</a>')
+            assert '<a href="https://elsewhere.example/"' in await header_of_the_sign_in_page()
+            for markup in (
+                '<a href="https://elsewhere.example/">Weiter</a>',
+                "&lt;b&gt;fett",
+                "x &#60;img src=y&#62;",
+            ):
+                with pytest.raises(ValidationError):
+                    SystemSettingsUpdate(instance_name=markup)
+        finally:
+            await idp.set_realm_display_name("Velydock")
+
+    async def test_a_request_to_enrol_a_second_factor_can_be_taken_back(self, idp: KeycloakIdp) -> None:
+        user_id = await idp.create_user(
+            username=unique("totp"), email=None, first_name="T", last_name="P", temporary_password=PASSWORD
+        )
+        await idp.require_second_factor_setup(user_id)
+        assert "CONFIGURE_TOTP" in (await idp._api.json("GET", f"/users/{user_id}"))["requiredActions"]
+        await idp.withdraw_second_factor_setup(user_id)
+        # Only that one: the forced password change of the new account stays.
+        assert (await idp._api.json("GET", f"/users/{user_id}"))["requiredActions"] == ["UPDATE_PASSWORD"]
+        await idp.withdraw_second_factor_setup(user_id)  # nothing to withdraw is fine
+        await idp.delete_user(user_id)
+
+    async def test_the_language_of_keycloaks_pages_and_mails_follows_velydocks_default(
+        self, kc_settings: Settings, http: httpx.AsyncClient, idp: KeycloakIdp
+    ) -> None:
+        await idp.set_default_locale("en")
+        assert (await admin_get(kc_settings, http, "")).json()["defaultLocale"] == "en"
+        await idp.set_default_locale("de")
+        assert (await admin_get(kc_settings, http, "")).json()["defaultLocale"] == "de"
+
+    async def test_a_mail_server_that_cannot_be_reached_is_reported_as_such(self, idp: KeycloakIdp) -> None:
+        from velydock.idp.base import IdpMailFailed
+
+        name = unique("nomail")
+        user_id = await idp.create_user(
+            username=name,
+            email=f"{name}@acme.example",
+            first_name="A",
+            last_name="B",
+            temporary_password=PASSWORD,
+        )
+        await idp.set_smtp(
+            SmtpConfig(host="127.0.0.1", port=9, from_address="x@velydock.test", encryption="none")
+        )
+        try:
+            with pytest.raises(IdpMailFailed):
+                await idp.send_password_setup_email(user_id)
+        finally:
+            await idp.set_smtp(SmtpConfig())
+            await idp.delete_user(user_id)

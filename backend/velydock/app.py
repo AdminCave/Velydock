@@ -7,6 +7,7 @@ from a different origin than Velydock itself.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,12 +18,13 @@ import httpx
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from velydock import __version__
 from velydock.api import admin, auth, me, system
 from velydock.config import Settings, get_settings
-from velydock.db import dispose_engine, engine_initialized, init_engine
+from velydock.db import dispose_engine, engine_initialized, get_engine, init_engine
 from velydock.errors import install_error_handlers
 from velydock.idp.base import IdentityProvider
 from velydock.idp.keycloak import KeycloakIdp
@@ -98,8 +100,22 @@ def create_main_app(
     install_error_handlers(app)
 
     @app.api_route("/api/health", methods=["GET", "HEAD"], include_in_schema=False)
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    async def health() -> Response:
+        """Up means: this process answers *and* reaches its database.
+
+        A health check that stays green while every request fails helps nobody.
+        """
+        if engine_initialized():
+            try:
+                async with asyncio.timeout(3):
+                    async with get_engine().connect() as connection:
+                        await connection.execute(text("SELECT 1"))
+            except Exception as exc:
+                log.error("health check: database unreachable (%s)", type(exc).__name__)
+                return JSONResponse(
+                    {"status": "unavailable", "version": __version__, "database": False}, status_code=503
+                )
+        return JSONResponse({"status": "ok", "version": __version__})
 
     app.include_router(auth.router)
     app.include_router(me.router)
@@ -107,7 +123,9 @@ def create_main_app(
     app.include_router(system.router)
 
     @app.api_route(
-        "/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
+        "/api/{path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
     )
     async def api_not_found(path: str) -> Response:
         return JSONResponse(

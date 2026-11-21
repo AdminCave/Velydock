@@ -147,6 +147,14 @@ class TestIdToken:
         with pytest.raises(OidcError, match="disallowed algorithm"):
             await oidc.validate_id_token(forged, nonce=NONCE)
 
+    async def test_a_nonce_outside_ascii_is_a_mismatch_not_an_error(
+        self, oidc: OidcClient, idp: MiniIdp
+    ) -> None:
+        token = idp.sign(idp.id_token_claims(ANNA, nonce="nönce"))
+        with pytest.raises(OidcError, match="nonce"):
+            await oidc.validate_id_token(token, nonce=NONCE)
+        assert (await oidc.validate_id_token(token, nonce="nönce")).username == ANNA.username
+
     async def test_garbage(self, oidc: OidcClient) -> None:
         with pytest.raises(OidcError):
             await oidc.validate_id_token("not-a-token", nonce=NONCE)
@@ -223,6 +231,23 @@ class TestProvider:
         # The code was consumed by the failed attempt: no replay.
         with pytest.raises(OidcError):
             await oidc.exchange_code(code=code, code_verifier=verifier, redirect_uri="https://dock.test/cb")
+
+    @pytest.mark.parametrize("answer", ["[]", '"text"', "<html>proxy error</html>"])
+    async def test_a_token_answer_that_is_no_json_object_is_a_refusal(
+        self, cfg: Settings, idp: MiniIdp, answer: str
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/token"):
+                return httpx.Response(
+                    200, content=answer.encode(), headers={"content-type": "application/json"}
+                )
+            return idp._handle(request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            with pytest.raises(OidcError, match="token response"):
+                await OidcClient(cfg, http).exchange_code(
+                    code="c", code_verifier="v", redirect_uri="https://dock.test/cb"
+                )
 
     def test_pkce_pair(self) -> None:
         verifier, challenge = new_pkce_pair()

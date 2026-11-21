@@ -19,7 +19,12 @@ from velydock.db import Scope, transaction
 from velydock.models import App, AppType
 from velydock.security.tokens import TokenError, verify
 from velydock.services.apps import SANDBOX_TOKEN_PURPOSE
-from velydock.services.custom_apps import render_document, response_headers
+from velydock.services.custom_apps import (
+    render_document,
+    response_headers,
+    wrapper_document,
+    wrapper_headers,
+)
 
 _LOCKED_DOWN = {
     "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
@@ -46,8 +51,9 @@ def _notice(settings: Settings, status: int, message: str) -> Response:
 
 def create_sandbox_app(settings: Settings) -> Starlette:
     async def serve(request: Request) -> Response:
+        token = request.path_params["token"]
         try:
-            grant = verify(settings.secret_key, SANDBOX_TOKEN_PURPOSE, request.path_params["token"])
+            grant = verify(settings.secret_key, SANDBOX_TOKEN_PURPOSE, token)
             app_id = uuid.UUID(str(grant["app"]))
         except (TokenError, KeyError, ValueError):
             return _notice(settings, 403, "This link has expired. Open the app again from Velydock.")
@@ -60,6 +66,17 @@ def create_sandbox_app(settings: Settings) -> Starlette:
                 or int(app.updated_at.timestamp()) != grant.get("ver")
             ):
                 return _notice(settings, 404, "This app is not available. Open it again from Velydock.")
+            # A network-off app is delivered inside a wrapper: it runs one frame level down, inside
+            # a script-less document whose frame-src confines every navigation it makes to the
+            # sandbox host, so it cannot carry data out by navigating itself. The "d" marker asks
+            # for that inner app document. Apps with network access keep the direct delivery.
+            if not app.custom_allow_network and request.query_params.get("d") != "1":
+                return HTMLResponse(
+                    wrapper_document(inner_path=f"/c/{token}?d=1"),
+                    headers=wrapper_headers(
+                        embedder_origin=settings.public_origin, sandbox_origin=settings.sandbox_origin
+                    ),
+                )
             document = render_document(
                 app, theme=str(grant.get("theme", "light")), language=str(grant.get("lang", "en"))
             )

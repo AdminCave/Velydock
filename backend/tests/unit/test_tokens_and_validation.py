@@ -103,13 +103,46 @@ class TestInputValidation:
 
     @pytest.mark.parametrize(
         "name",
-        ["Müller (extern)", "A/B", "Tom & Jerry", "<b>x</b>", "a;b", "x=y", "50%", "tab\there", "a\x00b"],
+        ["Müller (extern)", "A/B", "Tom & Jerry", "<b>x</b>", "a;b", "x=y", "50%", "a\x00b"],
     )
     def test_person_names_keycloak_would_refuse(self, name: str) -> None:
         with pytest.raises(ValidationError):
             self.user(first_name=name)
         with pytest.raises(ValidationError):
             self.user(last_name=name)
+
+    def test_runs_of_blanks_in_names_become_one_blank(self) -> None:
+        """Names that differ only in blanks look the same; they must be the same to the checks."""
+        assert self.user(first_name="Anna\t  Maria ").first_name == "Anna Maria"
+        # Line and paragraph separators count as blanks, too (Keycloak would refuse them).
+        assert self.user(last_name="Mül\u2028ler\x85x").last_name == "Mül ler x"
+        assert GroupCreate(name="  Büro  &   Verwaltung ").name == "Büro & Verwaltung"
+        assert TenantCreate(slug="acme", name="Acme \n GmbH").name == "Acme GmbH"
+
+    @pytest.mark.parametrize(
+        "name", ["Müller & Söhne", "AT&T", 'R&D "Intranet"', "Sales&Registration", "100 % Dock"]
+    )
+    def test_instance_names(self, name: str) -> None:
+        assert SystemSettingsUpdate(instance_name=name).instance_name == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            '<a href="https://elsewhere.example/">Weiter</a>',
+            "<img src=x>",
+            "a > b",
+            "&lt;b&gt;fett",
+            "&#60;b&#62;",
+            "&#x3c;b",
+            "A &amp; B",
+            "a &lt b",
+        ],
+    )
+    def test_instance_names_keycloak_would_read_as_markup(self, name: str) -> None:
+        """Keycloak prints this name through a sanitizer that decodes character references first
+        and lets links and images pass; escaping does not help (see the Keycloak suite)."""
+        with pytest.raises(ValidationError):
+            SystemSettingsUpdate(instance_name=name)
 
     def test_nul_characters_are_refused_anywhere(self) -> None:
         """PostgreSQL cannot store them; they must not get as far as a statement."""

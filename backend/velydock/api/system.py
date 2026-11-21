@@ -105,8 +105,9 @@ async def update_user(
     data: SystemUserUpdate,
     principal: Principal = Depends(require_system_admin),
     db: AsyncSession = Depends(get_db, scope="function"),
+    idp: IdentityProvider = Depends(get_idp),
 ) -> SystemUserOut:
-    return await users_service.set_system_admin(db, principal, user_id, data.is_system_admin)
+    return await users_service.set_system_admin(db, idp, principal, user_id, data.is_system_admin)
 
 
 @router.get("/settings", response_model=SystemSettingsOut)

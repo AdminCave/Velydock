@@ -28,7 +28,7 @@ def data_url(data: bytes, mime: str) -> str:
 def embed_result(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, object]]:
     """Replace the network check; tests decide what it reports and see which URLs were checked."""
     state: dict[str, object] = {
-        "result": EmbedResult(EmbedStatus.OK, "no framing restriction found", 200),
+        "result": EmbedResult(EmbedStatus.OK, "no_restriction", 200),
         "urls": [],
     }
 
@@ -167,14 +167,14 @@ class TestAppAdministration:
     async def test_blocked_embedding_is_recorded(
         self, world: World, admin: User, embed_result: dict[str, object]
     ) -> None:
-        embed_result["result"] = EmbedResult(EmbedStatus.BLOCKED, "X-Frame-Options: SAMEORIGIN", 200)
+        embed_result["result"] = EmbedResult(EmbedStatus.BLOCKED, "xfo_sameorigin", 200)
         async with await world.login(admin) as client:
             preview = await client.post(
                 "/api/v1/admin/apps/check-embed", json={"url": "https://cloud.acme.example/"}
             )
             assert preview.json() == {
                 "status": "blocked",
-                "detail": "X-Frame-Options: SAMEORIGIN",
+                "detail": "xfo_sameorigin",
                 "http_status": 200,
             }
             app = (
@@ -183,8 +183,8 @@ class TestAppAdministration:
                     json={"name": "Cloud", "type": "embedded", "url": "https://cloud.acme.example/"},
                 )
             ).json()
-            assert (app["embed_status"], app["embed_detail"]) == ("blocked", "X-Frame-Options: SAMEORIGIN")
-            embed_result["result"] = EmbedResult(EmbedStatus.OK, "no framing restriction found", 200)
+            assert (app["embed_status"], app["embed_detail"]) == ("blocked", "xfo_sameorigin")
+            embed_result["result"] = EmbedResult(EmbedStatus.OK, "no_restriction", 200)
             rechecked = await client.post(f"/api/v1/admin/apps/{app['id']}/recheck")
             assert rechecked.json()["embed_status"] == "ok"
 

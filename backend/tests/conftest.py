@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
+from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
 import httpx
@@ -69,6 +70,25 @@ def _admin_parts() -> tuple[str, int]:
 
     parts = urlsplit(ADMIN_URL)
     return parts.hostname or "127.0.0.1", parts.port or 5432
+
+
+def refusal(response: httpx.Response) -> str:
+    """The reason of a sign-in the identity provider accepted and Velydock refused.
+
+    Such a sign-in is sent through the provider's end-session address (so the session there
+    ends as well) and returns to the login page with the reason.
+    """
+    assert response.status_code == 302
+    location = urlsplit(response.headers["location"])
+    assert location.path.endswith("/protocol/openid-connect/logout"), response.headers["location"]
+    query = parse_qs(location.query)
+    assert "id_token_hint" in query, "the provider's session is ended without asking the user"
+    # The reason is part of the path: the real Keycloak refuses a return address with a
+    # parameter named "error" (tests/keycloak proves the whole way back to the login page).
+    back = query["post_logout_redirect_uri"][0]
+    prefix = f"{PUBLIC_URL}/api/auth/refused/"
+    assert back.startswith(prefix) and "?" not in back, back
+    return back.removeprefix(prefix)
 
 
 def unavailable(reason: str) -> NoReturn:

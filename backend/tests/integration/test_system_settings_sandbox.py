@@ -15,7 +15,7 @@ from velydock.db import Scope, get_engine, transaction
 from velydock.models import App, AppType, Base, Group, Membership, Role, Tenant, User
 from velydock.security.tokens import sign
 from velydock.services.apps import SANDBOX_TOKEN_PURPOSE
-from velydock.services.custom_apps import SANDBOX_FLAGS
+from velydock.services.custom_apps import SANDBOX_FLAGS, SEALED_SANDBOX_FLAGS
 
 
 @pytest.fixture
@@ -324,20 +324,63 @@ class TestSandboxHost:
         )
         return mia, app
 
-    async def test_custom_app_is_served_locked_down(self, world: World, setup: tuple[User, App]) -> None:
+    async def test_custom_app_is_served_in_a_confining_wrapper(
+        self, world: World, setup: tuple[User, App]
+    ) -> None:
+        # A network-off app is delivered as a script-less wrapper that frames the app one level
+        # down; the wrapper's frame-src confines every navigation the app makes to the sandbox
+        # host, so the app cannot carry data to a foreign address even on a click.
         mia, app = setup
         url = await self.launch(world, mia, app)
         async with world.client(csrf=False, base_url=SANDBOX_URL) as sandbox:
-            response = await sandbox.get(url)
-        assert response.status_code == 200
-        assert "<h1 id=t>Hallo</h1>" in response.text and 'data-theme="dark"' in response.text
-        csp = response.headers["content-security-policy"]
-        assert csp.startswith(f"sandbox {SANDBOX_FLAGS};")
-        assert "allow-same-origin" not in csp and "allow-top-navigation" not in csp
-        assert "connect-src 'none'" in csp and f"frame-ancestors {PUBLIC_URL}" in csp
-        assert response.headers["referrer-policy"] == "no-referrer"
-        assert response.headers["cache-control"] == "no-store"
-        assert "set-cookie" not in response.headers
+            wrapper = await sandbox.get(url)
+            # 1. /c/<token> is the wrapper: the app's HTML and script are NOT here.
+            assert wrapper.status_code == 200
+            assert "<h1 id=t>Hallo</h1>" not in wrapper.text
+            assert "<script" not in wrapper.text.lower()
+            assert "<iframe" in wrapper.text and "?d=1" in wrapper.text
+            wcsp = wrapper.headers["content-security-policy"]
+            assert f"sandbox {SEALED_SANDBOX_FLAGS};" in wcsp
+            assert "allow-popups" not in wcsp and "allow-same-origin" not in wcsp
+            assert f"frame-src {SANDBOX_URL}" in wcsp  # the inner app is pinned to the sandbox host
+            assert f"frame-ancestors {PUBLIC_URL}" in wcsp  # only Velydock may frame the wrapper
+            assert wrapper.headers["x-dns-prefetch-control"] == "off"
+            assert "set-cookie" not in wrapper.headers
+            # 2. the app document itself (?d=1): the author's code, sealed and network-closed.
+            doc = await sandbox.get(url + "?d=1")
+            assert doc.status_code == 200
+            assert "<h1 id=t>Hallo</h1>" in doc.text and 'data-theme="dark"' in doc.text
+            csp = doc.headers["content-security-policy"]
+            assert csp.startswith(f"sandbox {SEALED_SANDBOX_FLAGS};")
+            assert (
+                "allow-popups" not in csp
+                and "allow-same-origin" not in csp
+                and "allow-top-navigation" not in csp
+            )
+            assert "connect-src 'none'" in csp and "frame-src 'none'" in csp and "form-action 'none'" in csp
+            assert "frame-ancestors" not in csp  # framed by the wrapper, which carries the check
+            assert doc.headers["referrer-policy"] == "no-referrer"
+            assert doc.headers["cache-control"] == "no-store"
+            assert doc.headers["x-dns-prefetch-control"] == "off"
+            assert "set-cookie" not in doc.headers
+
+    async def test_the_inner_marker_is_no_bypass_of_the_token(
+        self, world: World, setup: tuple[User, App]
+    ) -> None:
+        # The signed token stays the only grant: the "?d=1" marker that selects the app document
+        # inside the wrapper does not skip the signature or version check.
+        mia, app = setup
+        token = (await self.launch(world, mia, app)).rsplit("/", 1)[1]
+        forged = sign(
+            "another-secret-key-" + "0" * 32,
+            SANDBOX_TOKEN_PURPOSE,
+            {"app": str(app.id), "ver": int(app.updated_at.timestamp())},
+            300,
+        )
+        async with world.client(csrf=False, base_url=SANDBOX_URL) as sandbox:
+            assert (await sandbox.get("/c/not-a-token?d=1")).status_code == 403
+            assert (await sandbox.get(f"/c/{forged}?d=1")).status_code == 403
+            assert "<h1 id=t>Hallo</h1>" in (await sandbox.get(f"/c/{token}?d=1")).text
 
     async def test_sandbox_host_serves_nothing_else(self, world: World, setup: tuple[User, App]) -> None:
         mia, _ = setup
@@ -372,7 +415,9 @@ class TestSandboxHost:
         path = (await self.launch(world, mia, app)).removeprefix(SANDBOX_URL)
         async with world.client(csrf=False) as client:
             spoofed = await client.get(path, headers={"Host": "sandbox.test"})
-            assert spoofed.status_code == 200 and "Hallo" in spoofed.text
+            # The sandbox host serves the custom app (here its confining wrapper); the main host
+            # below does not, whatever the path.
+            assert spoofed.status_code == 200 and "<iframe" in spoofed.text and "?d=1" in spoofed.text
             for host in ("dock.test", "evil.example", "sandbox.test.evil.example", "SANDBOX.TEST:443"):
                 response = await client.get("/api/v1/me", headers={"Host": host})
                 assert response.status_code in (401, 404), host
@@ -445,9 +490,14 @@ class TestSandboxHost:
             )
         url = await self.launch(world, mia, app)
         async with world.client(csrf=False, base_url=SANDBOX_URL) as sandbox:
-            csp = (await sandbox.get(url)).headers["content-security-policy"]
+            response = await sandbox.get(url)
+        csp = response.headers["content-security-policy"]
         assert "connect-src https:" in csp
         assert csp.startswith(f"sandbox {SANDBOX_FLAGS};") and "allow-same-origin" not in csp
+        # An app with network access is served directly (no wrapper): it keeps popups and can
+        # exfiltrate by design, so confining its navigation would buy nothing.
+        assert "<h1 id=t>Hallo</h1>" in response.text
+        assert f"frame-ancestors {PUBLIC_URL}" in csp
 
     def test_token_lifetime_is_short(self) -> None:
         from velydock.services.apps import SANDBOX_TOKEN_TTL

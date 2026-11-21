@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, quote
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.api.deps import get_db, get_idp, get_oidc, get_settings
 from velydock.config import Settings
-from velydock.db import Scope, set_rls_context, transaction
+from velydock.db import Lock, Scope, advisory_lock, set_rls_context, transaction
 from velydock.idp.base import IdentityProvider, IdpError
 from velydock.models import AuthSession, Membership, Role, User
 from velydock.schemas import LogoutOut
@@ -35,6 +36,8 @@ _MAX_LOGOUT_BODY = 64 * 1024
 _USERNAME_MAX = 150
 _EMAIL_MAX = 254
 _NAME_MAX = 100
+# Languages the sign-in pages exist in (the login theme carries the same two).
+_LANGUAGES = ("de", "en")
 
 
 def safe_return_path(value: str | None) -> str:
@@ -59,13 +62,22 @@ def _login_failed(settings: Settings, reason: str) -> RedirectResponse:
 
 
 async def _start_login(
-    settings: Settings, oidc: OidcClient, return_to: str, *, second_factor_round: bool = False
+    settings: Settings,
+    oidc: OidcClient,
+    return_to: str,
+    *,
+    second_factor_round: bool = False,
+    language: str | None = None,
 ) -> Response:
     state, nonce = random_token(24), random_token(24)
     verifier, challenge = new_pkce_pair()
     try:
         url = await oidc.authorization_url(
-            state=state, nonce=nonce, code_challenge=challenge, redirect_uri=_callback_url(settings)
+            state=state,
+            nonce=nonce,
+            code_challenge=challenge,
+            redirect_uri=_callback_url(settings),
+            language=language,
         )
     except OidcError:
         log.exception("cannot start sign-in")
@@ -79,6 +91,7 @@ async def _start_login(
             "verifier": verifier,
             "return_to": return_to,
             "mfa": second_factor_round,
+            "lang": language or "",
         },
         _LOGIN_TTL,
     )
@@ -98,10 +111,12 @@ async def _start_login(
 @router.get("/login", include_in_schema=False)
 async def login(
     return_to: str = "/",
+    lang: str | None = None,
     settings: Settings = Depends(get_settings),
     oidc: OidcClient = Depends(get_oidc),
 ) -> Response:
-    return await _start_login(settings, oidc, safe_return_path(return_to))
+    language = lang if lang in _LANGUAGES else None
+    return await _start_login(settings, oidc, safe_return_path(return_to), language=language)
 
 
 def _fit(value: str | None, limit: int) -> str:
@@ -109,16 +124,24 @@ def _fit(value: str | None, limit: int) -> str:
     return (value or "").replace("\x00", "")[:limit]
 
 
-async def _find_or_provision(db: AsyncSession, claims: IdTokenClaims) -> User | None:
+class _Refused(Exception):
+    """The identity provider accepted the sign-in, Velydock does not (``reason`` for the login page)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def _find_or_provision(db: AsyncSession, claims: IdTokenClaims) -> User:
     """Map the authenticated identity to a Velydock user. Runs in system scope.
 
     Unknown identities (created directly in Keycloak or coming from a directory) are added on
     first sign-in without any organization; an administrator assigns them afterwards.
-    Returns ``None`` when the identity cannot be mapped without touching another account.
+    Raises ``_Refused`` when the identity cannot be mapped without touching another account.
     """
     username = claims.username.replace("\x00", "")
     if not username or len(username) > _USERNAME_MAX:
-        return None
+        raise _Refused("account_unsupported")
     # An account without an e-mail address is normal (directories, accounts made in Keycloak).
     email = _fit(claims.email, _EMAIL_MAX + 1) or None
     if email is not None and len(email) > _EMAIL_MAX:
@@ -133,7 +156,7 @@ async def _find_or_provision(db: AsyncSession, claims: IdTokenClaims) -> User | 
         if (await db.execute(select(User.id).where(same).limit(1))).first():
             # Same name, different identity: never link silently, that would hand over the
             # existing account's access.
-            return None
+            raise _Refused("account_conflict")
         user = User(
             idp_id=claims.sub, username=username, email=email, first_name=first_name, last_name=last_name
         )
@@ -144,39 +167,85 @@ async def _find_or_provision(db: AsyncSession, claims: IdTokenClaims) -> User | 
         except IntegrityError:
             # A parallel first sign-in of the same identity won the race: use its row. Anything
             # else that collides is a conflict like the one above.
-            return (await db.execute(select(User).where(User.idp_id == claims.sub))).scalar_one_or_none()
+            winner = (await db.execute(select(User).where(User.idp_id == claims.sub))).scalar_one_or_none()
+            if winner is None:
+                raise _Refused("account_conflict") from None
+            return winner
         return user
 
     # A known identity: take over what Keycloak says, but never at the price of a failed
     # sign-in. A name or address still held by another (stale) row stays as it was here.
-    if username.lower() != user.username.lower():
+    new_username = user.username
+    if username.lower() == user.username.lower():
+        new_username = username
+    else:
         taken = await db.execute(
             select(User.id).where(func.lower(User.username) == username.lower(), User.id != user.id).limit(1)
         )
         if taken.first():
             log.warning("user name of %s not updated: another account still holds it", user.id)
         else:
-            user.username = username
-    else:
-        user.username = username
-    user.first_name = first_name or user.first_name
-    user.last_name = last_name or user.last_name
+            new_username = username
+    new_email = user.email
     if email is None:
-        user.email = None
+        new_email = None
     elif email != user.email:
         taken = await db.execute(
             select(User.id).where(func.lower(User.email) == email.lower(), User.id != user.id).limit(1)
         )
         if not taken.first():
-            user.email = email
+            new_email = email
+    user_id = user.id
     try:
+        # Assigned inside the savepoint: the session writes pending changes before it opens
+        # one, so anything assigned earlier would fail outside of it and take the whole
+        # transaction down.
         async with db.begin_nested():
+            user.username = new_username
+            user.first_name = first_name or user.first_name
+            user.last_name = last_name or user.last_name
+            user.email = new_email
             await db.flush()
     except IntegrityError:
         # Lost a race for the new name or address; keep the stored profile for this sign-in.
-        log.warning("profile of %s not updated from the token: conflict", user.id)
+        # (The rolled-back object must be read anew before any of its fields is touched.)
+        log.warning("profile of %s not updated from the token: conflict", user_id)
         await db.refresh(user)
     return user
+
+
+async def _refuse(settings: Settings, oidc: OidcClient, id_token: str, reason: str) -> Response:
+    """Refuse a sign-in the identity provider accepted, and end the session there.
+
+    Left alive, the next click on "sign in" would run silently into the same refusal, and
+    nobody could sign in with another account from this browser.
+    """
+    try:
+        url = await oidc.end_session_url(
+            id_token_hint=id_token,
+            # Not "/login?error=…" directly: Keycloak refuses a return address that carries a
+            # parameter named "error" ("Invalid redirect uri"). The reason travels in the path
+            # of a route of ours, which sends the browser on to the login page.
+            post_logout_redirect_uri=f"{settings.public_url}/api/auth/refused/{quote(reason, safe='')}",
+        )
+    except OidcError:
+        return _login_failed(settings, reason)
+    response = RedirectResponse(url, status_code=302)
+    response.delete_cookie(
+        settings.login_cookie, path="/", secure=settings.secure_cookies, httponly=True, samesite="lax"
+    )
+    return response
+
+
+@router.get("/refused/{reason}", include_in_schema=False)
+async def refused(reason: str, settings: Settings = Depends(get_settings)) -> Response:
+    """Where the identity provider sends the browser after ending the session of a refused
+    sign-in (see ``_refuse``): on to the login page, which explains the reason.
+
+    Anybody can open this address. It leads to the login page and nowhere else, and the reason
+    is a plain code the page looks up; one it does not know gets the general text.
+    """
+    return _login_failed(settings, reason if re.fullmatch(r"[a-z_]{1,40}", reason) else "invalid")
 
 
 async def _needs_second_factor(
@@ -234,20 +303,24 @@ async def callback(
 
     return_to = safe_return_path(str(pending.get("return_to", "/")))
     await set_rls_context(db, scope=Scope.SYSTEM)
-    user = await _find_or_provision(db, claims)
-    if user is None:
-        log.warning("sign-in of %s refused: conflicts with an existing account", claims.username)
-        return _login_failed(settings, "account_conflict")
+    try:
+        user = await _find_or_provision(db, claims)
+    except _Refused as refusal:
+        log.warning("sign-in of %s refused: %s", claims.sub, refusal.reason)
+        return await _refuse(settings, oidc, id_token, refusal.reason)
     if not user.active:
-        return _login_failed(settings, "disabled")
+        return await _refuse(settings, oidc, id_token, "disabled")
 
     try:
         if await _needs_second_factor(db, settings, idp, user):
             if pending.get("mfa"):
-                return _login_failed(settings, "second_factor_required")
-            # Ask Keycloak to enrol a second factor, then run the sign-in once more.
+                return await _refuse(settings, oidc, id_token, "second_factor_required")
+            # Ask Keycloak to enrol a second factor, then run the sign-in once more. (A change
+            # to the account like any other: it takes its turn.)
+            await advisory_lock(db, Lock.USER, user.id)
             await idp.require_second_factor_setup(user.idp_id)
-            return await _start_login(settings, oidc, return_to, second_factor_round=True)
+            language = str(pending.get("lang") or "") or None
+            return await _start_login(settings, oidc, return_to, second_factor_round=True, language=language)
     except IdpError:
         log.exception("second-factor check failed")
         return _login_failed(settings, "idp_unavailable")

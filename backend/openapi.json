@@ -16,6 +16,20 @@
         "title": "ActiveTenantUpdate",
         "type": "object"
       },
+      "AdminCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "email_invitations": {
+            "title": "Email Invitations",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "email_invitations"
+        ],
+        "title": "AdminCapabilities",
+        "type": "object"
+      },
       "AppCreate": {
         "additionalProperties": false,
         "properties": {
@@ -991,6 +1005,11 @@
               }
             ]
           },
+          "inactive_memberships": {
+            "default": 0,
+            "title": "Inactive Memberships",
+            "type": "integer"
+          },
           "instance_name": {
             "title": "Instance Name",
             "type": "string"
@@ -1694,6 +1713,11 @@
           },
           "nav_position_locked": {
             "title": "Nav Position Locked",
+            "type": "boolean"
+          },
+          "protected": {
+            "default": false,
+            "title": "Protected",
             "type": "boolean"
           },
           "slug": {
@@ -2708,6 +2732,28 @@
           }
         },
         "summary": "Audit Log",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/capabilities": {
+      "get": {
+        "description": "What depends on the installation rather than on the role - so the user interface does not\noffer what cannot work (the e-mail invitation without a mail server).",
+        "operationId": "capabilities_api_v1_admin_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities",
         "tags": [
           "admin"
         ]

@@ -18,6 +18,7 @@ from velydock.idp.base import IdentityProvider, IdpError
 from velydock.models import Role
 from velydock.policy import Permission
 from velydock.schemas import (
+    AdminCapabilities,
     AppCreate,
     AppOrder,
     AppOut,
@@ -74,6 +75,20 @@ async def list_users(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/capabilities", response_model=AdminCapabilities)
+async def capabilities(
+    principal: Principal = Depends(require(Permission.USERS_READ)),
+    idp: IdentityProvider = Depends(get_idp),
+) -> AdminCapabilities:
+    """What depends on the installation rather than on the role - so the user interface does not
+    offer what cannot work (the e-mail invitation without a mail server)."""
+    try:
+        email = (await idp.get_smtp()).configured
+    except IdpError:
+        email = False
+    return AdminCapabilities(email_invitations=email)
 
 
 @router.post("/users", response_model=UserCreated, status_code=201)

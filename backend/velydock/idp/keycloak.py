@@ -6,19 +6,26 @@ All calls go to Keycloak's Admin REST API over the internal network, authenticat
 
 from __future__ import annotations
 
+import html
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from velydock.config import Settings
 from velydock.idp.base import (
+    KEEP,
+    AccountState,
     IdpConflict,
     IdpError,
     IdpInvalid,
+    IdpMailFailed,
+    IdpManaged,
     IdpNotFound,
     IdpUnavailable,
+    Keep,
     SmtpConfig,
 )
 
@@ -42,7 +49,12 @@ SERVICE_ACCOUNT_ROLES = [
 # Since Keycloak 26.8 the Admin API only accepts tokens that carry its own audience; this
 # built-in client scope adds it.
 ADMIN_API_SCOPE = "kc-admin-api"
-PASSWORD_POLICY = "length(12) and notUsername and notEmail"  # noqa: S105 - a policy, not a password
+# passwordHistory: the new password must differ from the last ones - in particular from the
+# one-time password an administrator handed out and therefore still knows.
+PASSWORD_POLICY = "length(12) and notUsername and notEmail and passwordHistory(3)"  # noqa: S105 - a policy
+# What earlier versions of Velydock set. A realm that still has exactly one of these was never
+# touched by its operator and moves on to the current policy; any other policy is theirs.
+EARLIER_PASSWORD_POLICIES = ("length(12) and notUsername and notEmail",)
 
 
 class _TokenSource:
@@ -65,9 +77,12 @@ class _TokenSource:
         except httpx.HTTPError as exc:
             raise IdpUnavailable(f"identity provider unreachable: {exc}") from exc
         if resp.status_code in (400, 401, 404):
-            raise IdpError(f"identity provider rejected the service account ({resp.status_code})")
+            raise IdpError(
+                f"identity provider rejected the service account ({resp.status_code})",
+                status=resp.status_code,
+            )
         if resp.status_code >= 500:
-            raise IdpUnavailable(f"identity provider error {resp.status_code}")
+            raise IdpUnavailable(f"identity provider error {resp.status_code}", status=resp.status_code)
         data = resp.json()
         self._token = str(data["access_token"])
         self._expires = time.monotonic() + max(int(data.get("expires_in", 60)) - 20, 5)
@@ -102,17 +117,22 @@ class _AdminApi:
             return resp
         message = _error_message(resp)
         if resp.status_code == 404:
-            raise IdpNotFound(message)
+            raise IdpNotFound(message, status=404)
         if resp.status_code == 409:
             lowered = message.lower()
             field = "email" if "email" in lowered else "username" if "username" in lowered else "name"
             raise IdpConflict(field, message)
         if resp.status_code >= 500:
-            raise IdpUnavailable(f"identity provider error {resp.status_code}: {message}")
+            raise IdpUnavailable(
+                f"identity provider error {resp.status_code}: {message}", status=resp.status_code
+            )
         refused = _invalid_field(resp)
         if refused:
             raise IdpInvalid(refused, f"identity provider refused {refused}: {message}")
-        raise IdpError(f"identity provider rejected the request ({resp.status_code}): {message}")
+        raise IdpError(
+            f"identity provider rejected the request ({resp.status_code}): {message}",
+            status=resp.status_code,
+        )
 
     async def json(self, method: str, path: str, **kwargs: Any) -> Any:
         return (await self.request(method, path, **kwargs)).json()
@@ -188,51 +208,70 @@ class KeycloakIdp:
             "firstName": first_name,
             "lastName": last_name,
             "enabled": True,
-            "emailVerified": bool(email),
+            # Nobody has checked that the address belongs to this person; an administrator typed
+            # it. Connected apps read this flag, and some link accounts by a verified address.
+            # Keycloak sets it once the user has followed a link sent to the address.
+            "emailVerified": False,
             "credentials": [{"type": "password", "value": temporary_password, "temporary": True}],
         }
         if email:
             body["email"] = email
         return _created_id(await self._api.request("POST", "/users", json=body))
 
-    async def update_user(self, idp_id: str, *, email: str | None, first_name: str, last_name: str) -> None:
-        current = await self._api.json("GET", f"/users/{idp_id}")
-        current["firstName"] = first_name
-        current["lastName"] = last_name
-        current["emailVerified"] = bool(email)
-        if email:
-            current["email"] = email
-        elif not current.get("email"):
-            # Nothing stored, nothing to clear: leave the field out. Keycloak rejects an empty
-            # address for members of an organization ("Email not set").
-            current.pop("email", None)
+    async def update_user(
+        self,
+        idp_id: str,
+        *,
+        email: str | Keep | None = KEEP,
+        first_name: str | Keep = KEEP,
+        last_name: str | Keep = KEEP,
+    ) -> None:
+        # Only the named fields are sent. Keycloak leaves the rest alone, so a change made at
+        # the same moment (locking the account) or directly in Keycloak (another field) is not
+        # overwritten with what was read a moment ago.
+        changes: dict[str, Any] = {}
+        if first_name is not KEEP:
+            changes["firstName"] = first_name
+        if last_name is not KEEP:
+            changes["lastName"] = last_name
+        if email is KEEP:
+            pass
+        elif email:
+            changes["email"] = email
+            changes["emailVerified"] = False
         else:
-            await self._clear_email(idp_id, current)
-            return
-        await self._api.request("PUT", f"/users/{idp_id}", json=current)
+            current = await self._api.json("GET", f"/users/{idp_id}")
+            if current.get("email"):
+                await self._clear_email(idp_id, changes)
+                return
+            # Nothing stored, nothing to clear.
+        if changes:
+            await self._api.request("PUT", f"/users/{idp_id}", json=changes)
 
-    async def _clear_email(self, idp_id: str, representation: dict[str, Any]) -> None:
+    async def _clear_email(self, idp_id: str, changes: dict[str, Any]) -> None:
         """Remove a stored e-mail address.
 
         Keycloak refuses to blank the address of an organization member, although members without
         one are allowed. The memberships are therefore lifted for the moment of the update and
-        restored right after – also if the update fails.
+        restored right after – also if the update fails. A membership Keycloak manages itself
+        cannot be lifted (that would delete the account), so such an address stays.
         """
         organizations = await self._api.json("GET", f"/organizations/members/{idp_id}/organizations")
         org_ids = [str(org["id"]) for org in organizations]
         for org_id in org_ids:
+            await self._refuse_managed(org_id, idp_id)
+        for org_id in org_ids:
             await self._api.request("DELETE", f"/organizations/{org_id}/members/{idp_id}", ok=(400, 404))
         try:
-            representation["email"] = ""
-            await self._api.request("PUT", f"/users/{idp_id}", json=representation)
+            await self._api.request(
+                "PUT", f"/users/{idp_id}", json={**changes, "email": "", "emailVerified": False}
+            )
         finally:
             for org_id in org_ids:
                 await self._api.request("POST", f"/organizations/{org_id}/members", json=idp_id, ok=(409,))
 
     async def set_enabled(self, idp_id: str, enabled: bool) -> None:
-        current = await self._api.json("GET", f"/users/{idp_id}")
-        current["enabled"] = enabled
-        await self._api.request("PUT", f"/users/{idp_id}", json=current)
+        await self._api.request("PUT", f"/users/{idp_id}", json={"enabled": enabled})
 
     async def set_temporary_password(self, idp_id: str, password: str) -> None:
         await self._api.request(
@@ -247,28 +286,58 @@ class KeycloakIdp:
     async def delete_user(self, idp_id: str) -> None:
         await self._api.request("DELETE", f"/users/{idp_id}", ok=(404,))
 
+    async def account_state(self, idp_id: str, sid: str | None) -> AccountState:
+        # A short timeout: this runs inside ordinary requests, which must not hang on it.
+        account = await self._api.request("GET", f"/users/{idp_id}", ok=(404,), timeout=4.0)
+        if account.status_code == 404:
+            return AccountState.DELETED
+        if not account.json().get("enabled", True):
+            return AccountState.DISABLED
+        if sid:
+            sessions = await self._api.json("GET", f"/users/{idp_id}/sessions", timeout=4.0)
+            if sid not in {str(session.get("id")) for session in sessions}:
+                return AccountState.SESSION_ENDED
+        return AccountState.ACTIVE
+
     async def has_second_factor(self, idp_id: str) -> bool:
+        # Only what the sign-in really asks for counts. A registered security key would satisfy
+        # the rule on paper while the realm's sign-in never requests it.
         credentials = await self._api.json("GET", f"/users/{idp_id}/credentials")
-        return any(c.get("type") in ("otp", "webauthn", "webauthn-passwordless") for c in credentials)
+        return any(c.get("type") == "otp" for c in credentials)
 
     async def require_second_factor_setup(self, idp_id: str) -> None:
         current = await self._api.json("GET", f"/users/{idp_id}")
         actions = set(current.get("requiredActions") or [])
         if "CONFIGURE_TOTP" in actions:
             return
-        current["requiredActions"] = sorted(actions | {"CONFIGURE_TOTP"})
-        await self._api.request("PUT", f"/users/{idp_id}", json=current)
+        await self._api.request(
+            "PUT", f"/users/{idp_id}", json={"requiredActions": sorted(actions | {"CONFIGURE_TOTP"})}
+        )
+
+    async def withdraw_second_factor_setup(self, idp_id: str) -> None:
+        current = await self._api.json("GET", f"/users/{idp_id}")
+        actions = set(current.get("requiredActions") or [])
+        if "CONFIGURE_TOTP" in actions:
+            await self._api.request(
+                "PUT", f"/users/{idp_id}", json={"requiredActions": sorted(actions - {"CONFIGURE_TOTP"})}
+            )
 
     async def send_password_setup_email(self, idp_id: str) -> None:
-        await self._api.request(
-            "PUT",
-            f"/users/{idp_id}/execute-actions-email",
-            # No redirect_uri: Keycloak only accepts registered ones, and the only registered
-            # address is the OIDC callback. With the client alone, the page after setting the
-            # password links back to Velydock (the client's base address).
-            params={"lifespan": 3 * 24 * 3600, "client_id": self._settings.oidc_client_id},
-            json=["UPDATE_PASSWORD"],
-        )
+        try:
+            await self._api.request(
+                "PUT",
+                f"/users/{idp_id}/execute-actions-email",
+                # No redirect_uri: Keycloak only accepts registered ones, and the only registered
+                # address is the OIDC callback. With the client alone, the page after setting the
+                # password links back to Velydock (the client's base address).
+                params={"lifespan": 3 * 24 * 3600, "client_id": self._settings.oidc_client_id},
+                json=["UPDATE_PASSWORD"],
+            )
+        except IdpUnavailable as exc:
+            if exc.status is None:
+                raise  # Keycloak itself did not answer
+            # Keycloak answered: it could not hand the e-mail to the mail server.
+            raise IdpMailFailed(str(exc), status=exc.status) from exc
 
     # -- organizations (one per tenant) ----------------------------------------------------------
 
@@ -292,7 +361,17 @@ class KeycloakIdp:
         await self._api.request("POST", f"/organizations/{org_id}/members", json=idp_id, ok=(409,))
 
     async def remove_organization_member(self, org_id: str, idp_id: str) -> None:
+        await self._refuse_managed(org_id, idp_id)
         await self._api.request("DELETE", f"/organizations/{org_id}/members/{idp_id}", ok=(400, 404))
+
+    async def _refuse_managed(self, org_id: str, idp_id: str) -> None:
+        """Keycloak deletes the *account* when a member it manages itself leaves the organization."""
+        member = await self._api.request("GET", f"/organizations/{org_id}/members/{idp_id}", ok=(400, 404))
+        if member.status_code == 200 and member.json().get("membershipType") == "MANAGED":
+            raise IdpManaged(
+                "Keycloak manages this membership itself (identity provider or invitation of the "
+                "organization); removing it would delete the account."
+            )
 
     async def find_organization(self, alias: str) -> str | None:
         # Keycloak can only search organizations by name or domain, so page through them all;
@@ -362,7 +441,14 @@ class KeycloakIdp:
         await self._api.request("PUT", "", json={"smtpServer": smtp, "resetPasswordAllowed": bool(smtp)})
 
     async def set_realm_display_name(self, name: str) -> None:
-        await self._api.request("PUT", "", json={"displayName": name})
+        # Keycloak's pages print the HTML variant through a sanitizer that decodes character
+        # references before it looks for markup. Escaping keeps the stored value well-formed,
+        # but it does not keep markup out: that is the job of the rule for this name
+        # (schemas.InstanceName), which refuses anything that could be read as markup.
+        await self._api.request("PUT", "", json={"displayName": name, "displayNameHtml": html.escape(name)})
+
+    async def set_default_locale(self, language: str) -> None:
+        await self._api.request("PUT", "", json={"defaultLocale": language})
 
     async def ping(self) -> None:
         await self._api.request("GET", "")
@@ -388,6 +474,7 @@ def realm_settings(settings: Settings) -> dict[str, Any]:
         "enabled": True,
         "organizationsEnabled": True,
         "loginTheme": "velydock",
+        "emailTheme": "velydock",
         "internationalizationEnabled": True,
         "supportedLocales": ["de", "en"],
         "registrationAllowed": False,
@@ -478,6 +565,64 @@ async def _configure_user_profile(api: _AdminApi) -> None:
         await api.request("PUT", "/users/profile", json=profile)
 
 
+async def _close_password_grant(api: _AdminApi) -> None:
+    """Switch off the password grant of the built-in ``admin-cli`` client of this realm.
+
+    It is a public client: anyone on the internet could post user name and password guesses
+    straight to the token endpoint - without the sign-in page, and enough wrong ones lock the
+    account for a while (brute-force protection). Velydock and its users never need that grant.
+    """
+    found = await api.json("GET", "/clients", params={"clientId": "admin-cli"})
+    if found and found[0].get("directAccessGrantsEnabled"):
+        await api.request(
+            "PUT", f"/clients/{found[0]['id']}", json={**found[0], "directAccessGrantsEnabled": False}
+        )
+
+
+RESET_FLOW = "velydock reset credentials"
+
+
+async def _ensure_reset_flow(api: _AdminApi) -> None:
+    """Make "forgot password" no way around an enrolled second factor.
+
+    Keycloak's own flow lets someone who can read the mailbox set a new password *and* enrol a
+    new authenticator, without ever being asked for the existing one. Velydock's copy of the flow
+    asks for the existing second factor instead (accounts without one are not affected).
+    """
+    flows = await api.json("GET", "/authentication/flows")
+    if not any(flow.get("alias") == RESET_FLOW for flow in flows):
+        await api.request(
+            "POST", "/authentication/flows/reset%20credentials/copy", json={"newName": RESET_FLOW}
+        )
+    path = f"/authentication/flows/{quote(RESET_FLOW)}/executions"
+    executions = await api.json("GET", path)
+    for index, execution in enumerate(executions):
+        if execution.get("providerId") != "reset-otp":
+            continue
+        # The step sits in a conditional sub-flow ("only if the user has a second factor").
+        parent = next(
+            (
+                e
+                for e in reversed(executions[:index])
+                if e.get("authenticationFlow") and e.get("level", 0) < execution.get("level", 0)
+            ),
+            None,
+        )
+        if parent is None:
+            log.warning("unexpected shape of Keycloak's reset-credentials flow; left as it is")
+            break
+        await api.request("DELETE", f"/authentication/executions/{execution['id']}")
+        await api.request(
+            "POST",
+            f"/authentication/flows/{quote(str(parent['displayName']))}/executions/execution",
+            json={"provider": "auth-otp-form"},
+        )
+        added = next(e for e in await api.json("GET", path) if e.get("providerId") == "auth-otp-form")
+        await api.request("PUT", path, json={**added, "requirement": "REQUIRED"})
+        break
+    await api.request("PUT", "", json={"resetCredentialsFlow": RESET_FLOW})
+
+
 async def _grant_service_account(api: _AdminApi, client_uuid: str) -> None:
     management = await api.json("GET", "/clients", params={"clientId": "realm-management"})
     management_id = management[0]["id"]
@@ -542,6 +687,7 @@ async def ensure_realm(settings: Settings, http: httpx.AsyncClient) -> None:
                 json={
                     "realm": realm,
                     "displayName": "Velydock",
+                    "displayNameHtml": "Velydock",
                     **realm_defaults(),
                     **realm_settings(settings),
                 },
@@ -552,9 +698,21 @@ async def ensure_realm(settings: Settings, http: httpx.AsyncClient) -> None:
         service_tokens.invalidate()
 
     await api.request("PUT", "", json=realm_settings(settings))
+    await _move_on_from_an_earlier_password_policy(api)
     await _upsert_client(api, web_client(settings))
     await _configure_user_profile(api)
+    await _ensure_reset_flow(api)
+    await _close_password_grant(api)
     log.info("Keycloak realm %s is configured", realm)
+
+
+async def _move_on_from_an_earlier_password_policy(api: _AdminApi) -> None:
+    """The password policy is the operator's to change, so it is only set when the realm is
+    created - with one exception: a policy that still is an earlier default of Velydock's."""
+    realm = await api.json("GET", "")
+    if realm.get("passwordPolicy") in EARLIER_PASSWORD_POLICIES:
+        await api.request("PUT", "", json={"passwordPolicy": PASSWORD_POLICY})
+        log.info("password policy of the realm brought up to date: %s", PASSWORD_POLICY)
 
 
 async def set_console_access(

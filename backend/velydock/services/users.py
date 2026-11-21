@@ -15,13 +15,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.api.deps import Principal
-from velydock.db import system_scope
+from velydock.db import NAME_ORDER, Lock, advisory_lock, system_scope
 from velydock.errors import ApiError, conflict, forbidden, idp_unavailable, invalid, not_found
 from velydock.idp.base import (
+    KEEP,
     IdentityProvider,
     IdpConflict,
     IdpError,
     IdpInvalid,
+    IdpMailFailed,
+    IdpManaged,
     IdpNotFound,
     IdpUnavailable,
 )
@@ -59,9 +62,30 @@ def like_pattern(term: str) -> str:
     return f"%{escaped}%"
 
 
-def _idp_failure(exc: IdpError) -> ApiError:
+def idp_failure(exc: IdpError) -> ApiError:
+    """Translate a failure of the identity provider into the answer for the client."""
+    if isinstance(exc, IdpMailFailed):
+        return ApiError(
+            502,
+            "email_failed",
+            "The e-mail could not be sent. Check the SMTP settings.",
+            {"reason": str(exc)[:200]},
+        )
+    if isinstance(exc, IdpManaged):
+        return conflict(
+            "managed_by_idp",
+            "The identity provider manages this membership itself; change it there.",
+        )
     if isinstance(exc, IdpUnavailable):
         return idp_unavailable()
+    if isinstance(exc, IdpNotFound):
+        # Deleted there behind Velydock's back (in Keycloak's console, say). Nothing can be
+        # changed about an account that no longer exists; the administrator is told so instead
+        # of "the identity provider rejected the request".
+        return conflict(
+            "missing_at_idp",
+            "The identity provider no longer has this account or organization.",
+        )
     if isinstance(exc, IdpConflict):
         if exc.field == "email":
             return conflict("email_taken", "This e-mail address is already in use.")
@@ -80,8 +104,6 @@ def _idp_failure(exc: IdpError) -> ApiError:
 
 
 _ELEVATED_ROLES = {Role.USER_MANAGER.value, Role.TENANT_ADMIN.value}
-# Advisory lock that puts changes to the set of active system administrators in a queue.
-_SYSTEM_ADMIN_LOCK = 0x56454C59
 
 
 async def _require_fresh_sign_in(db: AsyncSession, user: User) -> None:
@@ -101,7 +123,7 @@ async def _ensure_a_system_admin_remains(db: AsyncSession, excluding: uuid.UUID)
     the other, so two administrators cannot remove each other at the same moment.
     """
     async with system_scope(db):
-        await db.execute(select(func.pg_advisory_xact_lock(_SYSTEM_ADMIN_LOCK)))
+        await advisory_lock(db, Lock.SYSTEM_ADMINS)
         remaining = (
             await db.execute(
                 select(func.count())
@@ -111,6 +133,52 @@ async def _ensure_a_system_admin_remains(db: AsyncSession, excluding: uuid.UUID)
         ).scalar_one()
     if remaining == 0:
         raise invalid("At least one active system administrator must remain.", "last_system_admin")
+
+
+async def withdraw_pending_second_factor(db: AsyncSession, idp: IdentityProvider, user: User) -> None:
+    """Take back the request to enrol a second factor from an account that no longer needs one.
+
+    Velydock asks Keycloak to demand the enrolment when an administrator signs in without a
+    second factor. If the person never completes it and then loses the role (or the requirement
+    is switched off), the demand would stay with the account for good - a plain member could no
+    longer sign in without setting up an authenticator. Failing to withdraw it is not worth
+    failing the change that caused it.
+    """
+    async with system_scope(db):
+        still_elevated = user.is_system_admin or bool(
+            (
+                await db.execute(
+                    select(Membership.id)
+                    .where(Membership.user_id == user.id, Membership.role.in_(_ELEVATED_ROLES))
+                    .limit(1)
+                )
+            ).first()
+        )
+    if still_elevated:
+        return
+    try:
+        await idp.withdraw_second_factor_setup(user.idp_id)
+    except IdpError:
+        log.exception("could not withdraw the pending second-factor enrolment of %s", user.id)
+
+
+async def _ensure_org_memberships(db: AsyncSession, idp: IdentityProvider, user: User) -> None:
+    """Make the provider's organization memberships of an account match Velydock's again.
+
+    Removing an e-mail address lifts them for a moment (see ``KeycloakIdp._clear_email``). If
+    the provider fails in that moment they are gone there; adding is idempotent, so this heals
+    it - at once, or with the next attempt.
+    """
+    async with system_scope(db):
+        org_ids = (
+            await db.execute(
+                select(Tenant.idp_org_id)
+                .join(Membership, Membership.tenant_id == Tenant.id)
+                .where(Membership.user_id == user.id, Tenant.idp_org_id.is_not(None))
+            )
+        ).scalars()
+        for org_id in list(org_ids):
+            await idp.add_organization_member(str(org_id), user.idp_id)
 
 
 def _target(user: User, membership: Membership | None) -> Target:
@@ -247,7 +315,10 @@ async def list_users(
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rows = (
         await db.execute(
-            query.order_by(func.lower(User.last_name), func.lower(User.first_name), User.username)
+            # In the order the names are shown: first name, then last name.
+            query.order_by(
+                User.first_name.collate(NAME_ORDER), User.last_name.collate(NAME_ORDER), User.username
+            )
             .limit(page_size)
             .offset((page - 1) * page_size)
         )
@@ -297,6 +368,12 @@ async def create_user(
         raise invalid("An e-mail address is required to send the invitation.", "email_required")
     if data.send_email and not smtp_configured:
         raise invalid("E-mail delivery is not configured.", "smtp_not_configured")
+    # Deleting the organization takes the same lock exclusively and waits for us - or we wait
+    # for it and then find the organization gone. Without it, an account created during the
+    # deletion would survive on both sides without any organization.
+    await advisory_lock(db, Lock.TENANT, tenant.id, shared=True)
+    if (await db.execute(select(Tenant.id).where(Tenant.id == tenant.id))).first() is None:
+        raise not_found("Organization")
     group_ids = await _validated_group_ids(db, tenant.id, data.group_ids)
     await _ensure_unique(db, username=data.username, email=data.email)
 
@@ -310,7 +387,7 @@ async def create_user(
             temporary_password=password,
         )
     except IdpError as exc:
-        raise _idp_failure(exc) from exc
+        raise idp_failure(exc) from exc
 
     try:
         user = User(
@@ -358,7 +435,7 @@ async def create_user(
         except IdpError:
             log.exception("could not roll back identity %s after a failed user creation", idp_id)
         if isinstance(exc, IdpError):
-            raise _idp_failure(exc) from exc
+            raise idp_failure(exc) from exc
         if isinstance(exc, IntegrityError):
             raise conflict("username_taken", "This username or e-mail address is already in use.") from exc
         raise
@@ -369,6 +446,11 @@ async def update_user(
     db: AsyncSession, idp: IdentityProvider, principal: Principal, user_id: uuid.UUID, data: UserUpdate
 ) -> UserOut:
     tenant = principal.require_tenant()
+    # Changes to one account take turns (see ``advisory_lock``); the account is read only after
+    # that, so every decision below is made on its current state. Locks in their fixed order.
+    if data.active is False:
+        await advisory_lock(db, Lock.SYSTEM_ADMINS)
+    await advisory_lock(db, Lock.USER, user_id)
     user, membership = await _load(db, tenant.id, user_id)
     target = _target(user, membership)
     actor = principal.actor
@@ -377,18 +459,24 @@ async def update_user(
     new_email = data.email if data.email_provided else user.email
     new_first = data.first_name if data.first_name is not None else user.first_name
     new_last = data.last_name if data.last_name is not None else user.last_name
-    identity_changed = (new_email, new_first, new_last) != (user.email, user.first_name, user.last_name)
+    previous = (user.email, user.first_name, user.last_name)
+    identity_changed = (new_email, new_first, new_last) != previous
     active_changed = data.active is not None and data.active != user.active
+    may_manage_identity = can_manage_identity(actor, target)
 
-    if (identity_changed or active_changed) and not can_manage_identity(actor, target):
+    if (identity_changed or active_changed) and not may_manage_identity:
         raise forbidden("This account is managed by another organization or outranks you.")
     if active_changed and user.id == principal.user.id:
         raise invalid("You cannot deactivate your own account.", "self_action")
+    # Sending the state the account already has applies it once more at the identity provider.
+    # That repairs an account that is locked here but, for whatever reason, not there.
+    apply_active = data.active is not None and may_manage_identity and user.id != principal.user.id
 
-    promoted = False
+    promoted = demoted = False
     if data.role is not None and data.role.value != membership.role:
         if not can_assign_role(actor, target, data.role):
             raise forbidden("You may not assign this role.")
+        demoted = membership.role in _ELEVATED_ROLES and data.role.value not in _ELEVATED_ROLES
         promoted = data.role.value in _ELEVATED_ROLES and rank(is_system_admin=False, role=data.role) > rank(
             is_system_admin=False, role=Role(membership.role)
         )
@@ -405,50 +493,73 @@ async def update_user(
     if active_changed and not data.active and user.is_system_admin:
         await _ensure_a_system_admin_remains(db, user.id)
 
-    previous = (user.email, user.first_name, user.last_name)
+    # First everything in the database: a conflict or a refusal there happens before the
+    # identity provider is touched, and the commit comes last.
     if identity_changed:
         if new_email != user.email:
             await _ensure_unique(db, username=None, email=new_email, exclude=user.id)
-        try:
-            await idp.update_user(user.idp_id, email=new_email, first_name=new_first, last_name=new_last)
-        except IdpError as exc:
-            raise _idp_failure(exc) from exc
-        if new_email != user.email:
             changes["email"] = True
         user.email, user.first_name, user.last_name = new_email, new_first, new_last
-
     if active_changed:
         assert data.active is not None
-        try:
-            await idp.set_enabled(user.idp_id, data.active)
-        except IdpError as exc:
-            if identity_changed:
-                # This request fails as a whole: take the profile change back, or the identity
-                # provider would keep values Velydock never stored.
-                try:
-                    await idp.update_user(
-                        user.idp_id, email=previous[0], first_name=previous[1], last_name=previous[2]
-                    )
-                except IdpError:
-                    log.exception("could not take back the profile change of %s", user.idp_id)
-            raise _idp_failure(exc) from exc
         user.active = data.active
         changes["active"] = data.active
-        if not data.active:
-            # The account is locked at the identity provider from here on. Ending its sessions
-            # there is the second step; if only that fails, the lock still has to be stored and
-            # the Velydock sessions still have to end, instead of reporting "nothing happened".
-            try:
-                await idp.logout_user(user.idp_id)
-            except IdpError:
-                log.exception("account %s is disabled, but its provider sessions could not be ended", user.id)
-            async with system_scope(db):
-                await sessions.delete_user_sessions(db, user.id)
-
+    await db.flush()
     if promoted and user.id != principal.user.id:
         await _require_fresh_sign_in(db, user)
 
-    await db.flush()
+    # Then the identity provider - only the fields that change. If it refuses, the exception
+    # rolls the database back; what it already took is taken back here.
+    profile_sent = False
+    try:
+        if identity_changed:
+            await idp.update_user(
+                user.idp_id,
+                email=new_email if new_email != previous[0] else KEEP,
+                first_name=new_first if new_first != previous[1] else KEEP,
+                last_name=new_last if new_last != previous[2] else KEEP,
+            )
+            profile_sent = True
+            if new_email is None and previous[0] is not None:
+                await _ensure_org_memberships(db, idp, user)
+        if apply_active:
+            assert data.active is not None
+            try:
+                await idp.set_enabled(user.idp_id, data.active)
+            except IdpNotFound:
+                # Deleted at the provider behind Velydock's back: nobody can sign in with it
+                # there any more, so locking it here stands. Unlocking it cannot work.
+                if data.active:
+                    raise
+    except IdpError as exc:
+        if profile_sent:
+            try:
+                await idp.update_user(
+                    user.idp_id,
+                    email=previous[0] if new_email != previous[0] else KEEP,
+                    first_name=previous[1] if new_first != previous[1] else KEEP,
+                    last_name=previous[2] if new_last != previous[2] else KEEP,
+                )
+            except IdpError:
+                log.exception("could not take back the profile change of %s", user.idp_id)
+        raise idp_failure(exc) from exc
+    if data.active is False and apply_active:
+        # The account is locked at the identity provider from here on. Ending its sessions there
+        # is the second step; if only that fails, the lock still stands and is stored, instead
+        # of reporting "nothing happened".
+        try:
+            await idp.logout_user(user.idp_id)
+        except IdpError:
+            log.exception("account %s is disabled, but its provider sessions could not be ended", user.id)
+        # Only now the sessions here: while the provider signs the user out it notifies Velydock
+        # (back-channel logout), and that must not find the rows locked by this request.
+        async with system_scope(db):
+            await sessions.delete_user_sessions(db, user.id)
+
+    if demoted:
+        await db.flush()
+        await withdraw_pending_second_factor(db, idp, user)
+
     if changes or identity_changed:
         await audit.record(
             db,
@@ -467,6 +578,7 @@ async def reset_password(
     db: AsyncSession, idp: IdentityProvider, principal: Principal, user_id: uuid.UUID
 ) -> str:
     tenant = principal.require_tenant()
+    await advisory_lock(db, Lock.USER, user_id)
     user, membership = await _load(db, tenant.id, user_id)
     if user.id == principal.user.id:
         # The own password is changed on the account page of the identity provider.
@@ -474,13 +586,6 @@ async def reset_password(
     if not can_manage_identity(principal.actor, _target(user, membership)):
         raise forbidden("This account is managed by another organization or outranks you.")
     password = temporary_password()
-    try:
-        await idp.set_temporary_password(user.idp_id, password)
-        await idp.logout_user(user.idp_id)
-    except IdpError as exc:
-        raise _idp_failure(exc) from exc
-    async with system_scope(db):
-        await sessions.delete_user_sessions(db, user.id)
     await audit.record(
         db,
         principal,
@@ -489,6 +594,20 @@ async def reset_password(
         target_id=user.id,
         target_label=user.username,
     )
+    try:
+        await idp.set_temporary_password(user.idp_id, password)
+    except IdpError as exc:
+        raise idp_failure(exc) from exc
+    # From here on the old password is gone, so the new one must reach the administrator
+    # whatever happens next. Ending the provider's sessions is the second step.
+    try:
+        await idp.logout_user(user.idp_id)
+    except IdpError:
+        log.exception("password of %s was reset, but its provider sessions could not be ended", user.id)
+    # After the provider's logout, not before: its logout notification to Velydock must not
+    # find the session rows locked by this request.
+    async with system_scope(db):
+        await sessions.delete_user_sessions(db, user.id)
     return password
 
 
@@ -506,7 +625,7 @@ async def end_sessions(
     try:
         await idp.logout_user(user.idp_id)
     except IdpError as exc:
-        raise _idp_failure(exc) from exc
+        raise idp_failure(exc) from exc
     async with system_scope(db):
         await sessions.delete_user_sessions(db, user.id)
     await audit.record(
@@ -522,26 +641,32 @@ async def remove_user(
     The home tenant deletes the identity itself; any other tenant only ends the guest membership.
     """
     tenant = principal.require_tenant()
+    await advisory_lock(db, Lock.SYSTEM_ADMINS)
+    await advisory_lock(db, Lock.USER, user_id)
     user, membership = await _load(db, tenant.id, user_id)
     if user.id == principal.user.id:
         raise invalid("You cannot remove your own account.", "self_action")
     target = _target(user, membership)
-    username = user.username
+    username, idp_id = user.username, user.idp_id
 
     if user.home_tenant_id == tenant.id:
         if not can_manage_identity(principal.actor, target):
             raise forbidden("This account outranks you.")
         if user.is_system_admin:
             await _ensure_a_system_admin_remains(db, user.id)
-        try:
-            await idp.delete_user(user.idp_id)
-        except IdpError as exc:
-            raise _idp_failure(exc) from exc
+        # The database first: whatever can go wrong there goes wrong before the account is
+        # gone at the identity provider, where nothing can be taken back.
         await db.delete(user)
         await db.flush()
         await audit.record(
             db, principal, "user.delete", target_type="user", target_id=user_id, target_label=username
         )
+        try:
+            await idp.delete_user(idp_id)
+        except IdpNotFound:
+            pass  # already gone there: exactly what was asked for
+        except IdpError as exc:
+            raise idp_failure(exc) from exc
         return True
 
     if not can_manage_membership(principal.actor, target):
@@ -562,6 +687,7 @@ async def _drop_membership(
     await db.execute(
         delete(AppUserGrant).where(AppUserGrant.tenant_id == tenant.id, AppUserGrant.user_id == user.id)
     )
+    was_elevated = membership.role in _ELEVATED_ROLES
     await db.delete(membership)
     await db.flush()
     if tenant.idp_org_id:
@@ -570,7 +696,9 @@ async def _drop_membership(
         except IdpNotFound:
             pass
         except IdpError as exc:
-            raise _idp_failure(exc) from exc
+            raise idp_failure(exc) from exc
+    if was_elevated:
+        await withdraw_pending_second_factor(db, idp, user)
 
 
 # -- system-wide operations (system administrators only; callers enforce that) -------------------
@@ -594,7 +722,11 @@ async def list_all_users(
         users = list(
             (
                 await db.execute(
-                    query.order_by(func.lower(User.username)).limit(page_size).offset((page - 1) * page_size)
+                    query.order_by(
+                        User.first_name.collate(NAME_ORDER), User.last_name.collate(NAME_ORDER), User.username
+                    )
+                    .limit(page_size)
+                    .offset((page - 1) * page_size)
                 )
             ).scalars()
         )
@@ -634,7 +766,8 @@ async def add_member(
 ) -> SystemUserOut:
     """Give an existing identity access to another tenant (as a guest unless it has no home yet)."""
     async with system_scope(db):
-        tenant = await db.get(Tenant, tenant_id)
+        await advisory_lock(db, Lock.TENANT, tenant_id, shared=True)
+        tenant = await db.get(Tenant, tenant_id, populate_existing=True)
         user = await db.get(User, user_id)
         if tenant is None or user is None:
             raise not_found("User or organization")
@@ -660,7 +793,7 @@ async def add_member(
             try:
                 await idp.add_organization_member(tenant.idp_org_id, user.idp_id)
             except IdpError as exc:
-                raise _idp_failure(exc) from exc
+                raise idp_failure(exc) from exc
         await audit.record(
             db,
             principal,
@@ -677,7 +810,7 @@ async def add_member(
 
 
 async def set_system_admin(
-    db: AsyncSession, principal: Principal, user_id: uuid.UUID, flag: bool
+    db: AsyncSession, idp: IdentityProvider, principal: Principal, user_id: uuid.UUID, flag: bool
 ) -> SystemUserOut:
     async with system_scope(db):
         user = await db.get(User, user_id)
@@ -688,8 +821,11 @@ async def set_system_admin(
         if not flag and user.is_system_admin:
             await _ensure_a_system_admin_remains(db, user.id)
         granted = flag and not user.is_system_admin
+        revoked = user.is_system_admin and not flag
         user.is_system_admin = flag
         await db.flush()
+        if revoked:
+            await withdraw_pending_second_factor(db, idp, user)
         await audit.record(
             db,
             principal,

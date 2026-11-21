@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.api.deps import Principal
+from velydock.db import NAME_ORDER
 from velydock.errors import conflict, forbidden, invalid, not_found
 from velydock.models import AppGroupGrant, Group, GroupMember, Membership, Role, User
 from velydock.policy import Target, can_manage_membership
@@ -115,7 +116,9 @@ async def _set_members(db: AsyncSession, group: Group, user_ids: list[uuid.UUID]
 async def list_groups(db: AsyncSession, principal: Principal) -> list[GroupOut]:
     tenant = principal.require_tenant()
     groups = (
-        await db.execute(select(Group).where(Group.tenant_id == tenant.id).order_by(func.lower(Group.name)))
+        await db.execute(
+            select(Group).where(Group.tenant_id == tenant.id).order_by(Group.name.collate(NAME_ORDER))
+        )
     ).scalars()
     members, apps = await _counts(db, tenant.id)
     return [_out(g, members.get(g.id, 0), apps.get(g.id, 0)) for g in groups]
@@ -190,6 +193,9 @@ async def update_group(
 async def delete_group(db: AsyncSession, principal: Principal, group_id: uuid.UUID) -> None:
     tenant = principal.require_tenant()
     group = await _load(db, tenant.id, group_id)
+    # Deleting the group takes every member out of it - the rank rule applies as for removing
+    # them one by one.
+    await _check_member_changes(db, principal, tenant.id, set(await _member_ids(db, group)))
     name = group.name
     await db.delete(group)
     await db.flush()

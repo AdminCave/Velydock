@@ -137,7 +137,7 @@ async def _seed(world: World) -> None:
         icon_name="cloud",
         description="Dateien und Kalender (Einbettung blockiert)",
         embed_status="blocked",
-        embed_detail="X-Frame-Options: SAMEORIGIN",
+        embed_detail="xfo_sameorigin",
         sort_order=20,
     )
     await world.app_(

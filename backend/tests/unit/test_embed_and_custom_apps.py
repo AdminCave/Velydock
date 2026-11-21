@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -10,9 +11,12 @@ import pytest
 from velydock.models import App, EmbedStatus
 from velydock.services.custom_apps import (
     SANDBOX_FLAGS,
+    SEALED_SANDBOX_FLAGS,
     content_security_policy,
     render_document,
     response_headers,
+    wrapper_document,
+    wrapper_headers,
 )
 from velydock.services.embedcheck import check_embeddable, evaluate_headers, is_public_address
 
@@ -43,8 +47,9 @@ class TestFramingHeaders:
             "frame-ancestors 'self'",
             "default-src 'self'; frame-ancestors 'self' https://intranet.example.com",
             "frame-ancestors https://dock.example.com:8443",
-            "frame-ancestors http://dock.example.com",
+            "frame-ancestors http://dock.example.com:80",
             "frame-ancestors https://*.other.example",
+            "frame-ancestors wss:",
         ],
     )
     def test_frame_ancestors_blocks(self, policy: str) -> None:
@@ -59,6 +64,15 @@ class TestFramingHeaders:
             "frame-ancestors https:",
             "frame-ancestors *",
             "script-src 'self'; FRAME-ANCESTORS https://dock.example.com:443",
+            # As browsers match sources: a source written for http also covers https, a host
+            # part of "*" is any host, a port of "*" any port, and a source without a scheme
+            # takes the scheme of the page that sent the policy.
+            "frame-ancestors http://dock.example.com",
+            "frame-ancestors http:",
+            "frame-ancestors https://*",
+            "frame-ancestors *:*",
+            "frame-ancestors dock.example.com",
+            "frame-ancestors https://dock.example.com:*",
         ],
     )
     def test_frame_ancestors_allows(self, policy: str) -> None:
@@ -105,11 +119,22 @@ class TestFramingHeaders:
             [("X-Frame-Options", "SAMEORIGIN"), ("X-Frame-Options", "DENY")],
             [("X-Frame-Options", "ALLOWALL, DENY")],
             [("X-Frame-Options", "ALLOWALL"), ("X-Frame-Options", "SAMEORIGIN")],
+            # More than one distinct value blocks as soon as one of them is a known one, even
+            # if the other is nonsense or the obsolete ALLOW-FROM.
+            [("X-Frame-Options", "ALLOW-FROM https://a.example, ALLOWALL")],
+            [("X-Frame-Options", "SAMEORIGIN, ALLOW-FROM https://a.example")],
+            [("X-Frame-Options", "ALLOWALL, foo")],
         ],
     )
     def test_every_x_frame_options_value_counts(self, headers: list[tuple[str, str]]) -> None:
         # Same origin on purpose: SAMEORIGIN alone would allow, the second value must not be lost.
         assert verdict(headers, target=f"{ORIGIN}/app") == EmbedStatus.BLOCKED
+
+    @pytest.mark.parametrize(
+        "value", ["ALLOWALL", "foo", "ALLOW-FROM https://a.example", "foo, bar", "SAMEORIGIN, sameorigin"]
+    )
+    def test_x_frame_options_that_browsers_ignore_or_that_allow(self, value: str) -> None:
+        assert verdict({"X-Frame-Options": value}, target=f"{ORIGIN}/app") == EmbedStatus.OK
 
     def test_wildcard_does_not_match_the_bare_domain(self) -> None:
         result = evaluate_headers(
@@ -159,7 +184,7 @@ class TestSsrfGuard:
     async def test_private_targets_are_never_contacted(self, url: str) -> None:
         result = await check_embeddable(url, embedder_origin=ORIGIN, allow_private=False)
         assert result.status == EmbedStatus.UNKNOWN
-        assert "private" in result.detail
+        assert result.detail == "private_address"
         assert result.http_status is None
 
     @pytest.mark.parametrize(
@@ -189,24 +214,45 @@ class TestCustomAppLockdown:
         return App(**{**defaults, **fields})
 
     def test_sandbox_never_grants_an_origin_or_top_navigation(self) -> None:
-        flags = SANDBOX_FLAGS.split()
-        assert "allow-scripts" in flags
-        assert "allow-same-origin" not in flags
-        assert not [f for f in flags if f.startswith("allow-top-navigation")]
+        # Both flag sets forbid a real origin and top navigation; the sealed set also drops popups.
+        for flags in (SANDBOX_FLAGS.split(), SEALED_SANDBOX_FLAGS.split()):
+            assert "allow-scripts" in flags
+            assert "allow-same-origin" not in flags
+            assert not [f for f in flags if f.startswith("allow-top-navigation")]
+        assert "allow-popups" in SANDBOX_FLAGS.split()
+        assert "allow-popups" not in SEALED_SANDBOX_FLAGS.split()
+        assert "allow-popups-to-escape-sandbox" not in SEALED_SANDBOX_FLAGS.split()
 
-    @pytest.mark.parametrize("allow_network", [False, True])
-    def test_policy_always_sandboxes_and_pins_the_embedder(self, allow_network: bool) -> None:
-        policy = content_security_policy(allow_network=allow_network, embedder_origin=ORIGIN)
+    def test_network_on_document_keeps_popups_and_pins_the_embedder(self) -> None:
+        policy = content_security_policy(allow_network=True, embedder_origin=ORIGIN)
         directives = {d.split()[0]: d.split()[1:] for d in policy.split("; ")}
         assert directives["sandbox"] == SANDBOX_FLAGS.split()
         assert "allow-same-origin" not in directives["sandbox"]
         assert directives["default-src"] == ["'none'"]
-        assert directives["frame-ancestors"] == [ORIGIN]
+        assert directives["object-src"] == ["'none'"]
         assert directives["base-uri"] == ["'none'"]
+        # An app with network access is framed directly by Velydock, so it pins the embedder.
+        assert directives["frame-ancestors"] == [ORIGIN]
+
+    def test_network_off_document_is_sealed_and_framed_by_the_wrapper(self) -> None:
+        policy = content_security_policy(allow_network=False, embedder_origin=ORIGIN)
+        directives = {d.split()[0]: d.split()[1:] for d in policy.split("; ")}
+        # Sealed: scripts/forms/modals only - no popups (a click must not open an attacker's
+        # address) and no same-origin.
+        assert directives["sandbox"] == SEALED_SANDBOX_FLAGS.split()
+        assert "allow-popups" not in directives["sandbox"]
+        assert directives["default-src"] == ["'none'"]
+        assert directives["object-src"] == ["'none'"]
+        assert directives["base-uri"] == ["'none'"]
+        # No frame-ancestors on the document itself: it is framed by the wrapper (an opaque origin
+        # that no host-source matches); the wrapper carries the embedding check and confines
+        # navigation through its frame-src.
+        assert "frame-ancestors" not in directives
 
     def test_network_is_closed_by_default(self) -> None:
         policy = content_security_policy(allow_network=False, embedder_origin=ORIGIN)
         assert "connect-src 'none'" in policy
+        assert "frame-src 'none'" in policy
         assert "form-action 'none'" in policy
         assert "https:" not in policy.replace(ORIGIN, "")
 
@@ -221,6 +267,34 @@ class TestCustomAppLockdown:
         assert headers["Cache-Control"] == "no-store"
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert "camera=()" in headers["Permissions-Policy"]
+        assert "Set-Cookie" not in headers
+
+    def test_network_off_headers_disable_speculative_dns(self) -> None:
+        # dns-prefetch/preconnect resolve names and open connections that connect-src cannot stop.
+        assert (
+            response_headers(allow_network=False, embedder_origin=ORIGIN)["X-DNS-Prefetch-Control"] == "off"
+        )
+        assert "X-DNS-Prefetch-Control" not in response_headers(allow_network=True, embedder_origin=ORIGIN)
+
+    def test_wrapper_is_scriptless_and_frames_the_app_one_level_down(self) -> None:
+        document = wrapper_document(inner_path="/c/the-token?d=1")
+        assert "<script" not in document.lower()
+        assert 'src="/c/the-token?d=1"' in document
+        assert f'sandbox="{SEALED_SANDBOX_FLAGS}"' in document
+        assert "allow-same-origin" not in document
+
+    def test_wrapper_confines_navigation_and_pins_the_embedder(self) -> None:
+        headers = wrapper_headers(embedder_origin=ORIGIN, sandbox_origin="https://sandbox.example.com")
+        directives = {d.split()[0]: d.split()[1:] for d in headers["Content-Security-Policy"].split("; ")}
+        # frame-src pins the inner app's navigations to the sandbox host; it cannot carry data out.
+        assert directives["frame-src"] == ["https://sandbox.example.com"]
+        # Only Velydock may frame the wrapper.
+        assert directives["frame-ancestors"] == [ORIGIN]
+        assert directives["sandbox"] == SEALED_SANDBOX_FLAGS.split()
+        assert directives["default-src"] == ["'none'"]
+        assert directives["form-action"] == ["'none'"]
+        assert headers["Cache-Control"] == "no-store"
+        assert headers["X-DNS-Prefetch-Control"] == "off"
         assert "Set-Cookie" not in headers
 
     def test_document_contains_the_three_parts(self) -> None:
@@ -321,7 +395,7 @@ class TestEmbedCheckOverHttp:
     async def test_a_redirect_to_another_host_is_reported_not_followed(self, site: str) -> None:
         status, http_status, detail = await self.check(f"{site}/login-redirect")
         assert (status, http_status) == (EmbedStatus.UNKNOWN, 302)
-        assert "sso.example.org" in detail
+        assert detail == "redirect_other_host: sso.example.org"
         assert [path for path, _ in self.seen] == ["/login-redirect"], "no second request was made"
 
     async def test_a_redirect_within_the_host_is_followed_to_the_page_that_is_shown(self, site: str) -> None:
@@ -338,7 +412,7 @@ class TestEmbedCheckOverHttp:
     async def test_a_redirect_loop_ends(self, site: str) -> None:
         status, http_status, detail = await self.check(f"{site}/loop")
         assert (status, http_status) == (EmbedStatus.UNKNOWN, 302)
-        assert "too many redirects" in detail
+        assert detail == "too_many_redirects"
         assert len(self.seen) == 4, "the first request and three redirects, then it stops"
 
     async def test_a_site_that_drips_its_headers_cannot_hold_the_check(
@@ -352,7 +426,7 @@ class TestEmbedCheckOverHttp:
         started = time.monotonic()
         status, http_status, detail = await self.check(f"{site}/drip")
         assert (status, http_status) == (EmbedStatus.UNKNOWN, None)
-        assert "in time" in detail
+        assert detail == "timeout"
         assert time.monotonic() - started < 3, "ended by the overall deadline, not by the site"
 
     async def test_only_a_few_checks_run_at_the_same_time(
@@ -367,7 +441,7 @@ class TestEmbedCheckOverHttp:
         slow = [asyncio.create_task(self.check(f"{site}/drip")) for _ in range(2)]
         await asyncio.sleep(0.3)
         status, _, detail = await self.check(f"{site}/open")
-        assert status == EmbedStatus.UNKNOWN and "too many checks" in detail
+        assert (status, detail) == (EmbedStatus.UNKNOWN, "busy")
         assert [path for path, _ in self.seen] == ["/drip", "/drip"], "the third check never left the server"
         await asyncio.gather(*slow)
         # The slots are free again afterwards.
@@ -392,6 +466,19 @@ class TestEmbedCheckOverHttp:
     async def test_private_addresses_stay_off_limits_by_default(self, site: str) -> None:
         result = await check_embeddable(f"{site}/open", embedder_origin=ORIGIN, allow_private=False)
         assert result.status == EmbedStatus.UNKNOWN and self.seen == []
+
+    def test_every_explanation_is_a_code_the_interface_can_translate(self) -> None:
+        """A code, optionally followed by ": " and a value - never a sentence in one language."""
+        import re
+
+        from velydock.services import embedcheck
+
+        source = Path(embedcheck.__file__).read_text(encoding="utf-8")
+        details = re.findall(r'EmbedResult\(\s*EmbedStatus\.\w+,\s*f?"([^"]+)"', source)
+        details += re.findall(r'failure = f?"([^"]+)"', source)
+        assert len(details) > 15
+        for detail in details:
+            assert re.fullmatch(r"[a-z_]+(: \{.+\})?", detail), detail
 
     async def test_unreachable_host(self) -> None:
         status, http_status, _ = await self.check("http://127.0.0.1:9/")

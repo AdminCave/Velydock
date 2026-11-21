@@ -28,8 +28,10 @@ from velydock.idp.base import IdpError, IdpUnavailable
 from velydock.idp.keycloak import KeycloakIdp, ensure_realm, set_console_access
 from velydock.models import Membership, Role, Tenant, User
 from velydock.schemas import TenantCreate, UserCreate
+from velydock.security import sessions
 from velydock.security.tokens import temporary_password
 from velydock.services import audit
+from velydock.services import settings as settings_service
 from velydock.services import tenants as tenants_service
 
 log = logging.getLogger("velydock")
@@ -77,29 +79,32 @@ async def bootstrap(settings: Settings, *, wait_seconds: int = 180) -> None:
 
 
 async def reconcile(settings: Settings, http: httpx.AsyncClient) -> None:
-    """Make Keycloak's organizations match the tenants (e.g. after restoring only one database)."""
+    """Make Keycloak match Velydock where Velydock is the one that knows.
+
+    Every tenant has its organization with the right name, state and members (for example after
+    restoring only one of the two databases, or after changes in Keycloak's console), and the
+    realm's default language is the one set in Velydock. A tenant that cannot be repaired is
+    reported and skipped: it must never keep Velydock from starting.
+    """
     idp = KeycloakIdp(settings, http)
     async with transaction(Scope.SYSTEM) as db:
         tenants = list((await db.execute(select(Tenant))).scalars())
         for tenant in tenants:
-            org_id = await idp.find_organization(tenant.slug)
-            if org_id is None:
-                org_id = await idp.create_organization(name=tenant.name, alias=tenant.slug)
-                log.info("created missing organization for tenant %s", tenant.slug)
-            if tenant.idp_org_id != org_id:
-                tenant.idp_org_id = org_id
-            members = await idp.list_organization_members(org_id)
-            rows = await db.execute(
-                select(User.idp_id)
-                .join(Membership, Membership.user_id == User.id)
-                .where(Membership.tenant_id == tenant.id)
-            )
-            for idp_id in rows.scalars():
-                if idp_id not in members:
-                    try:
-                        await idp.add_organization_member(org_id, idp_id)
-                    except IdpError as exc:
-                        log.warning("could not add %s to organization %s: %s", idp_id, tenant.slug, exc)
+            try:
+                await tenants_service.sync_organization(db, idp, tenant)
+            except IdpError as exc:
+                log.error(
+                    "organization of tenant %s could not be brought in line with Keycloak: %s "
+                    "(check the organizations in Keycloak's console: one with this short name as "
+                    "alias must be free to exist, and no other may carry its name)",
+                    tenant.slug,
+                    exc,
+                )
+        try:
+            system = await settings_service.load_system(db, settings)
+            await idp.set_default_locale(str(system["default_language"]))
+        except IdpError as exc:
+            log.error("default language could not be set in Keycloak: %s", exc)
 
 
 async def setup_admin(settings: Settings, args: argparse.Namespace) -> int:
@@ -125,6 +130,11 @@ async def setup_admin(settings: Settings, args: argparse.Namespace) -> int:
             if existing is not None:
                 await idp.set_enabled(existing.idp_id, True)
                 await idp.set_temporary_password(existing.idp_id, password)
+                # Whoever is signed in with this account right now is signed out: the new rights
+                # belong to a new session (where the second factor is checked), and if the
+                # account was taken over, the intruder's session must not survive the reset.
+                await idp.logout_user(existing.idp_id)
+                await sessions.delete_user_sessions(db, existing.id)
                 existing.active = True
                 existing.is_system_admin = True
                 user = existing
@@ -285,6 +295,10 @@ def serve(settings: Settings) -> None:
         port=8000,
         proxy_headers=True,
         forwarded_allow_ips=settings.trusted_proxies,
+        # Longer than a reverse proxy keeps an unused connection (Traefik: 90 s, nginx: 60 s).
+        # With uvicorn's default of 5 s this side would close first, and a proxy that picks
+        # such a connection for a write in that instant answers "502 Bad Gateway".
+        timeout_keep_alive=120,
         log_level=settings.log_level.lower(),
         access_log=settings.environment != "production",
     )

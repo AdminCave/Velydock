@@ -137,22 +137,23 @@ class OidcClient:
         return self._keys[kid]
 
     async def authorization_url(
-        self, *, state: str, nonce: str, code_challenge: str, redirect_uri: str
+        self, *, state: str, nonce: str, code_challenge: str, redirect_uri: str, language: str | None = None
     ) -> str:
         meta = await self.metadata()
-        query = urlencode(
-            {
-                "client_id": self._settings.oidc_client_id,
-                "response_type": "code",
-                "scope": "openid profile email",
-                "redirect_uri": redirect_uri,
-                "state": state,
-                "nonce": nonce,
-                "code_challenge": code_challenge,
-                "code_challenge_method": "S256",
-            }
-        )
-        return f"{meta.authorization_endpoint}?{query}"
+        parameters = {
+            "client_id": self._settings.oidc_client_id,
+            "response_type": "code",
+            "scope": "openid profile email",
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+        if language:
+            # The identity provider shows its pages in the language chosen in Velydock.
+            parameters["ui_locales"] = language
+        return f"{meta.authorization_endpoint}?{urlencode(parameters)}"
 
     async def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> str:
         """Trade the authorization code for tokens and return the raw ID token."""

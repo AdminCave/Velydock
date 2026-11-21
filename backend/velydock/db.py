@@ -13,12 +13,13 @@ never leak to another request through the connection pool. With nothing set, the
 from __future__ import annotations
 
 import uuid
+import zlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import Integer, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from velydock.config import get_settings
@@ -66,6 +67,39 @@ async def dispose_engine() -> None:
         await _engine.dispose()
     _engine = None
     _sessionmaker = None
+
+
+# Names are sorted the way a reader expects ("Äcme" next to "Acme", not after "Zeta"): by
+# language-neutral Unicode rules, not by byte values.
+NAME_ORDER = "und-x-icu"
+
+
+class Lock(IntEnum):
+    """What an advisory lock stands for. Related changes wait for each other instead of racing.
+
+    Several of them are always taken in this order (system administrators, tenant, user), so
+    two requests can never wait for each other in a circle.
+    """
+
+    SYSTEM_ADMINS = 1
+    TENANT = 2
+    USER = 3
+
+
+async def advisory_lock(
+    session: AsyncSession, what: Lock, key: uuid.UUID | None = None, *, shared: bool = False
+) -> None:
+    """Hold a lock until the end of the transaction.
+
+    Velydock changes an identity in two places, one after the other: at the identity provider and
+    in its own database. Two such changes to the same account at the same time could interleave
+    and leave the two sides telling different stories; the lock makes them take turns. It is not
+    tied to a table row, so row-level security has no say in it.
+    """
+    # 32 bits of the id are enough: a collision only makes two unrelated changes take turns.
+    number = (zlib.crc32(key.bytes) if key is not None else 0) - 2**31
+    function = func.pg_advisory_xact_lock_shared if shared else func.pg_advisory_xact_lock
+    await session.execute(select(function(cast(int(what), Integer), cast(number, Integer))))
 
 
 _SET_CONTEXT = text(

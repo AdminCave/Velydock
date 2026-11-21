@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from velydock import __version__
 from velydock.api.deps import Principal, get_db, get_idp, get_principal, get_settings, require
 from velydock.config import Settings
-from velydock.db import Scope, set_rls_context, system_scope
-from velydock.errors import ApiError, forbidden, idp_unavailable, not_found
-from velydock.idp.base import IdentityProvider, IdpError, IdpUnavailable
+from velydock.db import NAME_ORDER, Lock, Scope, advisory_lock, set_rls_context, system_scope
+from velydock.errors import forbidden, not_authenticated, not_found
+from velydock.idp.base import KEEP, IdentityProvider, IdpError
 from velydock.models import App, Membership, Role, Tenant, UserSettings
 from velydock.policy import Permission, permissions_for
 from velydock.schemas import (
@@ -32,6 +34,7 @@ from velydock.schemas import (
 )
 from velydock.services import apps as apps_service
 from velydock.services import settings as settings_service
+from velydock.services import users as users_service
 
 router = APIRouter(prefix="/api/v1", tags=["me"])
 
@@ -50,6 +53,12 @@ async def public_info(
     )
 
 
+def _reading_order(name: str) -> tuple[str, str]:
+    """A sort key close to the database's ``NAME_ORDER``: letters first, accents and case last."""
+    letters = "".join(ch for ch in unicodedata.normalize("NFKD", name) if not unicodedata.combining(ch))
+    return letters.casefold(), name
+
+
 async def _memberships(db: AsyncSession, principal: Principal) -> list[MembershipOut]:
     """Tenants the user can switch to: own memberships, for system administrators all active ones."""
     async with system_scope(db):
@@ -57,18 +66,36 @@ async def _memberships(db: AsyncSession, principal: Principal) -> list[Membershi
             select(Tenant, Membership.role)
             .join(Membership, Membership.tenant_id == Tenant.id)
             .where(Membership.user_id == principal.user.id, Tenant.active.is_(True))
-            .order_by(Tenant.name)
+            .order_by(Tenant.name.collate(NAME_ORDER))
         )
         result = {
             t.id: MembershipOut(tenant=TenantRef.model_validate(t), role=Role(r)) for t, r in rows.all()
         }
         if principal.user.is_system_admin:
-            tenants = await db.execute(select(Tenant).where(Tenant.active.is_(True)).order_by(Tenant.name))
+            tenants = await db.execute(
+                select(Tenant).where(Tenant.active.is_(True)).order_by(Tenant.name.collate(NAME_ORDER))
+            )
             for tenant in tenants.scalars():
                 result.setdefault(
                     tenant.id, MembershipOut(tenant=TenantRef.model_validate(tenant), role=None)
                 )
-    return sorted(result.values(), key=lambda m: m.tenant.name.lower())
+    # Both queries are ordered by name; merged, they are sorted once more the same way:
+    # accents and case do not decide ("Äcme" next to "Acme").
+    return sorted(result.values(), key=lambda m: _reading_order(m.tenant.name))
+
+
+async def _inactive_memberships(db: AsyncSession, principal: Principal) -> int:
+    async with system_scope(db):
+        return int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(Membership)
+                    .join(Tenant, Tenant.id == Membership.tenant_id)
+                    .where(Membership.user_id == principal.user.id, Tenant.active.is_(False))
+                )
+            ).scalar_one()
+        )
 
 
 async def _me(db: AsyncSession, principal: Principal, settings: Settings) -> MeOut:
@@ -89,6 +116,7 @@ async def _me(db: AsyncSession, principal: Principal, settings: Settings) -> MeO
         role=principal.role,
         permissions=sorted(p.value for p in principal.permissions),
         memberships=await _memberships(db, principal),
+        inactive_memberships=await _inactive_memberships(db, principal),
         settings=settings_service.effective(system, principal.tenant, own),
         own_settings=settings_service.own_view(own),
         instance_name=system["instance_name"],
@@ -127,16 +155,20 @@ async def update_profile(
 ) -> MeOut:
     """Users may change their own name. The e-mail address is managed by administrators."""
     user = principal.user
-    try:
-        await idp.update_user(
-            user.idp_id, email=user.email, first_name=data.first_name, last_name=data.last_name
-        )
-    except IdpUnavailable as exc:
-        raise idp_unavailable() from exc
-    except IdpError as exc:
-        raise ApiError(502, "idp_error", "The identity provider rejected the request.") from exc
+    await advisory_lock(db, Lock.USER, user.id)
+    await db.refresh(user)
+    previous = (user.first_name, user.last_name)
     user.first_name, user.last_name = data.first_name, data.last_name
     await db.flush()
+    try:
+        # Only what changes is sent: the address and everything else stay as Keycloak has them.
+        await idp.update_user(
+            user.idp_id,
+            first_name=data.first_name if data.first_name != previous[0] else KEEP,
+            last_name=data.last_name if data.last_name != previous[1] else KEEP,
+        )
+    except IdpError as exc:
+        raise users_service.idp_failure(exc) from exc
     return await _me(db, principal, settings)
 
 
@@ -160,13 +192,18 @@ async def switch_tenant(
         if tenant is None or not tenant.active or (membership is None and not principal.user.is_system_admin):
             # Same answer for "does not exist" and "not yours".
             raise not_found("Organization")
-        principal.session.tenant_id = tenant.id
         prefs = await db.get(UserSettings, principal.user.id)
         if prefs is None:
             prefs = UserSettings(user_id=principal.user.id)
             db.add(prefs)
         prefs.last_tenant_id = tenant.id
-        await db.flush()
+        principal.session.tenant_id = tenant.id
+        try:
+            # Written at once: the session may have ended (a sign-out in another tab) while this
+            # request was under way, and then there is nothing left to bind to an organization.
+            await db.flush()
+        except StaleDataError:
+            raise not_authenticated() from None
     # The response describes the new context; the next request is bound to it by the session.
     role = Role(membership.role) if membership else None
     await set_rls_context(db, scope=Scope.TENANT, tenant_id=tenant.id, user_id=principal.user.id)

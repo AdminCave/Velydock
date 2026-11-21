@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import uuid
 from datetime import datetime
@@ -25,10 +26,22 @@ _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s.]{2,}$")
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$")
 RESERVED_SLUGS = {"admin", "api", "system", "master", "velydock", "www"}
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+def _one_space(value: str) -> str:
+    """Runs of blanks, tabs and line breaks become one blank.
+
+    Two names that differ only in such runs look the same on screen; they must also be the same
+    to the uniqueness checks.
+    """
+    return " ".join(value.split())
+
+
+Name = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100), AfterValidator(_one_space)
+]
 # Keycloak refuses these characters in first and last names (its "person name" rule keeps
 # markup out of e-mails and pages). Checked here, the user gets told which field is wrong.
-_PERSON_NAME_FORBIDDEN = re.compile(r'[<>&"$%!#?§;*~/\\|^=\[\]{}()\x00-\x1f\x7f]')
+_PERSON_NAME_FORBIDDEN = re.compile(r'[<>&"$%!#?§;*~/\\|^=\[\]{}()\x00-\x1f\x7f\x85\u2028\u2029]')
 
 
 def _person_name(value: str) -> str:
@@ -38,6 +51,27 @@ def _person_name(value: str) -> str:
 
 
 PersonName = Annotated[Name, AfterValidator(_person_name)]
+
+
+def _plain_text_for_keycloak(value: str) -> str:
+    """The name of the installation appears on Keycloak's pages and in its e-mails.
+
+    Keycloak prints it there through an HTML sanitizer that first decodes character references
+    (repeatedly) and then lets harmless markup pass: links, images, formatting. Escaping the
+    name therefore achieves nothing - an escaped link arrives as a link. Only a name that
+    cannot be read as markup is shown as it was typed. A plain "&" is fine ("Müller & Söhne").
+    """
+    if "<" in value or ">" in value or html.unescape(value) != value:
+        raise ValueError("must not contain < or > or character references such as &lt;")
+    return value
+
+
+InstanceName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=60),
+    AfterValidator(_one_space),
+    AfterValidator(_plain_text_for_keycloak),
+]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
 Language = Literal["de", "en"]
 
@@ -68,12 +102,18 @@ Email = Annotated[str | None, AfterValidator(_email)]
 
 
 def _has_nul(value: Any) -> bool:
-    if isinstance(value, str):
-        return "\x00" in value
-    if isinstance(value, dict):
-        return any(_has_nul(k) or _has_nul(v) for k, v in value.items())
-    if isinstance(value, list):
-        return any(_has_nul(item) for item in value)
+    # Without recursion: the depth of a JSON document is the client's choice.
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
     return False
 
 
@@ -133,6 +173,9 @@ class MeOut(Model):
     role: Role | None
     permissions: list[str]
     memberships: list[MembershipOut]
+    # Organizations the user belongs to that are deactivated at the moment. Someone with none
+    # active is not "without organization" - theirs is switched off.
+    inactive_memberships: int = 0
     settings: EffectiveSettings
     own_settings: OwnSettings
     instance_name: str
@@ -167,6 +210,10 @@ class PublicInfo(Model):
 
 
 # -- users ---------------------------------------------------------------------------------------
+
+
+class AdminCapabilities(Model):
+    email_invitations: bool
 
 
 class GroupRef(Model):
@@ -327,7 +374,9 @@ class IconIn(Model):
 
 
 class AppBase(Model):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80), AfterValidator(_one_space)
+    ]
     description: ShortText = ""
     type: AppType
     url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] | None = None
@@ -352,7 +401,14 @@ class AppCreate(AppBase):
 
 
 class AppUpdate(Model):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)] | None = None
+    name: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=80),
+            AfterValidator(_one_space),
+        ]
+        | None
+    ) = None
     description: ShortText | None = None
     type: AppType | None = None
     url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] | None = None
@@ -437,7 +493,9 @@ def _slug(value: str) -> str:
 
 
 Slug = Annotated[str, AfterValidator(_slug)]
-TenantName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=120)]
+TenantName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=2, max_length=120), AfterValidator(_one_space)
+]
 
 
 class TenantOut(Model):
@@ -449,6 +507,8 @@ class TenantOut(Model):
     nav_position_locked: bool
     member_count: int = 0
     app_count: int = 0
+    # Home of a system administrator: cannot be deactivated or deleted.
+    protected: bool = False
     created_at: datetime
 
 
@@ -504,9 +564,7 @@ class SystemSettingsOut(Model):
 
 
 class SystemSettingsUpdate(Model):
-    instance_name: (
-        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)] | None
-    ) = None
+    instance_name: InstanceName | None = None
     default_nav_position: NavPosition | None = None
     default_theme: Theme | None = None
     default_language: Language | None = None

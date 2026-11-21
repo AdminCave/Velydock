@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import Request
@@ -91,19 +92,55 @@ class SecurityHeadersMiddleware:
 # The largest legitimate request is a custom app (HTML, CSS and JavaScript at their limits plus
 # an icon), a little over one megabyte as JSON.
 MAX_BODY_BYTES = 4 * 1024 * 1024
+# How much of a refused request is still read and thrown away, and for how long, before the
+# answer is sent and the connection closed (RequestGuardMiddleware._discard).
+LINGER_BYTES = 16 * 1024 * 1024
+LINGER_SECONDS = 5.0
 
 
 class RequestGuardMiddleware:
     """Turns away requests no legitimate client sends, before any handler reads them.
 
     * Bodies over ``MAX_BODY_BYTES``: without a limit an anonymous client could make the process
-      buffer gigabytes, because bodies are read before authentication is checked.
+      buffer gigabytes, because bodies are read before authentication is checked. Such a body
+      never reaches a handler and is never held in memory.
     * NUL bytes in path or query: PostgreSQL cannot store them, so they could only end in an error.
     """
 
-    def __init__(self, app: ASGIApp, limit: int = MAX_BODY_BYTES) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        limit: int = MAX_BODY_BYTES,
+        *,
+        linger_bytes: int = LINGER_BYTES,
+        linger_seconds: float = LINGER_SECONDS,
+    ) -> None:
         self.app = app
         self.limit = limit
+        self.linger_bytes = linger_bytes
+        self.linger_seconds = linger_seconds
+
+    async def _discard(self, receive: Receive) -> None:
+        """Read what the client is still sending, and throw it away.
+
+        A refusal goes out while the client - in practice the reverse proxy - is still writing
+        the body. Closing the connection under it makes the proxy answer "502 Bad Gateway"
+        every now and then instead of passing the refusal on. Reading on for a bounded while
+        (what nginx calls a lingering close) lets the answer arrive. Nothing is kept, so
+        memory stays flat; bytes and time are limited, so nobody can keep a worker busy.
+        """
+        seen = 0
+        try:
+            async with asyncio.timeout(self.linger_seconds):
+                while seen < self.linger_bytes:
+                    message = await receive()
+                    if message["type"] != "http.request":
+                        return
+                    seen += len(message.get("body", b""))
+                    if not message.get("more_body", False):
+                        return
+        except TimeoutError:
+            return
 
     @staticmethod
     async def _refuse(send: Send, status: int, code: str, message: str) -> None:
@@ -138,6 +175,11 @@ class RequestGuardMiddleware:
                 await self._refuse(send, 400, "bad_request", "Invalid Content-Length.")
                 return
             if too_large:
+                # A client that asked first ("Expect: 100-continue") has not sent the body yet
+                # and gets the refusal right away; from everybody else it is on its way.
+                expects = next((v for k, v in scope.get("headers", []) if k == b"expect"), b"")
+                if expects.strip().lower() != b"100-continue":
+                    await self._discard(receive)
                 await self._refuse(send, 413, "too_large", "The request is too large.")
                 return
 
@@ -166,6 +208,7 @@ class RequestGuardMiddleware:
                 await send(message)
             elif not refused:
                 refused = True
+                await self._discard(receive)
                 await self._refuse(send, 413, "too_large", "The request is too large.")
 
         try:
@@ -174,4 +217,5 @@ class RequestGuardMiddleware:
             if not exceeded:
                 raise
         if exceeded and not refused:
+            await self._discard(receive)
             await self._refuse(send, 413, "too_large", "The request is too large.")

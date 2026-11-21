@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 from sqlalchemy import select, update
 
-from tests.conftest import World
+from tests.conftest import World, refusal
 from tests.support.mini_idp import Identity
 from velydock.db import Scope, transaction
 from velydock.models import AuthSession, Role, User
@@ -145,7 +145,7 @@ class TestSignIn:
         ina = await world.user(acme, "ina", active=False)
         client, response = await sign_in(world, world.identity(ina))
         await client.aclose()
-        assert response.headers["location"] == "/login?error=disabled"
+        assert refusal(response) == "disabled"
         assert await session_rows() == []
 
     async def test_open_redirect_is_not_possible(self, world: World) -> None:
@@ -175,7 +175,7 @@ class TestSignIn:
         impostor = Identity("another-subject", "anna", "other@elsewhere.example")
         client, response = await sign_in(world, impostor)
         await client.aclose()
-        assert response.headers["location"] == "/login?error=account_conflict"
+        assert refusal(response) == "account_conflict"
         assert await session_rows() == []
 
     async def test_profile_is_refreshed_from_the_token(self, world: World) -> None:
@@ -220,7 +220,7 @@ class TestSecondFactor:
         client, response = await sign_in(world, world.identity(anna))
         async with client:
             final = await client.get(world.mini.authorize(response.headers["location"], world.identity(anna)))
-            assert final.headers["location"] == "/login?error=second_factor_required"
+            assert refusal(final) == "second_factor_required"
 
     async def test_members_are_not_forced(self, world: World) -> None:
         await self.enable(world)

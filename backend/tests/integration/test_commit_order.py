@@ -86,17 +86,18 @@ async def test_a_write_is_committed_before_its_response_is_sent(world: World) ->
     events = await order_of_events(
         world, "POST", "/api/v1/admin/groups", cookie=cookie, body={"name": "Büro"}
     )
-    assert events == ["commit", "response 201"]
+    # First the bookkeeping of the session (its own short transaction), then the request's work.
+    assert events == ["commit", "commit", "response 201"]
 
     events = await order_of_events(
         world, "PATCH", "/api/v1/me/settings", cookie=cookie, body={"theme": "dark"}
     )
-    assert events == ["commit", "response 200"]
+    assert events == ["commit", "commit", "response 200"]
 
     events = await order_of_events(
         world, "POST", "/api/v1/me/active-tenant", cookie=cookie, body={"tenant_id": str(acme.id)}
     )
-    assert events == ["commit", "response 200"]
+    assert events == ["commit", "commit", "response 200"]
 
 
 async def test_a_refused_request_is_rolled_back_before_its_response(world: World) -> None:
@@ -104,7 +105,8 @@ async def test_a_refused_request_is_rolled_back_before_its_response(world: World
     member = await world.user(acme, "mia", Role.MEMBER)
     cookie = f"{world.settings.session_cookie}={await world.session(member)}"
     events = await order_of_events(world, "POST", "/api/v1/admin/groups", cookie=cookie, body={"name": "X"})
-    assert events == ["rollback", "response 403"]
+    # The session's bookkeeping is kept, the refused work is not.
+    assert events == ["commit", "rollback", "response 403"]
 
 
 async def test_the_session_exists_before_the_sign_in_redirect_is_sent(world: World) -> None:

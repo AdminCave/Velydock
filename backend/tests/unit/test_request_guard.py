@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -108,6 +109,79 @@ class TestBodyLimit:
         scope = {"type": "http", "method": "POST", "path": "/x", "query_string": b"", "headers": []}
         await RequestGuardMiddleware(tolerant, limit=1000)(scope, receive, send)
         assert [m.get("status") for m in sent if m["type"] == "http.response.start"] == [413]
+
+    async def test_the_rest_of_a_refused_body_is_read_and_thrown_away_before_the_answer(self) -> None:
+        """Answering while the reverse proxy is still sending makes it report 502 now and then
+        (seen in the browser suite); so what is on its way is taken off the wire first."""
+        events: list[str] = []
+        chunks = [b"a" * 500] * 5
+
+        async def receive() -> Message:
+            body = chunks.pop()
+            events.append("read")
+            return {"type": "http.request", "body": body, "more_body": bool(chunks)}
+
+        async def send(message: Message) -> None:
+            events.append(message["type"])
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/x",
+            "query_string": b"",
+            "headers": [(b"content-length", b"2500")],
+        }
+        await RequestGuardMiddleware(echo, limit=1000)(scope, receive, send)
+        assert events == ["read"] * 5 + ["http.response.start", "http.response.body"]
+
+    async def test_a_client_that_asked_first_is_refused_without_its_body(self) -> None:
+        async def receive() -> Message:
+            raise AssertionError("reading would invite the client to send the body (100 Continue)")
+
+        sent: list[Message] = []
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/x",
+            "query_string": b"",
+            "headers": [(b"content-length", b"5000000"), (b"expect", b"100-continue")],
+        }
+        await RequestGuardMiddleware(echo, limit=1000)(scope, receive, send)
+        assert sent[0]["status"] == 413
+
+    async def test_throwing_away_is_limited_in_bytes_and_in_time(self) -> None:
+        read = 0
+
+        async def endless() -> Message:
+            nonlocal read
+            read += 600
+            return {"type": "http.request", "body": b"a" * 600, "more_body": True}
+
+        async def silent() -> Message:
+            await asyncio.sleep(30)
+            raise AssertionError("waited for a client that sends nothing")
+
+        declared = {
+            "type": "http",
+            "method": "POST",
+            "path": "/x",
+            "query_string": b"",
+            "headers": [(b"content-length", b"999999999")],
+        }
+        for receive in (endless, silent):
+            sent: list[Message] = []
+
+            async def send(message: Message, sent: list[Message] = sent) -> None:
+                sent.append(message)
+
+            guard = RequestGuardMiddleware(echo, limit=1000, linger_bytes=3000, linger_seconds=0.05)
+            await asyncio.wait_for(guard(declared, receive, send), timeout=2)
+            assert sent[0]["status"] == 413
+        assert read == 3000
 
     async def test_nonsense_as_length_is_refused(self) -> None:
         async with client(RequestGuardMiddleware(echo)) as http:
@@ -238,7 +312,19 @@ class TestClientAddress:
     def test_addresses_are_kept(self, host: str) -> None:
         assert client_ip(self.request(host)) != ""
 
-    @pytest.mark.parametrize("host", [None, "", "unknown", "203.0.113.9, 6.6.6.6", "x" * 70, "<script>"])
+    @pytest.mark.parametrize(
+        "host",
+        [
+            None,
+            "",
+            "unknown",
+            "203.0.113.9, 6.6.6.6",
+            "x" * 70,
+            "<script>",
+            "fe80::1%eth0",
+            "fe80::1%" + "a" * 60,
+        ],
+    )
     def test_anything_else_becomes_empty(self, host: str | None) -> None:
         """Behind a proxy the value comes from a header; it must fit the column and be an address."""
         assert client_ip(self.request(host)) == ""
@@ -255,5 +341,54 @@ class TestConfiguredHosts:
         assert settings.public_origin == "https://dock.example.com"
         assert settings.sandbox_host == "sandbox.example.com"
 
+    def test_the_keycloak_address_is_left_as_written(self) -> None:
+        """It must equal the issuer Keycloak states, letter for letter."""
+        settings = make_settings(keycloak_public_url="https://Auth.Example.com")
+        assert settings.issuer == "https://Auth.Example.com/realms/velydock"
+
     def test_only_private_networks_are_trusted_as_proxies_by_default(self) -> None:
         assert "*" not in make_settings().trusted_proxies
+
+    def test_the_server_is_started_with_exactly_these_trusted_proxies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A proxy header from anywhere else is not believed (it names the client address)."""
+        import uvicorn
+
+        from velydock import cli
+
+        started: dict[str, Any] = {}
+        monkeypatch.setattr(uvicorn, "run", lambda *args, **options: started.update(options))
+        settings = make_settings(trusted_proxies="10.1.2.3")
+        cli.serve(settings)
+        assert started["proxy_headers"] is True
+        assert started["forwarded_allow_ips"] == "10.1.2.3"
+
+
+class TestSessionBookkeeping:
+    async def test_a_session_whose_row_is_gone_at_the_moment_of_use_is_over(self) -> None:
+        """A sign-out can remove the row between reading it and marking it as used."""
+        from datetime import UTC, datetime, timedelta
+        from types import SimpleNamespace
+
+        from velydock.security.sessions import resolve_session
+
+        row = SimpleNamespace(
+            id_hash="h",
+            last_seen_at=datetime.now(UTC) - timedelta(minutes=10),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+        class Database:
+            def __init__(self, matched: int) -> None:
+                self.matched = matched
+
+            async def get(self, model: object, key: object) -> object:
+                return row
+
+            async def execute(self, statement: object) -> object:
+                return SimpleNamespace(rowcount=self.matched)
+
+        settings = make_settings()
+        assert await resolve_session(Database(1), settings, "cookie") is row  # type: ignore[arg-type]
+        assert await resolve_session(Database(0), settings, "cookie") is None  # type: ignore[arg-type]

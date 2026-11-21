@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     oidc_client_secret: str = Field(min_length=16)
     idp_admin_client_id: str = "velydock-admin"
     idp_admin_client_secret: str = Field(min_length=16)
-    # Only needed until the realm exists; may be removed from the environment afterwards.
+    # Velydock needs these only until the realm exists. (With the bundled Compose file the
+    # secret stays in .env all the same: Keycloak does not start without it.)
     idp_bootstrap_client_id: str | None = None
     idp_bootstrap_client_secret: str | None = None
     # Where Keycloak reaches this service for back-channel logout (internal network).
@@ -50,7 +51,8 @@ class Settings(BaseSettings):
 
     # Addresses and networks whose X-Forwarded-For entries are believed. The default covers the
     # reverse proxy in front of Velydock wherever it sits in a private or container network; a
-    # client address that such a proxy merely passes on is not believed.
+    # client address that such a proxy merely passes on is not believed. docker-compose.yml
+    # repeats this default; change both together.
     trusted_proxies: str = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 
     static_dir: str = "/app/static"
@@ -65,8 +67,15 @@ class Settings(BaseSettings):
         parts = urlsplit(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
             raise ValueError("must be an absolute http(s) URL")
-        # Host names are case-insensitive, but browsers send them in lower case (Origin header)
-        # and everything here is compared exactly.
+        return value
+
+    @field_validator("public_url", "sandbox_url")
+    @classmethod
+    def _lower_case_host(cls, value: str) -> str:
+        # Host names are case-insensitive, but browsers send them in lower case (Origin and Host
+        # headers) and these two are compared with what browsers send. The Keycloak address is
+        # left as written: it must equal the issuer Keycloak states, letter for letter.
+        parts = urlsplit(value)
         return parts._replace(netloc=parts.netloc.lower()).geturl()
 
     @model_validator(mode="after")

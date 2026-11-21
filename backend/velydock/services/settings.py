@@ -6,16 +6,27 @@ default applies, and without one the system default.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from velydock.api.deps import Principal
 from velydock.config import Settings
 from velydock.db import system_scope
-from velydock.errors import ApiError
+from velydock.errors import ApiError, invalid
 from velydock.idp.base import IdentityProvider, IdpError, SmtpConfig
-from velydock.models import NavPosition, SystemSetting, Tenant, Theme, UserSettings
+from velydock.models import (
+    Membership,
+    NavPosition,
+    Role,
+    SystemSetting,
+    Tenant,
+    Theme,
+    User,
+    UserSettings,
+)
 from velydock.schemas import (
     EffectiveSettings,
     OwnSettings,
@@ -27,6 +38,8 @@ from velydock.schemas import (
     TenantSettingsUpdate,
 )
 from velydock.services import audit
+
+log = logging.getLogger(__name__)
 
 _KEY = "general"
 _DEFAULTS: dict[str, Any] = {
@@ -79,6 +92,7 @@ async def update_system(
     data: SystemSettingsUpdate,
 ) -> SystemSettingsOut:
     async with system_scope(db):
+        before = await load_system(db, settings)
         row = await db.get(SystemSetting, _KEY)
         values = dict(row.value) if row else {}
         # An explicit null means "leave as it is", like a field that was not sent: none of
@@ -93,7 +107,33 @@ async def update_system(
         try:
             if "instance_name" in changed:
                 await idp.set_realm_display_name(changed["instance_name"])
+            if "default_language" in changed:
+                # The language of the sign-in pages and e-mails for everyone without a choice.
+                await idp.set_default_locale(changed["default_language"])
             if data.smtp is not None:
+                if data.smtp.host and data.smtp.username and not data.smtp.password:
+                    # An empty password field means "keep the stored one". Keycloak only keeps
+                    # it while the connection is the same; otherwise it would silently drop it
+                    # and mail delivery would fail from then on.
+                    stored = await idp.get_smtp()
+                    if (
+                        stored.host,
+                        stored.port,
+                        stored.encryption,
+                        stored.from_address,
+                        stored.username,
+                    ) != (
+                        data.smtp.host,
+                        data.smtp.port,
+                        data.smtp.encryption,
+                        data.smtp.from_address,
+                        data.smtp.username,
+                    ):
+                        raise invalid(
+                            "Enter the SMTP password again: the connection settings have changed.",
+                            "smtp_password_required",
+                            {"fields": [{"field": "smtp.password", "message": "is required again"}]},
+                        )
                 await idp.set_smtp(
                     SmtpConfig(
                         host=data.smtp.host,
@@ -109,15 +149,43 @@ async def update_system(
             raise ApiError(
                 502, "idp_error", "The identity provider rejected the settings.", {"reason": str(exc)[:200]}
             ) from exc
+        if changed.get("require_admin_2fa") is False and before["require_admin_2fa"]:
+            await _withdraw_pending_enrolments(db, idp)
         await audit.record(
             db,
             principal,
             "system.settings",
             target_type="system",
-            details={"fields": sorted([*changed, *(["smtp"] if data.smtp is not None else [])])},
+            details={
+                "fields": sorted([*changed, *(["smtp"] if data.smtp is not None else [])]),
+                # The new values, so the log says "switched off", not only "changed".
+                "values": changed,
+            },
             tenant_id=None,
         )
     return await system_settings(db, settings, idp)
+
+
+async def _withdraw_pending_enrolments(db: AsyncSession, idp: IdentityProvider) -> None:
+    """The second-factor requirement was switched off: nobody is to be held to it any more.
+
+    Administrators who were asked to enrol and have not done so yet would otherwise still be
+    stopped at their next sign-in. Best effort - one account that fails does not stop the rest.
+    """
+    rows = await db.execute(
+        select(User.idp_id)
+        .outerjoin(Membership, Membership.user_id == User.id)
+        .where(
+            (User.is_system_admin.is_(True))
+            | (Membership.role.in_([Role.TENANT_ADMIN.value, Role.USER_MANAGER.value]))
+        )
+        .distinct()
+    )
+    for idp_id in rows.scalars():
+        try:
+            await idp.withdraw_second_factor_setup(idp_id)
+        except IdpError:
+            log.exception("could not withdraw the pending second-factor enrolment of %s", idp_id)
 
 
 def tenant_settings(tenant: Tenant) -> TenantSettingsOut:
