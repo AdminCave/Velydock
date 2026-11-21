@@ -172,4 +172,36 @@ test.describe('Die Docker-Installation', () => {
     await new Promise((resolve) => setTimeout(resolve, 4000));
     expect((await request.get('/api/health')).status()).toBe(200);
   });
+
+  // Also at the end: it uses up this address's allowance for signing in.
+  test('der Proxy drosselt die Anmeldeschritte von Keycloak, nicht aber dessen Anmeldeseite', async ({ request }) => {
+    // Where Keycloak checks passwords and codes. Without a running sign-in it answers 400 -
+    // unless the proxy has answered first.
+    const step = `${AUTH_URL}/realms/velydock/login-actions/authenticate`;
+    const token = `${AUTH_URL}/realms/velydock/protocol/openid-connect/token`;
+    for (const [name, attempt] of [
+      ['login-actions', () => request.post(step, { form: { username: 'x', password: 'y' } })],
+      ['token endpoint', () => request.post(token, { form: { grant_type: 'password', client_id: 'admin-cli', username: 'x', password: 'y' } })],
+    ] as const) {
+      let limited = 0;
+      let passed = 0;
+      for (let round = 0; round < 6 && limited === 0; round++) {
+        const statuses = await Promise.all(Array.from({ length: 200 }, () => attempt().then((response) => response.status())));
+        limited += statuses.filter((status) => status === 429).length;
+        passed += statuses.filter((status) => status !== 429).length;
+      }
+      expect(limited, `${name}: a burst is throttled`).toBeGreaterThan(0);
+      expect(passed, `${name}: the first requests pass`).toBeGreaterThanOrEqual(20);
+      // Both addresses draw on one allowance per client address: let it fill up again.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+    // What a browser loads before anybody types a password is not behind the limit.
+    const open = await Promise.all(
+      Array.from({ length: 100 }, () =>
+        request.get(`${AUTH_URL}/realms/velydock/.well-known/openid-configuration`).then((response) => response.status()),
+      ),
+    );
+    expect(open.every((status) => status === 200)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+  });
 });

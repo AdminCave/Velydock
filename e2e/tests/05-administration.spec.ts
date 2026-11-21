@@ -86,8 +86,11 @@ test.describe('Verwaltung einer Organisation', () => {
       await expect(row(page, 'data-username', username)).toBeVisible();
       await admin.close();
 
-      // The e-mail really arrives and carries a link to Keycloak.
+      // The e-mail really arrives: in the installation's language, naming the user name the
+      // new person needs to sign in afterwards, and carrying a link to Keycloak.
       const text = await mailTo(address);
+      expect(text).toContain(`Dein Benutzername: ${username}`);
+      expect(text).toContain('ein eigenes Passwort festlegen');
       const link = text.match(/https:\/\/\S+\/login-actions\/action-token\?\S+/);
       expect(link, text).not.toBeNull();
       expect(link![0].startsWith(`${AUTH_URL}/realms/velydock/`)).toBe(true);
@@ -287,16 +290,23 @@ test.describe('Verwaltung einer Organisation', () => {
     await expect(created).toContainText('Eigene App');
     const appId = (await created.getAttribute('data-app-id'))!;
 
-    await page.goto(`/app/${appId}`);
-    const frame = page.locator(`[data-testid="app-frame"][data-app-id="${appId}"]`).contentFrame();
-    await expect(frame.locator('#hello')).toHaveText('Hallo Team');
-    expect(await frame.locator('#hello').evaluate((el) => getComputedStyle(el).color)).toBe('rgb(1, 2, 3)');
-    await expect(frame.locator('#origin')).toHaveText('null');
-
-    const anna = await apiAs('anna');
-    expect((await anna.delete(`/api/v1/admin/apps/${appId}`)).status()).toBe(204);
-    await anna.dispose();
-    await admin.close();
+    try {
+      await page.goto(`/app/${appId}`);
+      // Created without network access, the app sits in a script-less wrapper: one frame deeper.
+      const frame = page
+        .locator(`[data-testid="app-frame"][data-app-id="${appId}"]`)
+        .contentFrame()
+        .frameLocator('body > iframe');
+      await expect(frame.locator('#hello')).toHaveText('Hallo Team');
+      expect(await frame.locator('#hello').evaluate((el) => getComputedStyle(el).color)).toBe('rgb(1, 2, 3)');
+      await expect(frame.locator('#origin')).toHaveText('null');
+    } finally {
+      // Also when the test fails: an app left behind would show up in every dock after it.
+      const anna = await apiAs('anna');
+      expect((await anna.delete(`/api/v1/admin/apps/${appId}`)).status()).toBe(204);
+      await anna.dispose();
+      await admin.close();
+    }
   });
 
   test('das Protokoll zeigt, wer was getan hat', async ({ browser }) => {

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { dockApp } from '../support/ui';
-import { apiAs, contextAs, unique, world } from '../support/world';
+import { apiAs, contextAs, firstSignIn, unique, world } from '../support/world';
 
 test.describe('Systemverwaltung', () => {
   test('ein Systemadministrator legt eine Organisation an, betritt und löscht sie', async ({ browser }) => {
@@ -59,6 +59,46 @@ test.describe('Systemverwaltung', () => {
     await context.close();
   });
 
+  test('wer nur einer deaktivierten Organisation angehört, erfährt genau das', async ({ browser }) => {
+    const root = await apiAs('root');
+    const slug = unique('ruht').toLowerCase();
+    const tenant = await (await root.post('/api/v1/system/tenants', { data: { slug, name: `Ruht ${slug}` } })).json();
+    const username = unique('dora');
+    let created: { temporary_password: string };
+    try {
+      await root.post('/api/v1/me/active-tenant', { data: { tenant_id: tenant.id } });
+      const response = await root.post('/api/v1/admin/users', { data: { username, first_name: 'Dora', last_name: 'Dort' } });
+      expect(response.status()).toBe(201);
+      created = await response.json();
+    } finally {
+      await root.post('/api/v1/me/active-tenant', { data: { tenant_id: world().tenants.main } });
+    }
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    try {
+      await firstSignIn(page, username, created.temporary_password);
+      await expect(page.getByTestId('dock')).toBeVisible();
+      await expect(page.getByTestId('no-tenant-page')).toHaveCount(0);
+
+      expect((await root.patch(`/api/v1/system/tenants/${tenant.id}`, { data: { active: false } })).status()).toBe(200);
+      await page.reload();
+      // Not "you belong to no organization": the person does, and should know whom to ask.
+      await expect(page.getByRole('heading', { level: 1 })).toContainText('deaktiviert');
+      await expect(page.locator('body')).not.toContainText('keiner Organisation');
+      await expect(page.getByTestId('no-tenant-page')).toBeVisible();
+
+      // Switched on again, "Erneut prüfen" is all it takes.
+      expect((await root.patch(`/api/v1/system/tenants/${tenant.id}`, { data: { active: true } })).status()).toBe(200);
+      await page.getByRole('button', { name: 'Erneut prüfen' }).click();
+      await expect(page.getByTestId('no-tenant-page')).toHaveCount(0);
+    } finally {
+      await context.close();
+      await root.post(`/api/v1/system/tenants/${tenant.id}/delete`, { data: { confirm_slug: slug } });
+      await root.dispose();
+    }
+  });
+
   test('ein Fenster, das noch die alte Organisation zeigt, schreibt nicht in die neue', async ({ browser }) => {
     const { tenants, apps } = world();
     const context = await contextAs(browser, 'root');
@@ -76,8 +116,21 @@ test.describe('Systemverwaltung', () => {
       await windowB.getByRole('menuitem', { name: /Globex AG/ }).click();
       await expect(dockApp(windowB, apps.globexCrm)).toBeVisible();
 
-      // Window A was in view the whole time and still shows the first organization. Saving
-      // there must not change Globex.
+      // Windows of one browser tell each other: A follows at once, without a click, and says so.
+      // What it shows and where it would write are the same organization again.
+      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Globex AG');
+      await expect(windowA.getByTestId('toast').filter({ hasText: 'Globex AG' })).toBeVisible();
+      await expect(dockApp(windowA, apps.globexCrm)).toBeVisible();
+
+      // Not every change reaches a window that way: an organization can be deactivated, a
+      // membership can end, the session can be used from elsewhere. Here the session goes back
+      // to the first organization without this browser being told - window A still shows Globex.
+      const outside = await apiAs('root');
+      expect((await outside.post('/api/v1/me/active-tenant', { data: { tenant_id: tenants.main } })).status()).toBe(200);
+      await outside.dispose();
+      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Globex AG');
+
+      // Saving there must not change the first organization: the server refuses.
       await windowA.getByText('Position für alle festlegen').click();
       const refused = windowA.waitForResponse(
         (response) => response.url().endsWith('/api/v1/admin/tenant') && response.request().method() === 'PATCH',
@@ -89,15 +142,13 @@ test.describe('Systemverwaltung', () => {
 
       // The window says what happened and now shows the organization the session is really in.
       await expect(windowA.locator('body')).toContainText('Deine letzte Anfrage wurde deshalb nicht ausgeführt');
-      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Globex AG');
-      await expect(dockApp(windowA, apps.globexCrm)).toBeVisible();
+      await expect(windowA.locator('body')).toContainText('Vorgaben für alle in Admin Cave');
 
       // Neither organization was changed.
       const gina = await apiAs('gina');
       expect((await (await gina.get('/api/v1/admin/tenant')).json()).nav_position_locked).toBe(false);
       await gina.dispose();
       const root = await apiAs('root');
-      expect((await root.post('/api/v1/me/active-tenant', { data: { tenant_id: tenants.main } })).status()).toBe(200);
       expect((await (await root.get('/api/v1/admin/tenant')).json()).nav_position_locked).toBe(false);
       await root.dispose();
     } finally {
