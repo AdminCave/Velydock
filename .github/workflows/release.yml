@@ -40,5 +40,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A release is built from scratch on the current base images: a cached layer would
+          # carry the system packages of an earlier build, without the security fixes since.
+          pull: true
+          no-cache: true

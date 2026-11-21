@@ -19,13 +19,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
+# Security fixes Debian has published since the base image was built.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies first (cached layer); every package is pinned and verified by hash.
 COPY backend/requirements.txt ./
 RUN pip install --require-hashes -r requirements.txt
 
 COPY backend/pyproject.toml backend/README.md ./
 COPY backend/velydock ./velydock
-RUN pip install --no-deps . && rm -rf build velydock.egg-info
+# The running service installs nothing. Without pip, the libraries pip bundles for its own use
+# (and their security advisories) are not part of the image either.
+RUN pip install --no-deps . \
+    && rm -rf build velydock.egg-info \
+    && pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.13/ensurepip/_bundled
 
 COPY --from=frontend /src/dist /app/static
 COPY deploy/keycloak/theme /opt/velydock/keycloak-theme

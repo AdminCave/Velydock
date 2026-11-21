@@ -67,6 +67,7 @@ KEYCLOAK_DB_PASSWORD=$(secret)
 VELYDOCK_SECRET_KEY=$(secret)
 VELYDOCK_OIDC_CLIENT_SECRET=$(secret)
 VELYDOCK_IDP_ADMIN_CLIENT_SECRET=$(secret)
+# Must stay in this file: Keycloak does not start without it.
 KEYCLOAK_BOOTSTRAP_SECRET=$(secret)
 
 VELYDOCK_REQUIRE_ADMIN_2FA=true

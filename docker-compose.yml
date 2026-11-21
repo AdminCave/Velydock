@@ -9,10 +9,19 @@
 
 name: velydock
 
+# Docker keeps container logs without any limit unless told otherwise; a fault that repeats with
+# every request would fill the disk. Each container keeps at most 5 files of 10 MB.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-hardening: &hardening
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
+  logging: *logging
 
 services:
   traefik:
@@ -29,6 +38,10 @@ services:
       # it to "/api/…": such a request would reach the API past the router that rate-limits it.
       # No address of Velydock or Keycloak carries an encoded slash in its path, so refuse them.
       - --entrypoints.websecure.http.encodedcharacters.allowencodedslash=false
+      # A header name written with "_" or "." (X_Forwarded_For) is read by some backends as the
+      # header it resembles (X-Forwarded-For), which Traefik sets itself. Browsers never send
+      # such names: drop these headers instead of passing them on. Applies to both entry points.
+      - --global.aliasheadersstrategy=delete
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -74,6 +87,10 @@ services:
       VELYDOCK_IDP_BOOTSTRAP_CLIENT_SECRET: ${KEYCLOAK_BOOTSTRAP_SECRET:-}
       VELYDOCK_REQUIRE_ADMIN_2FA: ${VELYDOCK_REQUIRE_ADMIN_2FA:-true}
       VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE: ${VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE:-false}
+      # Whose X-Forwarded-For is believed. The default is the one of the backend itself
+      # (backend/velydock/config.py): loopback and the private networks, which covers the bundled
+      # Traefik and a reverse proxy on the same server.
+      VELYDOCK_TRUSTED_PROXIES: ${VELYDOCK_TRUSTED_PROXIES:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
       VELYDOCK_SESSION_IDLE_MINUTES: ${VELYDOCK_SESSION_IDLE_MINUTES:-120}
       VELYDOCK_SESSION_MAX_HOURS: ${VELYDOCK_SESSION_MAX_HOURS:-12}
       VELYDOCK_LOG_LEVEL: ${VELYDOCK_LOG_LEVEL:-INFO}
@@ -103,13 +120,16 @@ services:
     user: "0:0"
     security_opt:
       - no-new-privileges:true
+    logging: *logging
     volumes:
       - keycloak-themes:/themes
     network_mode: none
 
   keycloak:
     <<: *hardening
-    image: quay.io/keycloak/keycloak:26.8.2
+    # Update Keycloak by setting KEYCLOAK_IMAGE in .env, not by editing this file: a local change
+    # here would make the next "git pull" fail. The default is the version Velydock is tested with.
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.2}
     command: ["start"]
     environment:
       KC_DB: postgres
@@ -123,12 +143,16 @@ services:
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
       KC_HEALTH_ENABLED: "true"
-      # Used once, on the very first start, to let Velydock create its realm.
+      # Keycloak creates this client once, on the very first start; Velydock sets up its realm
+      # with it. The secret must stay in .env afterwards: Keycloak refuses to start when the
+      # client ID is given without a secret, and an empty value counts as none.
       KC_BOOTSTRAP_ADMIN_CLIENT_ID: velydock-bootstrap
-      KC_BOOTSTRAP_ADMIN_CLIENT_SECRET: ${KEYCLOAK_BOOTSTRAP_SECRET:-}
+      KC_BOOTSTRAP_ADMIN_CLIENT_SECRET: ${KEYCLOAK_BOOTSTRAP_SECRET:?KEYCLOAK_BOOTSTRAP_SECRET must stay in .env, Keycloak does not start without it}
     healthcheck:
       # The image ships neither curl nor wget; talk HTTP to the management port with bash.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      # Ready means the status line says 200. The body is no guide: it lists single checks, and
+      # some of them report "status": "UP" while Keycloak as a whole is DOWN and answers 503.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && read -r status <&3 && case \"$$status\" in *' 200 '*) exit 0 ;; *) exit 1 ;; esac"]
       interval: 10s
       timeout: 5s
       retries: 30

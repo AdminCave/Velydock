@@ -2,7 +2,7 @@
 # SSH tunnel. Needed for tasks Velydock does not cover: connecting apps via OIDC, LDAP/AD,
 # external identity providers. See docs/betrieb.md.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.keycloak-admin.yml up -d keycloak
+#   docker compose -f docker-compose.yml -f docker-compose.keycloak-admin.yml up -d --wait keycloak
 #   docker compose exec velydock velydock keycloak-admin --username <your Velydock user>
 #   ssh -L 8081:127.0.0.1:8081 <server>   then open http://localhost:8081/admin/velydock/console/
 #
@@ -10,9 +10,10 @@
 # -f options Compose no longer loads it by itself, and Keycloak would lose the port of your proxy.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.override.yml \
-#                  -f docker-compose.keycloak-admin.yml up -d keycloak
+#                  -f docker-compose.keycloak-admin.yml up -d --wait keycloak
 #
-# Close it again with a plain `docker compose up -d`.
+# Keycloak restarts for this; --wait returns when it answers again, which the second command
+# needs. Close the console again with a plain `docker compose up -d`.
 
 services:
   keycloak:

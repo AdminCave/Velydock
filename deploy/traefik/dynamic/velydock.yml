@@ -53,6 +53,26 @@ http:
         {}
 {{- end }}
 
+    keycloak-signin:
+      # Where Keycloak checks passwords, one-time codes and client secrets: the steps of the
+      # sign-in forms and the token endpoint. They get their own per-client rate limit; the rest
+      # of the realm (the sign-in page itself, static resources, discovery documents, keys)
+      # stays on the router above without one.
+      rule: "Host(`{{ env "KEYCLOAK_HOST" }}`) && (PathPrefix(`/realms/{{ env "KEYCLOAK_REALM" }}/login-actions/`) || PathPrefix(`/realms/{{ env "KEYCLOAK_REALM" }}/protocol/openid-connect/token`))"
+      # Both Keycloak routers match these paths. This rule is the longer text and would win
+      # without a priority as well – it is set so that a later change to either rule cannot
+      # switch the limit off unnoticed (see "velydock-api").
+      priority: 1000
+      entryPoints: [websecure]
+      service: keycloak
+      middlewares: [signin-ratelimit, compress]
+      tls:
+{{- if env "TLS_RESOLVER" }}
+        certResolver: {{ env "TLS_RESOLVER" }}
+{{- else }}
+        {}
+{{- end }}
+
   middlewares:
     compress:
       compress: {}
@@ -62,6 +82,15 @@ http:
       rateLimit:
         average: 100
         burst: 300
+        period: 1s
+    # Per client address as well. One sign-in is 2 to 7 requests to these paths (user name,
+    # password, second factor, each followed by a redirect; more when a password has to be
+    # changed), so an office behind one address can sign in together, while guessing passwords
+    # from one address stops being fast. It does not replace Keycloak's brute-force protection.
+    signin-ratelimit:
+      rateLimit:
+        average: 20
+        burst: 60
         period: 1s
 
   services:
