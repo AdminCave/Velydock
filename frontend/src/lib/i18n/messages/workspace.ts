@@ -31,8 +31,20 @@ export const workspace = {
     'You do not belong to an organization yet',
   ],
   'noTenant.text': [
-    'Die Anmeldung hat geklappt, aber dein Konto ist noch keiner Organisation zugeordnet. Bitte deine Administration, dich hinzuzufügen. Danach genügt „Erneut prüfen“.',
-    'Signing in worked, but your account is not assigned to an organization yet. Ask your administrator to add you. After that, “Check again” is enough.',
+    'Die Anmeldung hat geklappt, aber dein Konto ist noch keiner Organisation zugeordnet. Das kann nur die Systemadministration ändern: Bitte sie, dich einer Organisation hinzuzufügen. Danach genügt „Erneut prüfen“.',
+    'Signing in worked, but your account is not assigned to an organization yet. Only the system administrator can change that: ask them to add you to an organization. After that, “Check again” is enough.',
+  ],
+  'noTenant.inactive.title': [
+    'Deine Organisation ist deaktiviert',
+    'Your organization is deactivated',
+  ],
+  'noTenant.inactive.titleMany': [
+    'Deine Organisationen sind deaktiviert',
+    'Your organizations are deactivated',
+  ],
+  'noTenant.inactive.text': [
+    'Die Anmeldung hat geklappt, aber du gehörst zurzeit zu keiner aktiven Organisation. Solange das so ist, gibt es hier keine Apps. Wieder aktivieren kann eine Organisation nur die Systemadministration – frag dort nach. Danach genügt „Erneut prüfen“.',
+    'Signing in worked, but at the moment you belong to no active organization. Until that changes there are no apps here. Only the system administrator can activate an organization again – ask them. After that, “Check again” is enough.',
   ],
   'noTenant.retry': ['Erneut prüfen', 'Check again'],
   'noTenant.account': ['Angemeldet als {username}', 'Signed in as {username}'],
@@ -47,6 +59,16 @@ export const workspace = {
   'app.type.external': ['Neuer Tab', 'New tab'],
   'app.type.custom': ['Eigene App', 'Custom app'],
   'app.reload': ['Neu laden', 'Reload'],
+  'app.focusTaken.closed': [
+    '„{name}“ wurde geschlossen: Die App hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
+    '“{name}” was closed: the app repeatedly took over the keyboard while you were typing elsewhere. Open it again when you need it.',
+  ],
+  'app.focusTaken.title': ['Diese App wurde geschlossen', 'This app was closed'],
+  'app.focusTaken.text': [
+    'Sie hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast.',
+    'It repeatedly took over the keyboard while you were typing elsewhere.',
+  ],
+  'app.focusTaken.reopen': ['App neu laden', 'Load the app again'],
   'app.openInNewTab': ['In neuem Tab öffnen', 'Open in new tab'],
   'app.opensInNewTab': ['öffnet in neuem Tab', 'opens in a new tab'],
   'app.blocked.title': ['Diese App lässt sich nicht einbetten', 'This app cannot be embedded'],
@@ -70,6 +92,12 @@ export const workspace = {
     'Der Server hat nicht geantwortet. Prüf deine Verbindung und versuch es noch einmal.',
     'The server did not answer. Check your connection and try again.',
   ],
+  'app.slow.title': ['Die App ist noch nicht fertig geladen', 'The app has not finished loading'],
+  'app.slow.text': [
+    'Vielleicht braucht sie nur länger, vielleicht ist sie gerade nicht erreichbar oder lässt sich hier nicht einbetten – von außen lässt sich das nicht unterscheiden. Wenn du sie schon benutzen kannst, schließ diesen Hinweis einfach.',
+    'It may just take longer, it may be unreachable right now, or it may not allow being embedded here – from the outside there is no telling which. If you can already use it, just close this notice.',
+  ],
+  'app.slow.dismiss': ['Hinweis schließen', 'Close notice'],
   'app.launchFailed.title': [
     'Die App konnte nicht gestartet werden',
     'The app could not be started',

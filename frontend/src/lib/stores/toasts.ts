@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { writable } from 'svelte/store';
-import { ApiError } from '$lib/api/client';
+import { ApiError, TENANT_CHANGED } from '$lib/api/client';
 import { errorMessage } from '$lib/api/errors';
 
 export type ToastKind = 'success' | 'error' | 'info';
@@ -33,6 +33,11 @@ export function showError(err: unknown): void {
   if (err instanceof DOMException && err.name === 'AbortError') return;
   // A 401 ends the session; the login page that follows says so (see stores/session.ts).
   if (err instanceof ApiError && err.status === 401) return;
+  // A request that was refused, or not even sent, because the page shows another
+  // organization than the session. The session store says that, once and in one wording:
+  // which organization is active now, and that the request was not carried out (see
+  // stores/session.ts). A page of an organization that is gone has nobody to tell anyway.
+  if (err instanceof ApiError && err.code === TENANT_CHANGED) return;
   showToast(errorMessage(err), 'error');
 }
 

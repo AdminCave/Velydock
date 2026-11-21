@@ -65,6 +65,48 @@ describe('audit log texts', () => {
     ).toBe('Standardposition: Systemstandard · Position festgelegt');
   });
 
+  it('say which way a setting was changed, not only that it was', () => {
+    expect(
+      auditDetail(
+        {
+          action: 'system.settings',
+          details: { fields: ['require_admin_2fa'], values: { require_admin_2fa: false } },
+        },
+        de,
+      ),
+    ).toBe('Zwei-Faktor für Administratoren: aus');
+    expect(
+      auditDetail(
+        {
+          action: 'system.settings',
+          details: {
+            fields: ['instance_name', 'default_nav_position', 'default_theme', 'smtp'],
+            values: {
+              instance_name: 'Stadtwerke',
+              default_nav_position: 'top',
+              default_theme: 'dark',
+              default_language: 'en',
+              require_admin_2fa: true,
+            },
+          },
+        },
+        de,
+      ),
+    ).toBe(
+      'Name der Installation: Stadtwerke · Standardposition des Docks: Oben · Standard-Design: Dunkel · Standardsprache: English · Zwei-Faktor für Administratoren: an · Geändert: E-Mail-Versand',
+    );
+    // An entry from before the values were recorded still names the fields.
+    expect(
+      auditDetail({ action: 'system.settings', details: { fields: ['require_admin_2fa'] } }, de),
+    ).toBe('Geändert: Zwei-Faktor für Administratoren');
+    expect(
+      auditDetail(
+        { action: 'system.settings', details: { values: { require_admin_2fa: true } } },
+        (key, vars) => translate('en', key, vars),
+      ),
+    ).toBe('Two-factor for administrators: on');
+  });
+
   it('stay silent when there is nothing to add', () => {
     expect(auditDetail({ action: 'user.delete', details: {} }, de)).toBe('');
     expect(auditDetail({ action: 'unknown.action', details: { a: 1 } }, de)).toBe('');

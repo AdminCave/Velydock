@@ -41,6 +41,7 @@ export function makeMe(overrides: Partial<Me> = {}): Me {
     role: 'member',
     permissions: PERMISSIONS.member,
     memberships: [{ tenant: ACME, role: 'member' }],
+    inactive_memberships: 0,
     settings: { theme: 'system', nav_position: 'left', language: 'de', nav_position_locked: false },
     own_settings: { theme: null, nav_position: null, language: null },
     instance_name: 'Velydock',
@@ -80,8 +81,9 @@ type Handler = (request: { url: string; method: string; body: unknown }) => Resp
 
 /**
  * Replace fetch by a table of handlers keyed "METHOD /path" (the query is ignored for the
- * lookup). A handler returns a Response, or any other value to be sent as JSON. Unknown
- * requests answer 404, so a test notices a call it did not expect.
+ * lookup). A handler returns a Response, or any other value to be sent as JSON; a promise
+ * of either makes the answer wait until the test lets it go. Unknown requests answer 404,
+ * so a test notices a call it did not expect.
  */
 export function stubApi(routes: Record<string, Handler>) {
   const calls: { url: string; method: string; body: unknown; headers: Record<string, string> }[] =
@@ -93,7 +95,8 @@ export function stubApi(routes: Record<string, Handler>) {
     calls.push({ url, method, body, headers: (init.headers ?? {}) as Record<string, string> });
     const handler = routes[`${method} ${url.split('?')[0]}`];
     if (!handler) return errorResponse(404, 'not_found');
-    const result = handler({ url, method, body });
+    const returned = handler({ url, method, body });
+    const result: unknown = returned instanceof Promise ? await returned : returned;
     return result instanceof Response ? result : jsonResponse(result);
   });
   vi.stubGlobal('fetch', mock);

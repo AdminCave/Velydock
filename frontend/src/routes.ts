@@ -28,13 +28,15 @@ export const routes: RouteDef<PageComponent>[] = [
   { pattern: '/profile', kind: 'page', component: Profile, title: 'title.profile' },
   { pattern: '/settings', kind: 'page', component: Settings, title: 'title.settings' },
 
-  // Tenant administration: each page needs its own permission (see ADMIN_NAV).
+  // Tenant administration: each page needs its own permission (see ADMIN_NAV) and
+  // belongs to the active organization (tenantScoped).
   { pattern: '/admin', kind: 'redirect', redirect: adminHome },
   {
     pattern: '/admin/users',
     kind: 'page',
     component: AdminUsers,
     permission: 'users:read',
+    tenantScoped: true,
     title: 'nav.admin.users',
   },
   {
@@ -42,6 +44,7 @@ export const routes: RouteDef<PageComponent>[] = [
     kind: 'page',
     component: AdminGroups,
     permission: 'groups:read',
+    tenantScoped: true,
     title: 'nav.admin.groups',
   },
   {
@@ -49,6 +52,7 @@ export const routes: RouteDef<PageComponent>[] = [
     kind: 'page',
     component: AdminApps,
     permission: 'apps:manage',
+    tenantScoped: true,
     title: 'nav.admin.apps',
   },
   {
@@ -56,6 +60,7 @@ export const routes: RouteDef<PageComponent>[] = [
     kind: 'page',
     component: AdminSettings,
     permission: 'tenant:settings',
+    tenantScoped: true,
     title: 'nav.admin.settings',
   },
   {
@@ -63,6 +68,7 @@ export const routes: RouteDef<PageComponent>[] = [
     kind: 'page',
     component: AdminAudit,
     permission: 'audit:read',
+    tenantScoped: true,
     title: 'nav.admin.audit',
   },
 

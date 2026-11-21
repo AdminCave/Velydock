@@ -29,6 +29,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { navigate } from '$lib/router';
   import { me, refreshMe, switchTenant } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
+  import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
   import TenantDeleteModal from '../../modals/TenantDeleteModal.svelte';
   import TenantModal from '../../modals/TenantModal.svelte';
 
@@ -74,10 +75,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
     void refresh();
   }
 
-  function onDeleted(tenant: Tenant) {
+  async function onDeleted(tenant: Tenant) {
+    const table = document.querySelector('[data-testid="tenants-table"]');
+    const at = rowIndex(table, 'data-tenant-id', tenant.id);
     deleting = null;
     showToast($t('tenants.deleted', { name: tenant.name }));
-    void refresh();
+    await refresh();
+    // The row is gone, and with it the button the dialog gave the focus back to.
+    await restoreFocus(() => [rowMenuAt(table, at), document.getElementById('main')]);
   }
 
   async function enter(tenant: Tenant) {
@@ -179,7 +184,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
                     {$t('tenants.action.rename')}
                   </MenuItem>
                   {#if tenant.active}
-                    <MenuItem icon={PowerOff} onSelect={() => void setActive(tenant, false)}>
+                    <!-- An organization that owns a system administrator's account can be
+                         neither deactivated nor deleted (the API answers 409): not offered,
+                         and the menu says why. -->
+                    <MenuItem
+                      icon={PowerOff}
+                      disabled={tenant.protected}
+                      onSelect={() => void setActive(tenant, false)}
+                    >
                       {$t('tenants.action.deactivate')}
                     </MenuItem>
                   {:else}
@@ -188,9 +200,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
                     </MenuItem>
                   {/if}
                   <MenuSeparator />
-                  <MenuItem icon={Trash} danger onSelect={() => (deleting = tenant)}>
+                  <MenuItem
+                    icon={Trash}
+                    danger
+                    disabled={tenant.protected}
+                    onSelect={() => (deleting = tenant)}
+                  >
                     {$t('action.delete')}
                   </MenuItem>
+                  {#if tenant.protected}
+                    <p class="menu-note" data-testid="tenant-protected">
+                      {$t('tenants.protected.hint')}
+                    </p>
+                  {/if}
                 </Menu>
               </span>
             </td>
@@ -218,7 +240,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </section>
 
 <TenantModal open={modalOpen} tenant={editing} onClose={() => (modalOpen = false)} {onSaved} />
-<TenantDeleteModal tenant={deleting} onClose={() => (deleting = null)} {onDeleted} />
+<TenantDeleteModal
+  tenant={deleting}
+  onClose={() => (deleting = null)}
+  onDeleted={(tenant) => void onDeleted(tenant)}
+/>
 
 <style>
   .here {

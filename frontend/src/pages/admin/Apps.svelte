@@ -50,7 +50,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Plus from '@lucide/svelte/icons/plus';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Trash from '@lucide/svelte/icons/trash';
-  import { api } from '$lib/api/client';
+  import { tenantApi } from '$lib/api/client';
   import type { Group } from '$lib/api/types';
   import AppIcon from '$lib/components/app/AppIcon.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -61,12 +61,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import MenuItem from '$lib/components/ui/MenuItem.svelte';
   import Pill from '$lib/components/ui/Pill.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
+  import { embedDetail } from '$lib/embedDetail';
   import { t } from '$lib/i18n';
   import { hasPermission } from '$lib/nav';
   import { permissions } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
   import { loadApps } from '$lib/stores/workspace';
+  import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
   import AppModal from '../../modals/AppModal.svelte';
+
+  // Bound to the organization this page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const canReadGroups = $derived(hasPermission($permissions, 'groups:read'));
   const canReadUsers = $derived(hasPermission($permissions, 'users:read'));
@@ -124,28 +129,51 @@ SPDX-License-Identifier: GPL-3.0-or-later
   // Moving a row takes the focus away from the button that was pressed (the row is
   // re-inserted elsewhere in the table). Put it back on the same app's button, so the
   // next press moves the same app again; at the end of the list the opposite button of
-  // the row takes over. Focus that went somewhere else in the meantime is left alone.
+  // the row takes over. Only then: focus that went anywhere else in the meantime (another
+  // row, the row's menu, a dialog) is where the user wants it.
   async function keepFocus(appId: string, delta: -1 | 1) {
     await tick();
     if (!table) return;
-    const at = document.activeElement;
-    if (at && at !== document.body && !table.contains(at)) return;
     const row = [...table.querySelectorAll<HTMLTableRowElement>('tbody tr')].find(
       (candidate) => candidate.dataset.appId === appId,
     );
     const [up, down] = row?.querySelectorAll<HTMLButtonElement>('.row-actions button') ?? [];
+    const at = document.activeElement;
+    if (at && at !== document.body && at !== up && at !== down) return;
     const [wanted, other] = delta === -1 ? [up, down] : [down, up];
     (wanted && !wanted.disabled ? wanted : other)?.focus();
   }
 
-  async function move(index: number, delta: -1 | 1) {
-    if (!apps || busy) return;
-    const next = moved(apps, index, delta);
+  // What a screen reader says after a move: the buttons keep their names and the focus
+  // stays on them, so nothing else tells where the app is now.
+  let announcement = $state('');
+  function announce(appId: string) {
+    const list = apps ?? [];
+    const at = list.findIndex((a) => a.id === appId);
+    if (at < 0) return;
+    announcement = $t('apps.moved', { name: list[at].name, position: at + 1, total: list.length });
+  }
+
+  // One press that came while a move was being stored. It is carried out when that move
+  // is done: somebody moving an app several places presses faster than the server answers.
+  let waiting: { appId: string; delta: -1 | 1 } | null = null;
+
+  async function move(appId: string, delta: -1 | 1) {
+    if (!apps) return;
+    if (busy) {
+      waiting = { appId, delta };
+      return;
+    }
+    const next = moved(
+      apps,
+      apps.findIndex((a) => a.id === appId),
+      delta,
+    );
     if (!next) return;
     const previous = apps;
-    const appId = apps[index].id;
     apps = next; // shown at once, confirmed by the server's answer
     busy = true;
+    announce(appId);
     void keepFocus(appId, delta);
     try {
       apps = await api.put('/api/v1/admin/apps/order', {
@@ -154,12 +182,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
       refreshDock();
     } catch (err) {
       apps = previous;
+      // A press that waited for this move counted on it.
+      waiting = null;
       showError(err);
+      announce(appId);
       void load();
     } finally {
       busy = false;
       void keepFocus(appId, delta);
     }
+    const queued = waiting;
+    waiting = null;
+    if (queued) void move(queued.appId, queued.delta);
   }
 
   async function recheck(app: AdminApp) {
@@ -185,10 +219,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
       confirmLabel: $t('apps.delete.confirm'),
     });
     if (!ok) return;
+    const at = rowIndex(table ?? null, 'data-app-id', app.id);
     try {
       await api.delete('/api/v1/admin/apps/{app_id}', { path: { app_id: app.id } });
       showToast($t('apps.deleted', { name: app.name }));
       await load();
+      // The row is gone, and with it the button that had the focus.
+      await restoreFocus(() => [rowMenuAt(table ?? null, at), document.getElementById('main')]);
       refreshDock();
     } catch (err) {
       showError(err);
@@ -223,21 +260,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
           <tr data-app-id={app.id}>
             <td class="order">
               <!-- Not disabled while a move is being stored: a disabled button loses the
-                   keyboard focus. move() ignores presses during that time. -->
+                   keyboard focus. move() remembers a press made during that time. -->
               <span class="row-actions">
                 <IconButton
                   icon={ArrowUp}
                   size="sm"
                   label={$t('apps.move.up', { name: app.name })}
                   disabled={index === 0}
-                  onclick={() => void move(index, -1)}
+                  onclick={() => void move(app.id, -1)}
                 />
                 <IconButton
                   icon={ArrowDown}
                   size="sm"
                   label={$t('apps.move.down', { name: app.name })}
                   disabled={index === (apps?.length ?? 0) - 1}
-                  onclick={() => void move(index, 1)}
+                  onclick={() => void move(app.id, 1)}
                 />
               </span>
             </td>
@@ -265,11 +302,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
               {#if app.type !== 'embedded'}
                 <span class="subtle">–</span>
               {:else if app.embed_status === 'ok'}
-                <Pill tone="ok" title={app.embed_detail}>{$t('apps.embed.ok')}</Pill>
+                <Pill tone="ok" title={embedDetail(app.embed_detail, $t)}>
+                  {$t('apps.embed.ok')}
+                </Pill>
               {:else if app.embed_status === 'blocked'}
-                <Pill tone="crit" title={app.embed_detail}>{$t('apps.embed.blocked')}</Pill>
+                <Pill tone="crit" title={embedDetail(app.embed_detail, $t)}>
+                  {$t('apps.embed.blocked')}
+                </Pill>
               {:else}
-                <Pill tone="warn" title={app.embed_detail}>{$t('apps.embed.unknown')}</Pill>
+                <Pill tone="warn" title={embedDetail(app.embed_detail, $t)}>
+                  {$t('apps.embed.unknown')}
+                </Pill>
               {/if}
             </td>
             <td class="actions">
@@ -320,6 +363,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
     {/if}
   </div>
   <p class="help">{$t('apps.orderHint')}</p>
+  <p class="visually-hidden" role="status" aria-live="polite" data-testid="apps-moved">
+    {announcement}
+  </p>
 </section>
 
 <AppModal

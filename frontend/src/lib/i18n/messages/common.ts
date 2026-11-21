@@ -95,6 +95,15 @@ export const common = {
     'Das ist keine gültige E-Mail-Adresse.',
     'This is not a valid e-mail address.',
   ],
+  'validation.personName': [
+    'Nicht erlaubt sind die Zeichen < > & " $ % ! # ? § ; * ~ / \\ | ^ = [ ] { } ( ) und Steuerzeichen.',
+    'These characters are not allowed: < > & " $ % ! # ? § ; * ~ / \\ | ^ = [ ] { } ( ) and control characters.',
+  ],
+  'validation.invalid': ['Diese Eingabe wurde nicht angenommen.', 'This input was not accepted.'],
+  'validation.maxLength': [
+    'Mehr als {max} Zeichen sind hier nicht möglich.',
+    'No more than {max} characters fit here.',
+  ],
   'validation.username': [
     '3–64 Zeichen: Kleinbuchstaben, Ziffern, Punkt, Bindestrich oder Unterstrich; am Anfang und am Ende ein Buchstabe oder eine Ziffer.',
     '3–64 characters: lowercase letters, digits, dot, dash or underscore, starting and ending with a letter or digit.',
@@ -110,6 +119,8 @@ export const common = {
   'picker.empty': ['Nichts zur Auswahl.', 'Nothing to choose from.'],
   'picker.noMatch': ['Kein Treffer.', 'No match.'],
   'picker.remove': ['{name} entfernen', 'Remove {name}'],
+  'picker.more': ['und {count} weitere', 'and {count} more'],
+  'picker.less': ['Weniger anzeigen', 'Show fewer'],
 
   // ── Document titles ──────────────────────────────────────────────────
   'title.login': ['Anmelden', 'Sign in'],

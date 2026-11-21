@@ -53,7 +53,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 {#if $me && !$me.active_tenant}
   <div class="page page-narrow" data-testid="no-tenant-page">
-    <EmptyState icon={Unplug} title={$t('noTenant.title')} description={$t('noTenant.text')}>
+    <!-- No organization at all, or only deactivated ones: two different things to ask for. -->
+    <EmptyState
+      page
+      icon={Unplug}
+      title={$me.inactive_memberships > 1
+        ? $t('noTenant.inactive.titleMany')
+        : $me.inactive_memberships === 1
+          ? $t('noTenant.inactive.title')
+          : $t('noTenant.title')}
+      description={$me.inactive_memberships > 0
+        ? $t('noTenant.inactive.text')
+        : $t('noTenant.text')}
+    >
       {#snippet action()}
         <div class="no-tenant-actions">
           <Button variant="secondary" iconLeft={RefreshCw} loading={checking} onclick={checkAgain}>

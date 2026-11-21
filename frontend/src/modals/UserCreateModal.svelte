@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ApiError, api } from '$lib/api/client';
+  import { ApiError, tenantApi } from '$lib/api/client';
   import { errorMessage } from '$lib/api/errors';
   import { ROLES, type Group, type Role, type UserCreated } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
@@ -17,8 +17,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
-  import { isValidEmail, isValidUsername } from '$lib/utils/validate';
+  import { focusOnNewErrors, formChanged, refusedFields } from '$lib/utils/forms';
+  import { isValidEmail, isValidUsername, personNameProblem } from '$lib/utils/validate';
 
   interface Props {
     open: boolean;
@@ -26,11 +26,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
     groups: Group[];
     /** Whether the administrator may give out other roles than "member" (roles:assign). */
     canAssignRoles: boolean;
+    /** Whether the installation can send e-mails at all (GET /admin/capabilities). */
+    emailInvitations?: boolean;
     onClose: () => void;
     onCreated: (result: UserCreated) => void;
   }
 
-  let { open, groups, canAssignRoles, onClose, onCreated }: Props = $props();
+  let {
+    open,
+    groups,
+    canAssignRoles,
+    emailInvitations = false,
+    onClose,
+    onCreated,
+  }: Props = $props();
+
+  // Bound to the organization the page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const formId = $props.id();
   let username = $state('');
@@ -51,9 +63,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const dirty = $derived(formChanged(fields(), pristine));
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
-  $effect(() => {
-    if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
-  });
+  const focusErrors = focusOnNewErrors(formId);
+  $effect(() => focusErrors(errors));
 
   // Every opening starts with an empty form.
   $effect(() => {
@@ -82,10 +93,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
     const found: Record<string, string> = {};
     if (!username.trim()) found.username = $t('validation.required');
     else if (!isValidUsername(username)) found.username = $t('validation.username');
-    if (!firstName.trim()) found.first_name = $t('validation.required');
-    if (!lastName.trim()) found.last_name = $t('validation.required');
+    const first = personNameProblem(firstName);
+    const last = personNameProblem(lastName);
+    if (first) found.first_name = $t(first);
+    if (last) found.last_name = $t(last);
     if (email.trim() && !isValidEmail(email)) found.email = $t('validation.email');
-    if (sendEmail && !email.trim()) found.email = $t('error.email_required');
+    if (sendEmail && emailInvitations && !email.trim()) {
+      found.email = $t('error.email_required');
+    }
     return found;
   }
 
@@ -105,16 +120,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
           email: email.trim() || null,
           role,
           group_ids: groupIds,
-          send_email: sendEmail,
+          send_email: sendEmail && emailInvitations,
         },
       });
       onCreated(result);
     } catch (err) {
       // Problems that belong to one field are shown at that field.
       const code = err instanceof ApiError ? err.code : '';
+      const refused = refusedFields(err, {
+        username: () => $t('validation.username'),
+        first_name: () => $t(personNameProblem(firstName) ?? 'validation.invalid'),
+        last_name: () => $t(personNameProblem(lastName) ?? 'validation.invalid'),
+        email: () => $t('validation.email'),
+      });
       if (code === 'username_taken') errors = { username: $t('error.username_taken') };
       else if (code === 'email_taken') errors = { email: $t('error.email_taken') };
       else if (code === 'email_required') errors = { email: $t('error.email_required') };
+      else if (Object.keys(refused).length > 0) errors = refused;
       else failure = errorMessage(err, $t);
     } finally {
       saving = false;
@@ -128,7 +150,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       label={$t('field.username')}
       required
       hint={$t('users.username.hint')}
-      error={errors.username}
+      bind:error={errors.username}
     >
       <Input
         bind:value={username}
@@ -141,14 +163,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
       />
     </FormField>
     <div class="form-row">
-      <FormField label={$t('field.first_name')} required error={errors.first_name}>
+      <FormField label={$t('field.first_name')} required bind:error={errors.first_name}>
         <Input bind:value={firstName} maxlength={100} autocomplete="off" required />
       </FormField>
-      <FormField label={$t('field.last_name')} required error={errors.last_name}>
+      <FormField label={$t('field.last_name')} required bind:error={errors.last_name}>
         <Input bind:value={lastName} maxlength={100} autocomplete="off" required />
       </FormField>
     </div>
-    <FormField label={$t('field.email')} hint={$t('users.email.hint')} error={errors.email}>
+    <FormField label={$t('field.email')} hint={$t('users.email.hint')} bind:error={errors.email}>
       <Input bind:value={email} type="email" maxlength={254} autocomplete="off" />
     </FormField>
     <FormField
@@ -162,10 +184,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <MultiPicker bind:selected={groupIds} options={groupOptions} />
       </FormField>
     {/if}
+    <!-- Only offered where it can work: without a mail server the link cannot be sent. -->
     <Checkbox
-      bind:checked={sendEmail}
+      checked={sendEmail}
+      disabled={!emailInvitations}
       label={$t('users.sendEmail.label')}
-      description={$t('users.sendEmail.text')}
+      description={emailInvitations
+        ? $t('users.sendEmail.text')
+        : $t('users.sendEmail.unavailable')}
+      onChange={(on) => (sendEmail = on)}
     />
   </form>
   {#snippet footer()}

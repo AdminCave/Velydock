@@ -5,6 +5,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { get } from 'svelte/store';
+import { STEAL_LIMIT } from '$lib/frameFocus';
+import { clearToasts, toasts } from '$lib/stores/toasts';
 import { frames, loadApps, resetWorkspace } from '$lib/stores/workspace';
 import { makeApp, stubApi } from '../../../test/fixtures';
 import AppStage from './AppStage.svelte';
@@ -55,6 +57,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearToasts();
+  document.getElementById('elsewhere')?.remove();
   vi.unstubAllGlobals();
 });
 
@@ -147,5 +151,95 @@ describe('AppStage', () => {
     await setup('missing');
     expect(await screen.findByText('Diese App gibt es hier nicht')).toBeInTheDocument();
     expect(mounted()).toEqual([]);
+  });
+});
+
+describe('an app that takes the keyboard focus although it is not its turn', () => {
+  const frameOf = (appId: string) =>
+    document.querySelector<HTMLIFrameElement>(
+      `iframe[data-app-id="${appId}"]`,
+    ) as HTMLIFrameElement;
+  // What the page sees when a frame focuses itself: the element that had the focus loses
+  // it, the <iframe> is document.activeElement, the window gets a `blur`. A browser lets a
+  // frame do that whether it is on screen or not, which is the problem. jsdom does not: it
+  // knows that an <iframe> that is not rendered cannot be focused and takes the focus away
+  // again with its next rendering update. So the frame is the active element by decree
+  // here, until the page focuses something else. Then a moment for the guard, which acts
+  // right after the event.
+  async function takesFocus(frame: HTMLIFrameElement) {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const active = vi.spyOn(document, 'activeElement', 'get').mockReturnValue(frame);
+    const release = () => active.mockRestore();
+    document.addEventListener('focusin', release, { capture: true, once: true });
+    window.dispatchEvent(new Event('blur'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    document.removeEventListener('focusin', release, true);
+    active.mockRestore();
+  }
+  // Somewhere else the user is typing: a field of Velydock, or a dialog.
+  function elsewhere(html: string): HTMLElement {
+    document.body.insertAdjacentHTML('beforeend', `<div id="elsewhere">${html}</div>`);
+    const control = document.querySelector<HTMLElement>('#elsewhere [data-here]') as HTMLElement;
+    control.focus();
+    return control;
+  }
+
+  it('gets the focus taken back while hidden, and is unloaded when it does not stop', async () => {
+    const view = await setup('wiki');
+    await view.rerender({ appId: 'a' }); // the user goes on to another app; Wiki stays alive
+    await waitFor(() => expect(visible()).toEqual(['a']));
+    const field = elsewhere('<input data-here />');
+    const wiki = frameOf('wiki');
+    for (let n = 1; n < STEAL_LIMIT; n++) {
+      await takesFocus(wiki);
+      expect(document.activeElement).toBe(field); // what is typed arrives where it was meant
+    }
+    expect(mounted()).toEqual(['wiki', 'a']);
+    expect(get(toasts)).toEqual([]);
+    await takesFocus(wiki);
+    // No accident any more: the app is closed, and the user is told which one and why.
+    await waitFor(() => expect(mounted()).toEqual(['a']));
+    expect(document.activeElement).toBe(field);
+    expect(get(toasts).map((toast) => toast.message)).toEqual([
+      '„Wiki“ wurde geschlossen: Die App hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
+    ]);
+    // Opening it again loads it fresh.
+    await view.rerender({ appId: 'wiki' });
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    expect(frameOf('wiki')).not.toBe(wiki);
+  });
+
+  it('keeps well-behaved apps alive untouched, and the app on screen its focus', async () => {
+    const view = await setup('wiki');
+    await view.rerender({ appId: 'a' });
+    await waitFor(() => expect(visible()).toEqual(['a']));
+    const [wiki, a] = [frameOf('wiki'), frameOf('a')];
+    a.focus(); // the user clicks into the app on screen
+    window.dispatchEvent(new Event('blur'));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(document.activeElement).toBe(a);
+    expect(mounted()).toEqual(['wiki', 'a']);
+    expect(frameOf('wiki')).toBe(wiki);
+    expect(get(toasts)).toEqual([]);
+  });
+
+  it('cannot pull the focus out of a dialog even as the app on screen, and says so when it was closed for it', async () => {
+    await setup('wiki');
+    const no = elsewhere(
+      '<div role="dialog" aria-modal="true" tabindex="-1"><button data-here>Abbrechen</button></div>',
+    );
+    const wiki = frameOf('wiki');
+    for (let n = 1; n <= STEAL_LIMIT; n++) {
+      await takesFocus(wiki);
+      expect(document.activeElement).toBe(no);
+    }
+    await waitFor(() => expect(mounted()).toEqual([]));
+    // Where the app was, the page says what happened and offers it again.
+    expect(screen.getByText('Diese App wurde geschlossen')).toBeVisible();
+    expect(get(toasts)).toHaveLength(1);
+    document.getElementById('elsewhere')?.remove();
+    await fireEvent.click(screen.getByRole('button', { name: 'App neu laden' }));
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    expect(screen.queryByText('Diese App wurde geschlossen')).toBeNull();
   });
 });

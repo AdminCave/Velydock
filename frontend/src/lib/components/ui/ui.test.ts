@@ -3,16 +3,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { createRawSnippet } from 'svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { createRawSnippet, tick } from 'svelte';
+import { navigate, startRouter } from '$lib/router';
 import { clearToasts, showError, showToast } from '$lib/stores/toasts';
 import { ApiError } from '$lib/api/client';
 import { initials } from './Avatar.svelte';
 import ConfirmDialog, { cancelConfirm, confirmDialog } from './ConfirmDialog.svelte';
+import EmptyState from './EmptyState.svelte';
+import FormField from './FormField.svelte';
 import { placeMenu } from './Menu.svelte';
 import Modal from './Modal.svelte';
-import MultiPicker, { filterOptions } from './MultiPicker.svelte';
-import { pageCount } from './Pagination.svelte';
+import MultiPicker, { CHIP_LIMIT, filterOptions } from './MultiPicker.svelte';
+import Pagination, { pageCount } from './Pagination.svelte';
 import SearchField from './SearchField.svelte';
 import Segmented from './Segmented.svelte';
 import Toast from './Toast.svelte';
@@ -134,6 +137,26 @@ describe('Toast', () => {
     );
   });
 
+  it('keeps a lane free at the bottom of the page for as long as it shows something', async () => {
+    // jsdom lays nothing out: the stack is given the height a browser would report.
+    const height = vi
+      .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('toast-stack') ? 120 : 0;
+      });
+    const lane = () => document.documentElement.style.getPropertyValue('--toast-lane');
+    const view = render(Toast);
+    await waitFor(() => expect(lane()).toBe('0px'));
+    showToast('Profil gespeichert.');
+    // The stack and the gaps around it: the page ends above it (Shell.svelte).
+    await waitFor(() => expect(lane()).toBe('144px'));
+    clearToasts();
+    await waitFor(() => expect(lane()).toBe('0px'));
+    view.unmount();
+    expect(lane()).toBe('');
+    height.mockRestore();
+  });
+
   it('stays quiet about a cancelled request', () => {
     render(Toast);
     showError(new DOMException('aborted', 'AbortError'));
@@ -144,6 +167,23 @@ describe('Toast', () => {
     render(Toast);
     showError(new ApiError(401, 'not_authenticated', 'Sign-in required.', {}));
     expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('says nothing for a request of a page that went away with its organization', async () => {
+    render(Toast);
+    // What tenantApi() fails with once another organization is on screen: nobody is
+    // waiting for it, and the change itself has been announced.
+    showError(new ApiError(409, 'tenant_changed', 'stale', { stale: true }));
+    expect(screen.queryByTestId('toast')).toBeNull();
+    // A refusal by the API is not reported from here either: the session store says it,
+    // once, when it has asked who the user is now (see the tests of the stores). A second
+    // toast with other words for the same event would only confuse.
+    showError(new ApiError(409, 'tenant_changed', 'refused', {}));
+    await tick();
+    expect(screen.queryByTestId('toast')).toBeNull();
+    // Any other refusal is reported.
+    showError(new ApiError(409, 'conflict', 'refused', {}));
+    expect(await screen.findByTestId('toast')).toBeInTheDocument();
   });
 });
 
@@ -273,6 +313,54 @@ describe('Modal', () => {
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     });
 
+    describe('and the Back button of the browser', () => {
+      const moved = () => new Promise((resolve) => setTimeout(resolve, 20));
+      let stop: () => void;
+      const open = (dirty: boolean) => {
+        stop = startRouter();
+        navigate('/admin/users');
+        navigate('/admin/groups');
+        const onClose = vi.fn();
+        render(ConfirmDialog);
+        render(Modal, { open: true, title: 'Formular', dirty, onClose, children: body });
+        return onClose;
+      };
+      afterEach(() => {
+        cancelConfirm();
+        stop();
+      });
+
+      it('asks before the input is lost, and stays when told to', async () => {
+        const onClose = open(true);
+        history.back();
+        const question = await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+        expect(window.location.pathname).toBe('/admin/groups'); // the page has not gone
+        await fireEvent.click(within(question).getByRole('button', { name: 'Weiter bearbeiten' }));
+        await moved();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(window.location.pathname).toBe('/admin/groups');
+        expect(screen.getByRole('dialog', { name: 'Formular' })).toBeVisible();
+      });
+
+      it('goes back once the user agrees to discard the input', async () => {
+        const onClose = open(true);
+        history.back();
+        const question = await screen.findByRole('dialog', { name: 'Eingaben verwerfen?' });
+        await fireEvent.click(within(question).getByRole('button', { name: 'Verwerfen' }));
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(window.location.pathname).toBe('/admin/users'));
+      });
+
+      it('is none of its business while there is nothing to lose', async () => {
+        open(false);
+        history.back();
+        await waitFor(() => expect(window.location.pathname).toBe('/admin/users'));
+        await moved();
+        expect(screen.queryByRole('dialog', { name: 'Eingaben verwerfen?' })).toBeNull();
+        expect(window.location.pathname).toBe('/admin/users');
+      });
+    });
+
     it('closes at once through the X', async () => {
       const onClose = vi.fn();
       render(Modal, { open: true, title: 'Formular', dirty: true, onClose, children: body });
@@ -321,6 +409,46 @@ describe('MultiPicker', () => {
     expect(mia.closest('label')).not.toHaveAttribute('title');
     await fireEvent.click(screen.getByRole('button', { name: 'Mia Mitglied entfernen' }));
     expect(onChange).toHaveBeenCalledWith(['1']);
+  });
+
+  describe('with a large selection', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ id: `u${i}`, label: `Person ${i}` }));
+    const chips = () =>
+      within(screen.getByTestId('picker-chips')).getAllByRole('button', { name: /entfernen$/ });
+
+    it('shows a few chips and how many more there are, so the list stays in reach', async () => {
+      render(MultiPicker, {
+        options: many,
+        selected: many.map((option) => option.id),
+        label: 'Mitglieder',
+      });
+      expect(chips()).toHaveLength(CHIP_LIMIT);
+      expect(CHIP_LIMIT).toBeLessThanOrEqual(8);
+      const more = screen.getByRole('button', { name: `und ${40 - CHIP_LIMIT} weitere` });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      // The count line still tells the whole number, and the list is all there.
+      expect(screen.getByText('40 von 40 ausgewählt')).toBeVisible();
+      expect(screen.getAllByRole('checkbox')).toHaveLength(40);
+
+      await fireEvent.click(more);
+      expect(chips()).toHaveLength(40);
+      const fewer = screen.getByRole('button', { name: 'Weniger anzeigen' });
+      expect(fewer).toHaveAttribute('aria-expanded', 'true');
+      await fireEvent.click(fewer);
+      expect(chips()).toHaveLength(CHIP_LIMIT);
+    });
+
+    it('counts down as entries are removed and drops the fold when all fit', async () => {
+      const onChange = vi.fn();
+      const selected = many.slice(0, CHIP_LIMIT + 1).map((option) => option.id);
+      const view = render(MultiPicker, { options: many, selected, label: 'Mitglieder', onChange });
+      expect(screen.getByRole('button', { name: 'und 1 weitere' })).toBeVisible();
+      await fireEvent.click(screen.getByRole('button', { name: 'Person 0 entfernen' }));
+      expect(onChange).toHaveBeenCalledWith(selected.slice(1));
+      await view.rerender({ selected: selected.slice(1) });
+      expect(chips()).toHaveLength(CHIP_LIMIT);
+      expect(screen.queryByRole('button', { name: /weitere$/ })).toBeNull();
+    });
   });
 
   it('lets every entry be toggled when none is locked', async () => {
@@ -435,5 +563,70 @@ describe('Segmented', () => {
   it('can be disabled as a whole', () => {
     render(Segmented, { value: 'light', options, label: 'Design', disabled: true });
     for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled();
+  });
+});
+
+describe('FormField', () => {
+  const control = createRawSnippet(() => ({ render: () => '<input aria-label="Name" />' }));
+
+  it('takes its message back as soon as the field is edited', async () => {
+    render(FormField, { label: 'Name', error: 'Dieses Feld wird gebraucht.', children: control });
+    expect(screen.getByText('Dieses Feld wird gebraucht.')).toBeInTheDocument();
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'V' } });
+    // The message was about what stood there before.
+    expect(screen.queryByText('Dieses Feld wird gebraucht.')).toBeNull();
+  });
+
+  it('shows the hint again in its place', async () => {
+    render(FormField, {
+      label: 'Name',
+      hint: 'So heißt die Gruppe in Listen.',
+      error: 'Dieses Feld wird gebraucht.',
+      children: control,
+    });
+    expect(screen.queryByText('So heißt die Gruppe in Listen.')).toBeNull();
+    await fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Vertrieb' } });
+    expect(screen.getByText('So heißt die Gruppe in Listen.')).toBeInTheDocument();
+  });
+
+  it('leaves it to the page to forget a message the page made up itself', async () => {
+    const onedit = vi.fn();
+    render(FormField, { label: 'Name', error: 'Stimmt nicht überein.', onedit, children: control });
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'a' } });
+    expect(onedit).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Stimmt nicht überein.')).toBeInTheDocument(); // the page decides
+  });
+
+  it('does not bother the page while there is no message', async () => {
+    const onedit = vi.fn();
+    render(FormField, { label: 'Name', onedit, children: control });
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'a' } });
+    expect(onedit).not.toHaveBeenCalled();
+  });
+});
+
+describe('Pagination', () => {
+  const props = { page: 1, pageSize: 25, onChange: () => {} };
+
+  it('shows where the user is in a list', () => {
+    render(Pagination, { ...props, total: 60 });
+    expect(screen.getByRole('navigation', { name: 'Seiten' })).toHaveTextContent('1–25 von 60');
+  });
+
+  it('shows nothing for an empty list', () => {
+    render(Pagination, { ...props, total: 0 });
+    // No "0–0 von 0 · Seite 1/1".
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(document.body).not.toHaveTextContent('von 0');
+  });
+});
+
+describe('EmptyState', () => {
+  it('is a section of a page by default, and the heading of a page that is nothing else', () => {
+    const first = render(EmptyState, { title: 'Noch keine Gruppen' });
+    expect(screen.getByRole('heading', { level: 3, name: 'Noch keine Gruppen' })).toBeVisible();
+    first.unmount();
+    render(EmptyState, { title: 'Kein Zugriff', page: true });
+    expect(screen.getByRole('heading', { level: 1, name: 'Kein Zugriff' })).toBeVisible();
   });
 });

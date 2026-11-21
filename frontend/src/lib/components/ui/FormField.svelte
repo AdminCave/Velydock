@@ -6,6 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { language, t } from '$lib/i18n';
   import { setField } from './field';
 
   interface Props {
@@ -14,17 +15,39 @@ SPDX-License-Identifier: GPL-3.0-or-later
     id?: string;
     required?: boolean;
     hint?: string;
-    // Replaces the hint and marks the control invalid.
+    // Replaces the hint and marks the control invalid. It is taken back as soon as the
+    // user edits the field: the message was about what stood there before. Pass it with
+    // `bind:error`, or say with `onedit` how the page forgets it.
     error?: string;
+    onedit?: () => void;
     children: Snippet;
   }
 
   const uid = $props.id();
-  let { label, id = `${uid}-control`, required = false, hint, error, children }: Props = $props();
+  let {
+    label,
+    id = `${uid}-control`,
+    required = false,
+    hint,
+    error = $bindable(),
+    onedit,
+    children,
+  }: Props = $props();
+
+  // `input` and `change` of whatever control the field holds bubble up to here.
+  function edited() {
+    if (!error) return;
+    if (onedit) onedit();
+    else error = undefined;
+  }
 
   const labelId = `${uid}-label`;
   const msgId = `${uid}-msg`;
+  const limitId = `${uid}-limit`;
   let group = $state(false);
+  // The browser stops typing at `maxlength` without a word and cuts what is pasted. Once
+  // the control is full the field says so, so that nobody saves a cut text unawares.
+  let limit = $state<number | null>(null);
 
   setField({
     get id() {
@@ -34,7 +57,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
       return label ? labelId : undefined;
     },
     get describedBy() {
-      return error || hint ? msgId : undefined;
+      const ids = [error || hint ? msgId : null, limit !== null ? limitId : null];
+      return ids.filter(Boolean).join(' ') || undefined;
     },
     get invalid() {
       return !!error;
@@ -42,10 +66,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
     markGroup() {
       group = true;
     },
+    atLimit(max) {
+      limit = max;
+    },
   });
 </script>
 
-<div class="ui-field">
+<div class="ui-field" oninput={edited} onchange={edited}>
   {#if label}
     <!-- The asterisk sits next to the label, not inside it: the label's text, and with it
          the accessible name of the control, is exactly the label. -->
@@ -59,6 +86,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <span class="msg error" id={msgId}>{error}</span>
   {:else if hint}
     <span class="msg" id={msgId}>{hint}</span>
+  {/if}
+  {#if limit !== null}
+    <span class="msg limit" id={limitId} role="status" data-testid="field-limit">
+      {$t('validation.maxLength', { max: new Intl.NumberFormat($language).format(limit) })}
+    </span>
   {/if}
 </div>
 
@@ -88,5 +120,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
   .error {
     color: var(--danger);
+  }
+  .limit {
+    color: var(--text-muted);
   }
 </style>

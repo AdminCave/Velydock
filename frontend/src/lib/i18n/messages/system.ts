@@ -45,6 +45,10 @@ export const system = {
     'This short name is reserved. Please choose another one.',
   ],
   'tenants.created': ['Organisation {name} angelegt.', 'Organization {name} created.'],
+  'tenants.protected.hint': [
+    'Zu dieser Organisation gehört das Konto eines Systemadministrators. Sie lässt sich deshalb weder deaktivieren noch löschen.',
+    'This organization owns the account of a system administrator. It can therefore be neither deactivated nor deleted.',
+  ],
   'tenants.renamed': [
     'Die Organisation heißt jetzt {name}.',
     'The organization is now called {name}.',
@@ -119,8 +123,8 @@ export const system = {
     'Make {name} a system administrator?',
   ],
   'systemUsers.grant.detail': [
-    'Systemadministratoren dürfen alles: jede Organisation betreten, Benutzer und Apps ändern, Organisationen löschen und dieses Recht weitergeben.',
-    'System administrators may do everything: enter any organization, change users and apps, delete organizations and pass this right on.',
+    'Systemadministratoren dürfen alles: jede Organisation betreten, Benutzer und Apps ändern, Organisationen löschen und dieses Recht weitergeben. Die Person wird dabei abgemeldet; das neue Recht gilt nach ihrer nächsten Anmeldung.',
+    'System administrators may do everything: enter any organization, change users and apps, delete organizations and pass this right on. The person is signed out in the process; the new right applies after their next sign-in.',
   ],
   'systemUsers.revoke.title': ['Recht entziehen', 'Revoke right'],
   'systemUsers.revoke.question': [
@@ -173,7 +177,15 @@ export const system = {
     'Whoever manages users, organizations or the system has to set up and use a second factor when signing in. Applies from the next sign-in on.',
   ],
   'systemSettings.saved': ['Systemeinstellungen gespeichert.', 'System settings saved.'],
+  'systemUsers.revoke.self': [
+    'Das eigene Systemadministrator-Recht kannst du dir nicht selbst entziehen. Das kann ein anderer Systemadministrator.',
+    'You cannot revoke your own system administrator right. Another system administrator can.',
+  ],
   'systemSettings.unchanged': ['Es gibt nichts zu speichern.', 'There is nothing to save.'],
+  'systemSettings.instanceName.markup': [
+    'Der Name darf weder < noch > enthalten und keine Zeichenreferenzen wie &lt; oder &#60;. Der Anmeldedienst zeigt ihn auf seinen Seiten und in E-Mails und würde daraus Links oder Bilder machen. Ein einfaches & ist erlaubt.',
+    'The name must contain neither < nor > and no character references such as &lt; or &#60;. The identity provider shows it on its pages and in e-mails and would turn them into links or images. A plain & is fine.',
+  ],
   'systemSettings.smtp.title': ['E-Mail-Versand (SMTP)', 'E-mail delivery (SMTP)'],
   'systemSettings.smtp.text': [
     'Wird für die Links zum Passwort-Setzen gebraucht. Ohne SMTP bekommen Administratoren stattdessen ein Einmalpasswort angezeigt.',

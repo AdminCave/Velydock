@@ -133,6 +133,27 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/admin/capabilities': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Capabilities
+     * @description What depends on the installation rather than on the role - so the user interface does not
+     *     offer what cannot work (the e-mail invitation without a mail server).
+     */
+    get: operations['capabilities_api_v1_admin_capabilities_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/groups': {
     parameters: {
       query?: never;
@@ -543,6 +564,11 @@ export interface components {
        */
       tenant_id: string;
     };
+    /** AdminCapabilities */
+    AdminCapabilities: {
+      /** Email Invitations */
+      email_invitations: boolean;
+    };
     /** AppCreate */
     AppCreate: {
       /**
@@ -892,6 +918,11 @@ export interface components {
       /** Account Url */
       account_url: string;
       active_tenant: components['schemas']['TenantRef'] | null;
+      /**
+       * Inactive Memberships
+       * @default 0
+       */
+      inactive_memberships: number;
       /** Instance Name */
       instance_name: string;
       /** Memberships */
@@ -1138,6 +1169,11 @@ export interface components {
       name: string;
       /** Nav Position Locked */
       nav_position_locked: boolean;
+      /**
+       * Protected
+       * @default false
+       */
+      protected: boolean;
       /** Slug */
       slug: string;
     };
@@ -1641,6 +1677,26 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  capabilities_api_v1_admin_capabilities_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminCapabilities'];
         };
       };
     };

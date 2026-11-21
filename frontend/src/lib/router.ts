@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 
 // History API router. The server answers every non-API path with index.html, so paths are
 // real URLs: /admin/users, /app/<id>. Plain same-origin <a href> elements are intercepted,
@@ -103,8 +103,44 @@ function onClick(event: MouseEvent): void {
   navigate(url.pathname + url.search);
 }
 
+// Whoever holds input that would be lost by leaving (a dialog with unsaved input) can ask
+// to be asked first. The topmost one decides.
+const leaveGuards: (() => Promise<boolean>)[] = [];
+let passing = false;
+
+/**
+ * Ask before the browser's Back or Forward button takes the user away. `ask` resolves
+ * true when leaving is fine (after it has let go of what it held). Returns the function
+ * that withdraws the guard.
+ *
+ * The browser has already moved when the page hears of it, and that cannot be refused.
+ * So the address is put back at once, the question is asked, and on "yes" the step is
+ * taken again.
+ */
+export function guardLeaving(ask: () => Promise<boolean>): () => void {
+  leaveGuards.push(ask);
+  return () => {
+    const at = leaveGuards.indexOf(ask);
+    if (at >= 0) leaveGuards.splice(at, 1);
+  };
+}
+
 function onPopState(): void {
-  _location.set(read());
+  const guard = leaveGuards.at(-1);
+  if (!guard || passing) {
+    passing = false;
+    _location.set(read());
+    return;
+  }
+  // Where the user wanted to go lies one step back from the entry that is added here,
+  // whichever button they pressed.
+  const stay = get(_location);
+  history.pushState(null, '', stay.path + stay.search);
+  void guard().then((leave) => {
+    if (!leave) return;
+    passing = true;
+    history.back();
+  });
 }
 
 /** Start listening for link clicks and history navigation. Returns the stop function. */
@@ -145,7 +181,11 @@ export function loginPath(from: RouteLocation, options: { expired?: boolean } = 
   return query.length > 0 ? `/login?${query.join('&')}` : '/login';
 }
 
-/** Backend address that starts the sign-in (a full page navigation, not a fetch). */
-export function signInUrl(returnTo: string | null | undefined): string {
-  return `/api/auth/login?return_to=${encodeURIComponent(safeReturnPath(returnTo))}`;
+/**
+ * Backend address that starts the sign-in (a full page navigation, not a fetch).
+ * `language` is the one the page is shown in: the identity provider's pages follow it.
+ */
+export function signInUrl(returnTo: string | null | undefined, language?: string): string {
+  const url = `/api/auth/login?return_to=${encodeURIComponent(safeReturnPath(returnTo))}`;
+  return language ? `${url}&lang=${encodeURIComponent(language)}` : url;
 }

@@ -7,13 +7,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts">
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import LogOut from '@lucide/svelte/icons/log-out';
-  import { fieldErrors } from '$lib/api/errors';
   import Button from '$lib/components/ui/Button.svelte';
   import FormField from '$lib/components/ui/FormField.svelte';
   import Input from '$lib/components/ui/Input.svelte';
   import { t } from '$lib/i18n';
   import { me, signOut, updateProfile } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
+  import { refusedFields } from '$lib/utils/forms';
+  import { normalizeName, personNameProblem } from '$lib/utils/validate';
 
   let firstName = $state('');
   let lastName = $state('');
@@ -30,20 +31,35 @@ SPDX-License-Identifier: GPL-3.0-or-later
     lastName = storedLast;
   });
 
-  const changed = $derived(firstName.trim() !== storedFirst || lastName.trim() !== storedLast);
-  const valid = $derived(firstName.trim().length > 0 && lastName.trim().length > 0);
+  // Compared as the server stores names (one blank between words): a change of blanks
+  // alone is none.
+  const changed = $derived(
+    normalizeName(firstName) !== storedFirst || normalizeName(lastName) !== storedLast,
+  );
 
   async function save(event: SubmitEvent) {
     event.preventDefault();
-    if (!valid || !changed || saving) return;
+    if (!changed || saving) return;
+    // The rule for names is checked here first, so the message stands at the field and
+    // says what is wrong with it.
+    const found: Record<string, string> = {};
+    const first = personNameProblem(firstName);
+    const last = personNameProblem(lastName);
+    if (first) found.first_name = $t(first);
+    if (last) found.last_name = $t(last);
+    errors = found;
+    if (Object.keys(found).length > 0) return;
     saving = true;
-    errors = {};
     try {
-      await updateProfile(firstName.trim(), lastName.trim());
+      await updateProfile(normalizeName(firstName), normalizeName(lastName));
       showToast($t('profile.saved'));
     } catch (err) {
-      errors = fieldErrors(err);
-      showError(err);
+      // What the server refuses about one field is said at that field as well.
+      errors = refusedFields(err, {
+        first_name: () => $t(personNameProblem(firstName) ?? 'validation.invalid'),
+        last_name: () => $t(personNameProblem(lastName) ?? 'validation.invalid'),
+      });
+      if (Object.keys(errors).length === 0) showError(err);
     } finally {
       saving = false;
     }
@@ -70,18 +86,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
       </div>
       <form class="form" onsubmit={save} novalidate>
         <div class="form-row">
-          <FormField
-            label={$t('field.first_name')}
-            required
-            error={errors.first_name ? $t('validation.required') : undefined}
-          >
+          <FormField label={$t('field.first_name')} required bind:error={errors.first_name}>
             <Input bind:value={firstName} maxlength={100} autocomplete="given-name" required />
           </FormField>
-          <FormField
-            label={$t('field.last_name')}
-            required
-            error={errors.last_name ? $t('validation.required') : undefined}
-          >
+          <FormField label={$t('field.last_name')} required bind:error={errors.last_name}>
             <Input bind:value={lastName} maxlength={100} autocomplete="family-name" required />
           </FormField>
         </div>
@@ -94,7 +102,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
           </FormField>
         </div>
         <div class="form-actions">
-          <Button type="submit" loading={saving} disabled={!changed || !valid}>
+          <Button type="submit" loading={saving} disabled={!changed}>
             {$t('action.save')}
           </Button>
         </div>
@@ -124,7 +132,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
           {/if}
         </dl>
       {:else}
-        <p class="help">{$t('profile.org.none')}</p>
+        <p class="help">
+          {$me.inactive_memberships > 0 ? $t('profile.org.inactive') : $t('profile.org.none')}
+        </p>
       {/if}
     </section>
 

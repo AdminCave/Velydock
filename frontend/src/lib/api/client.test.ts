@@ -9,10 +9,12 @@ import {
   TENANT_HEADER,
   api,
   buildUrl,
+  isStaleRequest,
   request,
   setActiveTenant,
   setTenantChangedHandler,
   setUnauthorizedHandler,
+  tenantApi,
 } from './client';
 
 function json(body: unknown, status = 200): Response {
@@ -281,6 +283,105 @@ describe('active organization', () => {
     fetchMock.mockResolvedValue(apiError(403, 'tenant_changed'));
     await request('post', '/x').catch(() => {});
     expect(changed).not.toHaveBeenCalled();
+  });
+});
+
+describe('the API of a page that belongs to one organization (tenantApi)', () => {
+  it('names the organization the page was opened for', async () => {
+    setActiveTenant('t-acme');
+    const page = tenantApi();
+    fetchMock.mockImplementation(async () => json({}));
+    await page.get('/api/v1/admin/groups');
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-acme');
+    await page.post('/api/v1/admin/groups', { body: { name: 'IT', description: '' } });
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-acme');
+    expect(lastCall().headers[CSRF_HEADER]).toBe('1');
+  });
+
+  it('sends nothing once another organization is on screen, whatever the page still wants', async () => {
+    const changed = vi.fn();
+    setTenantChangedHandler(changed);
+    setActiveTenant('t-acme');
+    const page = tenantApi();
+    fetchMock.mockImplementation(async () => json({}));
+    setActiveTenant('t-main'); // the organization changed: the page is gone
+    const error = (await page
+      .delete('/api/v1/admin/users/{user_id}', { path: { user_id: 'u-mia' } })
+      .catch((e: unknown) => e)) as ApiError;
+    // Not sent, not even with the old organization in the header …
+    expect(fetchMock).not.toHaveBeenCalled();
+    // … and it fails like a request the API refused for that reason, without the handler:
+    // the session store knows the new organization already.
+    expect(error).toMatchObject({ status: 409, code: 'tenant_changed' });
+    expect(isStaleRequest(error)).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+    // The plain api, and a page opened now, speak for the organization on screen.
+    await api.get('/api/v1/me');
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-main');
+    await tenantApi().get('/api/v1/admin/groups');
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-main');
+  });
+
+  it('stays silent for good: coming back to the first organization does not revive the old page', async () => {
+    setActiveTenant('t-acme');
+    const page = tenantApi();
+    setActiveTenant('t-main');
+    setActiveTenant('t-acme');
+    fetchMock.mockImplementation(async () => json({}));
+    const error = await page.get('/api/v1/admin/groups').catch((e: unknown) => e);
+    expect(isStaleRequest(error)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('is not disturbed by anything that leaves the organization as it is', async () => {
+    setActiveTenant('t-acme');
+    const page = tenantApi();
+    setActiveTenant('t-acme'); // e.g. a settings change: a new user object, same organization
+    fetchMock.mockImplementation(async () => json({}));
+    await page.get('/api/v1/admin/groups');
+    expect(lastCall().headers[TENANT_HEADER]).toBe('t-acme');
+  });
+
+  it('reports nothing for a refusal that arrives when the page is gone already', async () => {
+    const changed = vi.fn();
+    setTenantChangedHandler(changed);
+    setActiveTenant('t-acme');
+    const page = tenantApi();
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const pending = page.get('/api/v1/admin/groups').catch((e: unknown) => e);
+    setActiveTenant('t-main'); // the user switched with this request under way
+    answer(apiError(409, 'tenant_changed'));
+    expect(isStaleRequest(await pending)).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('reports a refusal for a page that is still there, like any other request', async () => {
+    const changed = vi.fn();
+    setTenantChangedHandler(changed);
+    setActiveTenant('t-acme');
+    fetchMock.mockResolvedValue(apiError(409, 'tenant_changed'));
+    const error = await tenantApi()
+      .get('/api/v1/admin/groups')
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 409, code: 'tenant_changed' });
+    expect(isStaleRequest(error)).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a request in the background', () => {
+  it('throws a 401 without reporting the end of the session', async () => {
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    fetchMock.mockImplementation(async () => apiError(401, 'not_authenticated'));
+    await expect(api.get('/api/v1/me', { background: true })).rejects.toMatchObject({
+      status: 401,
+      code: 'not_authenticated',
+    });
+    expect(unauthorized).not.toHaveBeenCalled();
+    await api.get('/api/v1/me').catch(() => {});
+    expect(unauthorized).toHaveBeenCalledTimes(1);
   });
 });
 

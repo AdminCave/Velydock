@@ -14,6 +14,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
     locked?: boolean;
   }
 
+  /**
+   * How many chosen entries are shown as chips before the rest is folded into "and n
+   * more": a large selection (every member of an organization in one group) must not
+   * push the list it is made in out of the dialog.
+   */
+  export const CHIP_LIMIT = 6;
+
   /** Options whose label or detail contains the query (case-insensitive). */
   export function filterOptions(options: readonly PickerOption[], query: string): PickerOption[] {
     const needle = query.trim().toLowerCase();
@@ -67,6 +74,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const byId = $derived(new Map(options.map((o) => [o.id, o])));
   // Ids that are selected but (no longer) offered are kept, not silently dropped.
   const chips = $derived(selected.map((id) => byId.get(id)).filter((o) => o !== undefined));
+  // The first few chips; all of them (in a box that scrolls) once the user asks for it.
+  let allChips = $state(false);
+  const shownChips = $derived(allChips ? chips : chips.slice(0, CHIP_LIMIT));
 
   function set(next: string[]) {
     selected = next;
@@ -91,8 +101,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   aria-describedby={field?.describedBy}
 >
   {#if chips.length > 0}
-    <div class="chips">
-      {#each chips as chip (chip.id)}
+    <div class="chips" data-testid="picker-chips">
+      {#each shownChips as chip (chip.id)}
         <Tag
           tone="neutral"
           mono={false}
@@ -103,6 +113,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
         </Tag>
       {/each}
     </div>
+    {#if chips.length > CHIP_LIMIT}
+      <button
+        type="button"
+        class="more"
+        aria-expanded={allChips}
+        onclick={() => (allChips = !allChips)}
+      >
+        {allChips ? $t('picker.less') : $t('picker.more', { count: chips.length - CHIP_LIMIT })}
+      </button>
+    {/if}
   {/if}
   {#if options.length > 6}
     <SearchField
@@ -153,10 +173,28 @@ SPDX-License-Identifier: GPL-3.0-or-later
   .disabled {
     opacity: 0.6;
   }
+  /* A few lines at most: with everything shown the chips scroll inside their own box. */
   .chips {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
+    max-height: 7.5rem;
+    overflow-y: auto;
+  }
+  .more {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .more:hover {
+    color: var(--text);
   }
   .list {
     max-height: 208px;
@@ -185,6 +223,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
   .row:hover {
     background: var(--surface-hover);
+  }
+  /* On the highlighted row the subtle tone would fall below 4.5:1. */
+  .row:hover .detail {
+    color: var(--text-muted);
   }
   .row:has(input:focus-visible) {
     box-shadow: inset 0 0 0 2px var(--ring);

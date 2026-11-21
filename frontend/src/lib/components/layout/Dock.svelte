@@ -8,6 +8,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { tick } from 'svelte';
   import Building from '@lucide/svelte/icons/building';
   import Check from '@lucide/svelte/icons/check';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import ChevronUp from '@lucide/svelte/icons/chevron-up';
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
   import LogOut from '@lucide/svelte/icons/log-out';
   import Settings from '@lucide/svelte/icons/settings';
@@ -26,6 +30,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { navigate } from '$lib/router';
   import { signOut, switchTenant } from '$lib/stores/session';
   import { showError } from '$lib/stores/toasts';
+  import { measureOverflow, scrollByPage } from '$lib/utils/overflow';
 
   interface Props {
     me: Me;
@@ -65,6 +70,65 @@ SPDX-License-Identifier: GPL-3.0-or-later
   function onWheel(event: WheelEvent) {
     if (orientation !== 'horizontal' || !list) return;
     if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) list.scrollLeft += event.deltaY;
+  }
+
+  // The list scrolls without a scrollbar, so the dock itself has to show that there are
+  // more apps than fit. As soon as they do not all fit, the list gives up a little room
+  // at both ends, and the end that has more beyond it shows a marker there, which also
+  // scrolls on a click. The markers stand beside the list, never over an app. Measured
+  // again whenever the list scrolls, changes its size or its entries.
+  let overflowing = $state(false);
+  let more = $state({ before: false, after: false });
+
+  function measure() {
+    if (!list) return;
+    const next = measureOverflow(list, orientation === 'horizontal');
+    if (next.overflowing !== overflowing) overflowing = next.overflowing;
+    if (next.before !== more.before || next.after !== more.after) {
+      more = { before: next.before, after: next.after };
+    }
+  }
+
+  $effect(() => {
+    const el = list;
+    if (!el) return;
+    void apps;
+    void orientation;
+    void compact;
+    void tick().then(measure);
+    // The list, the room it lies in and its entries: a label that gets wider (a font that
+    // arrives late, another language) changes what fits without changing the list's size.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(el);
+    if (el.parentElement) observer?.observe(el.parentElement);
+    for (const entry of el.children) observer?.observe(entry);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  });
+
+  // An entry reached with the keyboard is brought into view completely. One that is larger
+  // than the list (a long name in a narrow bar) shows its beginning: icon and first words.
+  function onFocusIn(event: FocusEvent) {
+    if (!list || !(event.target instanceof Element)) return;
+    const entry = event.target.closest<HTMLElement>('.dock-entry');
+    if (!entry) return;
+    const horizontal = orientation === 'horizontal';
+    const fits = horizontal
+      ? entry.offsetWidth <= list.clientWidth
+      : entry.offsetHeight <= list.clientHeight;
+    const along = fits ? 'nearest' : 'start';
+    entry.scrollIntoView?.({
+      block: horizontal ? 'nearest' : along,
+      inline: horizontal ? along : 'nearest',
+    });
+  }
+
+  // A marker scrolls most of what is visible, so the entry at the cut stays in sight.
+  function scrollApps(direction: -1 | 1) {
+    if (list) scrollByPage(list, orientation === 'horizontal', direction);
   }
 
   // Keep the active app in view when the dock scrolls.
@@ -117,27 +181,80 @@ SPDX-License-Identifier: GPL-3.0-or-later
   </a>
 
   <span class="divider" aria-hidden="true"></span>
-  <ul class="apps" bind:this={list} aria-label={$t('dock.apps')} onwheel={onWheel}>
-    {#each apps as app (app.id)}
-      {@const active = app.id === activeAppId}
-      <li>
-        <a
-          class="dock-entry"
-          class:active
-          href="/app/{app.id}"
-          title={app.type === 'external' ? `${app.name} – ${$t('app.opensInNewTab')}` : app.name}
-          aria-current={active ? 'page' : undefined}
-          data-testid="dock-app"
-          data-app-id={app.id}
-          data-app-type={app.type}
-          onclick={(e) => onAppClick(e, app)}
-        >
-          <span class="glyph"><AppIcon name={app.icon_name} url={app.icon_url} size={22} /></span>
-          <span class="label">{app.name}</span>
-        </a>
-      </li>
-    {/each}
-  </ul>
+  <div class="apps-wrap">
+    <!-- The markers are for the pointer: the keyboard reaches every app with Tab, and the
+         list scrolls along with the focus. -->
+    {#if overflowing}
+      <span class="more-slot">
+        {#if more.before}
+          <button
+            type="button"
+            class="more"
+            tabindex="-1"
+            aria-label={$t('dock.apps.before')}
+            title={$t('dock.apps.before')}
+            data-testid="dock-more-before"
+            onclick={() => scrollApps(-1)}
+          >
+            {#if orientation === 'horizontal'}
+              <ChevronLeft size={16} />
+            {:else}
+              <ChevronUp size={16} />
+            {/if}
+          </button>
+        {/if}
+      </span>
+    {/if}
+    <ul
+      class="apps"
+      bind:this={list}
+      aria-label={$t('dock.apps')}
+      onwheel={onWheel}
+      onscroll={measure}
+      onfocusin={onFocusIn}
+    >
+      {#each apps as app (app.id)}
+        {@const active = app.id === activeAppId}
+        <li>
+          <a
+            class="dock-entry"
+            class:active
+            href="/app/{app.id}"
+            title={app.type === 'external' ? `${app.name} – ${$t('app.opensInNewTab')}` : app.name}
+            aria-current={active ? 'page' : undefined}
+            data-testid="dock-app"
+            data-app-id={app.id}
+            data-app-type={app.type}
+            onclick={(e) => onAppClick(e, app)}
+          >
+            <span class="glyph"><AppIcon name={app.icon_name} url={app.icon_url} size={22} /></span>
+            <span class="label">{app.name}</span>
+          </a>
+        </li>
+      {/each}
+    </ul>
+    {#if overflowing}
+      <span class="more-slot">
+        {#if more.after}
+          <button
+            type="button"
+            class="more"
+            tabindex="-1"
+            aria-label={$t('dock.apps.after')}
+            title={$t('dock.apps.after')}
+            data-testid="dock-more-after"
+            onclick={() => scrollApps(1)}
+          >
+            {#if orientation === 'horizontal'}
+              <ChevronRight size={16} />
+            {:else}
+              <ChevronDown size={16} />
+            {/if}
+          </button>
+        {/if}
+      </span>
+    {/if}
+  </div>
 
   <span class="divider" aria-hidden="true"></span>
 
@@ -163,8 +280,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
         testid="tenant-switcher"
         triggerClass="dock-entry dock-tenant"
         {placement}
-        disabled={switching}
       >
+        <!-- Not disabled while a switch runs (enterTenant() ignores a second one): a
+             disabled button cannot hold the focus the menu gives back to it, and the
+             keyboard would be left on <body>. -->
         {#snippet trigger()}
           <span class="glyph"><Building size={22} /></span>
           <span class="label">{tenantName}</span>
@@ -265,6 +384,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
     flex: 0 0 auto;
     background: var(--border);
   }
+  .apps-wrap {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+  }
   .apps {
     display: flex;
     flex: 1 1 auto;
@@ -278,6 +403,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
     display: flex;
     flex: 0 0 auto;
     min-width: 0;
+  }
+  /* More apps than fit: room at both ends of the list (script: `overflowing`), and in it
+     a marker towards the end that has more beyond it. */
+  .more-slot {
+    display: flex;
+    flex: 0 0 24px;
+  }
+  .more {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .more:hover {
+    background: var(--surface-hover);
+    color: var(--text-strong);
   }
   .tools {
     display: flex;
@@ -363,12 +511,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
     width: 36px;
     height: 1px;
   }
-  [data-orientation='vertical'] .apps {
+  [data-orientation='vertical'] .apps-wrap {
     flex-direction: column;
     align-self: stretch;
+  }
+  [data-orientation='vertical'] .apps {
+    flex-direction: column;
     gap: 2px;
     overflow-x: hidden;
     overflow-y: auto;
+    /* The rail scrolls by wheel, touch, keyboard focus and its markers; a scrollbar
+       would crowd it. */
+    scrollbar-width: none;
+  }
+  [data-orientation='vertical'] .apps::-webkit-scrollbar {
+    display: none;
+  }
+  [data-orientation='vertical'] .more-slot {
+    margin: 0 var(--space-2);
   }
   [data-orientation='vertical'] .apps li {
     flex-direction: column;
@@ -422,9 +582,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
     width: 1px;
     height: 24px;
   }
+  [data-orientation='horizontal'] .apps-wrap {
+    align-self: stretch;
+  }
+  [data-orientation='horizontal'] .more-slot {
+    align-self: center;
+    height: 40px;
+  }
   [data-orientation='horizontal'] .apps {
     flex-direction: row;
-    align-self: stretch;
     align-items: center;
     gap: var(--space-1);
     overflow-x: auto;

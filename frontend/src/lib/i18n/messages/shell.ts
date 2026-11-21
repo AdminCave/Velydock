@@ -14,8 +14,8 @@ export const shell = {
   ],
   'login.signedOut': ['Du bist abgemeldet. Bis später.', 'You are signed out. See you later.'],
   'login.sessionExpired': [
-    'Deine Sitzung ist abgelaufen. Melde dich erneut an, dann geht es dort weiter, wo du warst.',
-    'Your session has expired. Sign in again and you will be back where you were.',
+    'Deine Sitzung ist abgelaufen oder wurde beendet. Melde dich erneut an, dann geht es dort weiter, wo du warst.',
+    'Your session has expired or was ended. Sign in again and you will be back where you were.',
   ],
 
   // ── Session ──────────────────────────────────────────────────────────
@@ -35,12 +35,20 @@ export const shell = {
     'Die Organisation, in der du gearbeitet hast, steht dir nicht mehr zur Verfügung.',
     'The organization you were working in is no longer available to you.',
   ],
+  'session.ended.title': ['Deine Velydock-Sitzung ist beendet', 'Your Velydock session has ended'],
+  'session.ended.text': [
+    'Die geöffneten Apps laufen weiter. Sichere dort jetzt deine Arbeit und melde dich danach neu an – dabei werden die Apps neu geladen.',
+    'The open apps keep running. Save your work there now, then sign in again – the apps are reloaded when you do.',
+  ],
+  'session.ended.signIn': ['Neu anmelden', 'Sign in again'],
 
   // ── Dock ─────────────────────────────────────────────────────────────
   'shell.skip': ['Zum Inhalt springen', 'Skip to content'],
   'dock.label': ['Hauptnavigation', 'Main navigation'],
   'dock.home': ['Startseite', 'Home'],
   'dock.apps': ['Apps', 'Apps'],
+  'dock.apps.before': ['Vorherige Apps zeigen', 'Show previous apps'],
+  'dock.apps.after': ['Weitere Apps zeigen', 'Show more apps'],
   'dock.admin': ['Verwaltung', 'Admin'],
   'dock.tenant.switch': [
     'Organisation wechseln (aktuell: {name})',
@@ -56,6 +64,8 @@ export const shell = {
 
   // ── Secondary navigation of the administration ───────────────────────
   'nav.admin.label': ['Verwaltung', 'Administration'],
+  'nav.admin.before': ['Vorherige Einträge zeigen', 'Show previous entries'],
+  'nav.admin.after': ['Weitere Einträge zeigen', 'Show more entries'],
   'nav.admin.scope': [
     'Diese Seiten gelten für die aktive Organisation',
     'These pages act on the active organization',

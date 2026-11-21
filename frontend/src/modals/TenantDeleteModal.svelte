@@ -84,6 +84,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <FormField
         label={$t('tenants.delete.confirmLabel', { slug: tenant.slug })}
         error={mismatch ? $t('error.confirmation_mismatch') : undefined}
+        onedit={() => (mismatch = false)}
       >
         <Input
           bind:value={typed}

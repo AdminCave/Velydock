@@ -13,25 +13,60 @@ import { ACME, MAIN, errorResponse, makeApp, makeMe, stubApi } from '../../test/
 import {
   KEEPALIVE_INTERVAL_MS,
   REVALIDATE_MIN_INTERVAL_MS,
+  SESSION_CHANNEL,
+  endedSessionToLogin,
   loadSession,
   me,
   permissions,
   refreshMe,
   revalidateSession,
   session,
+  sessionEnded,
   sessionExpired,
   setMe,
   signOut,
   startSessionWatch,
   switchTenant,
+  updateProfile,
   updateSettings,
 } from './session';
-import { clearToasts, toasts } from './toasts';
+import { clearToasts, showError, toasts } from './toasts';
 import { activateFrame, frames, loadApps, resetWorkspace, workspace } from './workspace';
 
 vi.mock('$lib/utils/browser', () => ({ leaveTo: vi.fn(), reloadPage: vi.fn() }));
 
 const TENANT_HEADER = 'X-Velydock-Tenant';
+
+const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+/** A BroadcastChannel that stays in this test: what was posted, and a way to receive. */
+class FakeChannel {
+  static open: FakeChannel[] = [];
+  static posted: unknown[] = [];
+  private listeners = new Set<(event: MessageEvent) => void>();
+  closed = false;
+  constructor(readonly name: string) {
+    FakeChannel.open.push(this);
+  }
+  postMessage(data: unknown) {
+    if (this.closed) throw new Error('channel is closed');
+    FakeChannel.posted.push(data);
+  }
+  addEventListener(_: string, listener: (event: MessageEvent) => void) {
+    this.listeners.add(listener);
+  }
+  removeEventListener(_: string, listener: (event: MessageEvent) => void) {
+    this.listeners.delete(listener);
+  }
+  close() {
+    this.closed = true;
+    FakeChannel.open = FakeChannel.open.filter((channel) => channel !== this);
+  }
+  /** What a message of another tab looks like in this one. */
+  receive(data: unknown) {
+    for (const listener of this.listeners) listener({ data } as MessageEvent);
+  }
+}
 
 beforeEach(() => {
   resetWorkspace();
@@ -234,6 +269,20 @@ describe('session', () => {
     expect(seen).toEqual([MAIN.id]);
   });
 
+  it('runs that callback before anything else gets to react to the new organization', async () => {
+    setMe(makeMe());
+    stubApi({ 'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }) });
+    // The page renders in a microtask after the store changed. A callback that only ran
+    // once switchTenant() has returned would come after that: too late to navigate.
+    const order: string[] = [];
+    const unsubscribe = me.subscribe((value) => {
+      if (value?.active_tenant?.id === MAIN.id) queueMicrotask(() => order.push('rendered'));
+    });
+    await switchTenant(MAIN.id, () => order.push('navigated'));
+    unsubscribe();
+    expect(order).toEqual(['navigated', 'rendered']);
+  });
+
   it('signs out through the address the backend names', async () => {
     setMe(makeMe());
     stubApi({
@@ -247,6 +296,7 @@ describe('session', () => {
   });
 
   it('falls back to the login page when the answer names no address', async () => {
+    setMe(makeMe());
     stubApi({ 'POST /api/auth/logout': () => new Response(null, { status: 204 }) });
     await signOut();
     expect(leaveTo).toHaveBeenCalledWith('/login?signed_out=1');
@@ -290,6 +340,125 @@ describe('session', () => {
     await signOut();
     expect(leaveTo).toHaveBeenCalledWith('/login?signed_out=1');
   });
+
+  it('sends one sign-out, however often it is asked for', async () => {
+    setMe(makeMe());
+    const { calls } = stubApi({
+      'POST /api/auth/logout': () => ({ redirect_url: '/login?signed_out=1' }),
+    });
+    await Promise.all([signOut(), signOut()]); // a double click
+    expect(calls).toHaveLength(1);
+    expect(leaveTo).toHaveBeenCalledTimes(1);
+    await signOut(); // and it stays that way once the page is on its way out
+    expect(calls).toHaveLength(1);
+    expect(leaveTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays on its way out when a request that was under way is answered 401 afterwards', async () => {
+    setMe(makeMe());
+    stubApi({
+      'POST /api/auth/logout': () => ({ redirect_url: 'https://idp.example/logout' }),
+      'GET /api/v1/admin/groups': () => errorResponse(401, 'not_authenticated'),
+      'GET /api/v1/me': () => errorResponse(401, 'not_authenticated'),
+    });
+    await signOut();
+    // The answers that come now: the session is gone on the server.
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    await api.get('/api/v1/me', { background: true }).catch(() => {});
+    // Still the splash. "anonymous" would put the login page with its button on screen
+    // while the browser is on its way to the identity provider, and a click there would
+    // stop it from getting there.
+    expect(get(session)).toEqual({ status: 'loading', me: null });
+    expect(get(sessionExpired)).toBe(false);
+  });
+
+  it('is a clean start for the user a later sign-in brings', async () => {
+    setMe(makeMe());
+    stubApi({ 'POST /api/auth/logout': () => ({ redirect_url: '/login?signed_out=1' }) });
+    await signOut();
+    const next = makeMe({ active_tenant: MAIN });
+    stubApi({
+      'GET /api/v1/me': () => next,
+      'GET /api/v1/admin/groups': () => errorResponse(401, 'not_authenticated'),
+    });
+    await loadSession();
+    expect(get(session)).toEqual({ status: 'ready', me: next });
+    expect(get(toasts)).toEqual([]); // the first user a page finds is no "changed organization"
+  });
+});
+
+describe('answers that arrive out of order', () => {
+  it('drops an older answer about the user and asks again, so the page ends up with what holds now', async () => {
+    setMe(makeMe()); // Acme
+    const inMain = makeMe({ active_tenant: MAIN });
+    let release: (response: Response) => void = () => {};
+    const sent: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit) => {
+        sent.push(`${init.method} ${url}`);
+        if (url === '/api/v1/me' && sent.filter((s) => s === 'GET /api/v1/me').length === 1) {
+          return new Promise<Response>((resolve) => (release = resolve));
+        }
+        return Promise.resolve(ok(inMain));
+      }),
+    );
+    const reading = refreshMe(); // e.g. after an organization was renamed
+    await switchTenant(MAIN.id); // the user enters Admin Cave; the server has answered
+    expect(get(me)).toEqual(inMain);
+    release(ok(makeMe())); // the answer to the earlier read: still Acme
+    await reading;
+    expect(get(me)).toEqual(inMain);
+    // One more read, because the dropped answer might have been the newer one.
+    await vi.waitFor(() =>
+      expect(sent).toEqual(['GET /api/v1/me', 'POST /api/v1/me/active-tenant', 'GET /api/v1/me']),
+    );
+    await revalidateSession();
+    expect(get(me)).toEqual(inMain);
+    expect(get(toasts)).toEqual([]);
+  });
+
+  it('does not take a failed settings change back over something newer', async () => {
+    setMe(makeMe()); // Acme
+    const inMain = makeMe({ active_tenant: MAIN });
+    let answerPatch: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url === '/api/v1/me/settings'
+          ? new Promise<Response>((resolve) => (answerPatch = resolve))
+          : Promise.resolve(ok(inMain)),
+      ),
+    );
+    const saving = updateSettings({ theme: 'light' }).catch((err: unknown) => err);
+    expect(get(me)?.settings.theme).toBe('light'); // shown at once
+    await revalidateSession({ force: true }); // meanwhile the session moved to Admin Cave
+    expect(get(me)).toEqual(inMain);
+    answerPatch(new Response('Bad Gateway', { status: 502 }));
+    expect(await saving).toMatchObject({ status: 502 });
+    // Rolling back would put the user of before the change in place: still in Acme.
+    expect(get(me)).toEqual(inMain);
+  });
+
+  it('drops the answer to a switch that the end of the session overtook', async () => {
+    setMe(makeMe());
+    let answerSwitch: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url === '/api/v1/me/active-tenant'
+          ? new Promise<Response>((resolve) => (answerSwitch = resolve))
+          : Promise.resolve(errorResponse(401, 'not_authenticated')),
+      ),
+    );
+    const onSwitched = vi.fn();
+    const switching = switchTenant(MAIN.id, onSwitched);
+    await api.get('/api/v1/admin/groups').catch(() => {}); // 401: the session has ended
+    answerSwitch(ok(makeMe({ active_tenant: MAIN })));
+    await switching;
+    expect(get(session)).toEqual({ status: 'anonymous', me: null });
+    expect(onSwitched).not.toHaveBeenCalled();
+  });
 });
 
 describe('the organization a page acts on', () => {
@@ -301,6 +470,26 @@ describe('the organization a page acts on', () => {
     setMe(makeMe({ active_tenant: null, role: null, permissions: [] }));
     await loadApps();
     expect(TENANT_HEADER in calls[1].headers).toBe(false);
+  });
+
+  it('is in place before anything gets to react to the new session', async () => {
+    setMe(makeMe());
+    const { calls } = stubApi({
+      'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }),
+      'GET /api/v1/admin/groups': () => [],
+    });
+    // Somebody who asks the API the moment the new organization shows up in the store.
+    const asked: Promise<unknown>[] = [];
+    const unsubscribe = me.subscribe((value) => {
+      if (value?.active_tenant?.id === MAIN.id) asked.push(api.get('/api/v1/admin/groups'));
+    });
+    await switchTenant(MAIN.id);
+    unsubscribe();
+    await Promise.all(asked);
+    expect(calls.map((call) => [call.url, call.headers[TENANT_HEADER]])).toEqual([
+      ['/api/v1/me/active-tenant', ACME.id],
+      ['/api/v1/admin/groups', MAIN.id],
+    ]);
   });
 
   it('follows a switch, and is forgotten with the session', async () => {
@@ -340,6 +529,10 @@ describe('the organization a page acts on', () => {
 
     await vi.waitFor(() => expect(get(me)).toEqual(other));
     expect(calls.filter((call) => call.url === '/api/v1/me')).toHaveLength(1);
+    // One notice for the one event, whoever shows the errors of the two requests
+    // (showError() says nothing about this code): not a second one in other words.
+    for (const result of results) showError((result as PromiseRejectedResult).reason);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const notices = get(toasts);
     expect(notices).toHaveLength(1);
     expect(notices[0].kind).toBe('info');
@@ -356,16 +549,84 @@ describe('the organization a page acts on', () => {
     ]);
   });
 
-  it('says nothing when the user turns out to be in the same organization', async () => {
+  it('still says that the request was not carried out when the user turns out to be in the same organization', async () => {
     const same = makeMe();
     setMe(same);
     stubApi({
       'GET /api/v1/admin/groups': () => errorResponse(409, 'tenant_changed'),
       'GET /api/v1/me': () => same,
     });
-    await api.get('/api/v1/admin/groups').catch(() => {});
+    const failure = await api.get('/api/v1/admin/groups').catch((err: unknown) => err);
+    showError(failure); // the page that asked: silent about this code
     await revalidateSession(); // joins the read that is under way
     expect(get(me)).toEqual(same);
+    // Nothing changed that could be announced, but the request did fail: said once.
+    await vi.waitFor(() =>
+      expect(get(toasts).map((toast) => `${toast.kind}: ${toast.message}`)).toEqual([
+        'error: Die aktive Organisation hat sich inzwischen geändert. Es wurde nichts ausgeführt – prüf die Ansicht und versuch es noch einmal.',
+      ]),
+    );
+  });
+
+  it('says it when the question who the user is now fails as well', async () => {
+    setMe(makeMe());
+    stubApi({
+      'GET /api/v1/admin/groups': () => errorResponse(409, 'tenant_changed'),
+      'GET /api/v1/me': () => errorResponse(503, 'unavailable'),
+    });
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+    expect(get(toasts)[0]).toMatchObject({ kind: 'error' });
+    expect(get(toasts)[0].message).toContain(
+      'Die aktive Organisation hat sich inzwischen geändert',
+    );
+  });
+
+  it('ignores a refusal that arrives for an organization the page has left since', async () => {
+    setMe(makeMe());
+    let answer: (value: unknown) => void = () => {};
+    const { calls } = stubApi({
+      'GET /api/v1/admin/groups': () => new Promise((resolve) => (answer = resolve)),
+      'GET /api/v1/me': () => makeMe({ active_tenant: MAIN }),
+    });
+    const asked = api.get('/api/v1/admin/groups').catch((err: unknown) => err);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].headers[TENANT_HEADER]).toBe(ACME.id);
+    // The user switches (here: the store learns of it) while the request is under way.
+    setMe(makeMe({ active_tenant: MAIN }));
+    answer(errorResponse(409, 'tenant_changed'));
+    expect(await asked).toMatchObject({ status: 409, code: 'tenant_changed' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The page that asked is gone and nothing is out of date: no question, no notice.
+    expect(calls.filter((call) => call.url === '/api/v1/me')).toEqual([]);
+    expect(get(toasts)).toEqual([]);
+  });
+
+  it('announces it whichever answer about the user brings the other organization', async () => {
+    setMe(makeMe());
+    stubApi({
+      'PATCH /api/v1/me/settings': () => makeMe({ active_tenant: MAIN }),
+      'GET /api/v1/me': () => makeMe(),
+      'PATCH /api/v1/me/profile': () => makeMe({ active_tenant: MAIN }),
+    });
+    const notices = () => get(toasts).map((toast) => `${toast.kind}: ${toast.message}`);
+    const changedTo = (name: string) =>
+      `info: Die aktive Organisation hat sich geändert, zum Beispiel in einem anderen Fenster. Du arbeitest jetzt in „${name}“.`;
+    await updateSettings({ theme: 'light' }); // a settings change in a tab that is out of date
+    expect(notices()).toEqual([changedTo('Admin Cave')]);
+    clearToasts();
+    await refreshMe();
+    expect(notices()).toEqual([changedTo('Acme GmbH')]);
+    clearToasts();
+    await updateProfile('Anna', 'Admin');
+    expect(notices()).toEqual([changedTo('Admin Cave')]);
+  });
+
+  it('does not explain a switch the user has just made here', async () => {
+    setMe(makeMe());
+    stubApi({ 'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }) });
+    await switchTenant(MAIN.id);
+    expect(get(me)?.active_tenant).toEqual(MAIN);
     expect(get(toasts)).toEqual([]);
   });
 
@@ -407,6 +668,35 @@ describe('checking the session in the background', () => {
     expect(calls).toHaveLength(3);
   });
 
+  it('is not silenced by a clock that was set back', async () => {
+    setMe(makeMe());
+    const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe() });
+    await refreshMe();
+    expect(calls).toHaveLength(1);
+    // The last answer now lies an hour in the future: "just now" it is not.
+    vi.setSystemTime(Date.now() - 60 * 60_000);
+    await revalidateSession();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('asks once more after a check that was sent before the news arrived', async () => {
+    setMe(makeMe());
+    const release: ((response: Response) => void)[] = [];
+    const mock = vi.fn(() => new Promise<Response>((resolve) => release.push(resolve)));
+    vi.stubGlobal('fetch', mock);
+    const checking = revalidateSession({ force: true });
+    // Another tab reports a switch: the check under way may have been answered before it.
+    void revalidateSession({ fresh: true });
+    void revalidateSession({ force: true }); // insisting alone joins the check, as before
+    expect(mock).toHaveBeenCalledTimes(1);
+    release[0](ok(makeMe())); // the old state
+    await vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(2));
+    release[1](ok(makeMe({ active_tenant: MAIN })));
+    await checking;
+    expect(get(me)?.active_tenant).toEqual(MAIN);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
   it('does nothing without a session', async () => {
     setMe(makeMe());
     const { calls } = stubApi({
@@ -433,6 +723,7 @@ describe('checking the session in the background', () => {
     await revalidateSession({ force: true });
     expect(get(session)).toEqual({ status: 'anonymous', me: null });
     expect(get(sessionExpired)).toBe(true);
+    expect(get(sessionEnded)).toBe(false); // no app is open: nothing to keep the page for
     expect(get(toasts)).toEqual([]);
   });
 
@@ -475,6 +766,9 @@ describe('startSessionWatch', () => {
     focused = true;
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
     vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+    FakeChannel.open = [];
+    FakeChannel.posted = [];
+    vi.stubGlobal('BroadcastChannel', FakeChannel);
     setMe(makeMe());
   });
 
@@ -498,6 +792,82 @@ describe('startSessionWatch', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('checks the session when the window gets the focus back', async () => {
+    // Two windows side by side are both visible all the time: no visibilitychange.
+    const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe() });
+    stop = startSessionWatch();
+    vi.setSystemTime(Date.now() + REVALIDATE_MIN_INTERVAL_MS + 1); // the last answer is old
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map((call) => call.url)).toEqual(['/api/v1/me']);
+    // Clicking back and forth between windows does not hammer the API either.
+    window.dispatchEvent(new Event('focus'));
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('tells the other tabs when the organization was switched and before leaving on sign-out', async () => {
+    stubApi({
+      'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }),
+      'POST /api/auth/logout': () => ({ redirect_url: '/login?signed_out=1' }),
+    });
+    stop = startSessionWatch();
+    expect(FakeChannel.open.map((channel) => channel.name)).toEqual([SESSION_CHANNEL]);
+    await switchTenant(MAIN.id);
+    expect(FakeChannel.posted).toEqual(['organization']);
+    vi.mocked(leaveTo).mockImplementation(() => {
+      // By the time the browser leaves, the others have been told.
+      expect(FakeChannel.posted).toEqual(['organization', 'signed-out']);
+    });
+    await signOut();
+    expect(leaveTo).toHaveBeenCalledTimes(1);
+    vi.mocked(leaveTo).mockReset();
+  });
+
+  it('tells nobody about a switch or a sign-out that did not happen', async () => {
+    stubApi({
+      'POST /api/v1/me/active-tenant': () => errorResponse(404, 'not_found'),
+      'POST /api/auth/logout': () => errorResponse(500, 'error'),
+    });
+    stop = startSessionWatch();
+    await switchTenant(MAIN.id).catch(() => {});
+    await signOut();
+    expect(FakeChannel.posted).toEqual([]);
+  });
+
+  it('checks at once when another tab reports a change, however recent the last answer', async () => {
+    const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe({ active_tenant: MAIN }) });
+    stop = startSessionWatch();
+    await refreshMe(); // an answer just now: the other triggers would keep quiet
+    clearToasts();
+    calls.length = 0;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(0);
+    FakeChannel.open[0].receive('organization');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map((call) => call.url)).toEqual(['/api/v1/me']);
+    FakeChannel.open[0].receive('signed-out');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('works in a browser without BroadcastChannel', async () => {
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const { calls } = stubApi({
+      'GET /api/v1/me': () => makeMe(),
+      'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }),
+    });
+    stop = startSessionWatch();
+    await switchTenant(MAIN.id);
+    expect(get(me)?.active_tenant).toEqual(MAIN);
+    vi.setSystemTime(Date.now() + REVALIDATE_MIN_INTERVAL_MS + 1);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map((call) => call.url)).toEqual(['/api/v1/me/active-tenant', '/api/v1/me']);
+  });
+
   it('loads the page anew when it comes back from the back/forward cache', () => {
     stop = startSessionWatch();
     window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
@@ -506,8 +876,11 @@ describe('startSessionWatch', () => {
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
 
-  it('gives a sign of life every five minutes while the window is visible and focused', async () => {
-    expect(KEEPALIVE_INTERVAL_MS).toBe(5 * 60_000);
+  it('gives a sign of life every two minutes while the window is visible and focused', async () => {
+    // The server ends a session after five idle minutes at the earliest: two signs of
+    // life fit into that, so one that is late or left out does no harm.
+    expect(KEEPALIVE_INTERVAL_MS).toBe(2 * 60_000);
+    expect(2 * KEEPALIVE_INTERVAL_MS).toBeLessThan(5 * 60_000);
     const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe() });
     stop = startSessionWatch();
     await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS - 1000);
@@ -530,13 +903,107 @@ describe('startSessionWatch', () => {
   });
 
   it('stops', async () => {
-    const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe() });
-    startSessionWatch()();
+    const { calls } = stubApi({
+      'GET /api/v1/me': () => makeMe(),
+      'POST /api/v1/me/active-tenant': () => makeMe({ active_tenant: MAIN }),
+    });
+    const stopNow = startSessionWatch();
+    const channel = FakeChannel.open[0];
+    stopNow();
     document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('focus'));
     window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    channel.receive('organization');
     await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS);
     expect(calls).toHaveLength(0);
     expect(reloadPage).not.toHaveBeenCalled();
+    // The channel is closed, and nothing is posted on it any more.
+    expect(channel.closed).toBe(true);
+    await switchTenant(MAIN.id);
+    expect(FakeChannel.posted).toEqual([]);
+  });
+});
+
+describe('a session that ends while somebody works in an app', () => {
+  // An app is open in its frame.
+  async function openApp() {
+    stubApi({ 'GET /api/v1/workspace/apps': () => [makeApp({ id: 'wiki' })] });
+    await loadApps();
+    activateFrame('wiki');
+    expect(get(frames)).toHaveLength(1);
+  }
+  const gone = () => errorResponse(401, 'not_authenticated');
+
+  it('keeps the page and the frames when the check in the background finds it out, and says so', async () => {
+    const before = makeMe();
+    setMe(before);
+    await openApp();
+    const { calls } = stubApi({ 'GET /api/v1/me': gone });
+    await revalidateSession({ force: true });
+    expect(get(session)).toEqual({ status: 'ready', me: before });
+    expect(get(frames)).toHaveLength(1);
+    expect(get(sessionEnded)).toBe(true);
+    expect(get(sessionExpired)).toBe(false);
+    // Nothing is asked in the background while the page waits for a new sign-in.
+    calls.length = 0;
+    await revalidateSession();
+    await revalidateSession({ force: true });
+    await revalidateSession({ fresh: true });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('goes to the login page with the first request the user makes', async () => {
+    setMe(makeMe());
+    await openApp();
+    stubApi({ 'GET /api/v1/me': gone, 'GET /api/v1/admin/groups': gone });
+    await revalidateSession({ force: true });
+    expect(get(sessionEnded)).toBe(true);
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    expect(get(session)).toEqual({ status: 'anonymous', me: null });
+    expect(get(sessionExpired)).toBe(true);
+    expect(get(sessionEnded)).toBe(false);
+  });
+
+  it('goes to the login page through the button of the notice', async () => {
+    setMe(makeMe());
+    endedSessionToLogin(); // nothing to leave: the session is alive
+    expect(get(session).status).toBe('ready');
+    await openApp();
+    stubApi({ 'GET /api/v1/me': gone });
+    await revalidateSession({ force: true });
+    endedSessionToLogin();
+    expect(get(session)).toEqual({ status: 'anonymous', me: null });
+    expect(get(sessionExpired)).toBe(true); // the login page says why
+    expect(get(sessionEnded)).toBe(false);
+  });
+
+  it('ends at once, as before, when a request of the user is answered 401', async () => {
+    setMe(makeMe());
+    await openApp();
+    stubApi({ 'GET /api/v1/admin/groups': gone });
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    expect(get(session)).toEqual({ status: 'anonymous', me: null });
+    expect(get(sessionEnded)).toBe(false);
+  });
+
+  it('leaves nothing behind for the session that follows', async () => {
+    setMe(makeMe());
+    await openApp();
+    stubApi({ 'GET /api/v1/me': gone });
+    await revalidateSession({ force: true });
+    expect(get(sessionEnded)).toBe(true);
+    // The server describes the user again (signed in again in another tab, say).
+    const { calls } = stubApi({ 'GET /api/v1/me': () => makeMe() });
+    await refreshMe();
+    expect(get(sessionEnded)).toBe(false);
+    await revalidateSession({ force: true }); // and the background checks are back
+    expect(calls).toHaveLength(2);
+    // A fresh sign-in starts clean as well.
+    stubApi({ 'GET /api/v1/me': gone });
+    await revalidateSession({ force: true });
+    expect(get(sessionEnded)).toBe(true);
+    setMe(makeMe());
+    expect(get(sessionEnded)).toBe(false);
   });
 });
 

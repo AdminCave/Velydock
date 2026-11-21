@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import {
+  guardLeaving,
   isInternalLinkClick,
   location,
   loginPath,
@@ -108,6 +109,11 @@ describe('loginPath and signInUrl', () => {
     expect(signInUrl('https://evil.example')).toBe('/api/auth/login?return_to=%2F');
     expect(signInUrl(null)).toBe('/api/auth/login?return_to=%2F');
   });
+
+  it('hands the language of the page to the sign-in, so the pages there follow it', () => {
+    expect(signInUrl('/app/1', 'en')).toBe('/api/auth/login?return_to=%2Fapp%2F1&lang=en');
+    expect(signInUrl(null, 'de')).toBe('/api/auth/login?return_to=%2F&lang=de');
+  });
 });
 
 describe('navigation', () => {
@@ -149,6 +155,73 @@ describe('navigation', () => {
     history.replaceState(null, '', '/profile');
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(get(location).path).toBe('/profile');
+  });
+
+  // jsdom moves through the history asynchronously, as browsers do.
+  const moved = () => new Promise((resolve) => setTimeout(resolve, 30));
+  const arrivedAt = (path: string) =>
+    vi.waitFor(() => {
+      expect(window.location.pathname).toBe(path);
+      expect(get(location).path).toBe(path);
+    });
+
+  it('asks before Back takes the user away from unsaved input, and stays on "no"', async () => {
+    navigate('/profile');
+    navigate('/admin/groups');
+    const asked: string[] = [];
+    const withdraw = guardLeaving(() => {
+      asked.push(window.location.pathname);
+      return Promise.resolve(false);
+    });
+    history.back();
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    await moved();
+    // Asked once, with the page (again) at its address, and nothing moved.
+    expect(asked).toEqual(['/admin/groups']);
+    expect(window.location.pathname).toBe('/admin/groups');
+    expect(get(location).path).toBe('/admin/groups');
+    withdraw();
+  });
+
+  it('goes where the user wanted to go once they agree to lose the input', async () => {
+    navigate('/profile');
+    navigate('/admin/groups');
+    let asked = 0;
+    const withdraw = guardLeaving(() => {
+      asked += 1;
+      withdraw(); // the dialog closes and lets go
+      return Promise.resolve(true);
+    });
+    history.back();
+    await arrivedAt('/profile');
+    expect(asked).toBe(1);
+  });
+
+  it('still goes when the one who asked keeps its guard up (a dialog that is closed later)', async () => {
+    navigate('/profile');
+    navigate('/admin/groups');
+    let asked = 0;
+    const withdraw = guardLeaving(() => {
+      asked += 1;
+      return Promise.resolve(true);
+    });
+    history.back();
+    await arrivedAt('/profile');
+    expect(asked).toBe(1); // the step that was agreed to is not questioned again
+    withdraw();
+  });
+
+  it('asks nobody once the guard is withdrawn', async () => {
+    navigate('/profile');
+    navigate('/admin/groups');
+    let asked = 0;
+    guardLeaving(() => {
+      asked += 1;
+      return Promise.resolve(false);
+    })();
+    history.back();
+    await arrivedAt('/profile');
+    expect(asked).toBe(0);
   });
 
   function link(attrs: Record<string, string>): HTMLAnchorElement {

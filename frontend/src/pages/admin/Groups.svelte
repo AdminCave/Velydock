@@ -11,7 +11,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Plus from '@lucide/svelte/icons/plus';
   import Trash from '@lucide/svelte/icons/trash';
   import Users from '@lucide/svelte/icons/users';
-  import { api } from '$lib/api/client';
+  import { tenantApi } from '$lib/api/client';
   import type { Group, GroupDetail } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
   import { confirmDialog } from '$lib/components/ui/ConfirmDialog.svelte';
@@ -23,7 +23,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { hasPermission } from '$lib/nav';
   import { permissions } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
+  import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
   import GroupModal from '../../modals/GroupModal.svelte';
+
+  // Bound to the organization this page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const canWrite = $derived(hasPermission($permissions, 'groups:write'));
   const canReadUsers = $derived(hasPermission($permissions, 'users:read'));
@@ -68,10 +72,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
       confirmLabel: $t('groups.delete.confirm'),
     });
     if (!ok) return;
+    const table = document.querySelector('[data-testid="groups-table"]');
+    const at = rowIndex(table, 'data-group-id', group.id);
     try {
       await api.delete('/api/v1/admin/groups/{group_id}', { path: { group_id: group.id } });
       showToast($t('groups.deleted', { name: group.name }));
       await load();
+      // The row is gone, and with it the button that had the focus.
+      await restoreFocus(() => [rowMenuAt(table, at), document.getElementById('main')]);
     } catch (err) {
       showError(err);
     }

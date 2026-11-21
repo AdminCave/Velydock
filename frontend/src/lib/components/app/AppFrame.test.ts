@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { errorResponse, makeApp, stubApi } from '../../../test/fixtures';
-import AppFrame from './AppFrame.svelte';
+import AppFrame, { SLOW_AFTER_MS } from './AppFrame.svelte';
 
 const CUSTOM_ID = 'app-custom';
 const LAUNCH = `POST /api/v1/workspace/apps/${CUSTOM_ID}/launch`;
@@ -20,6 +20,7 @@ function frame(): HTMLIFrameElement {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // The frame of a custom app is the security boundary between administrator-written code
@@ -150,5 +151,92 @@ describe('embedded app frame', () => {
     await view.rerender({ active: true });
     expect(frame()).toBe(element);
     expect(element.closest('[hidden]')).toBeNull();
+  });
+});
+
+// All a page learns about a frame of another site is its `load` event. So the frame says
+// that it is loading, and after a while that nothing has arrived, without claiming to
+// know why.
+describe('an app that takes its time', () => {
+  it('says that it is loading until the frame has loaded', async () => {
+    stubApi({});
+    render(AppFrame, { app: makeApp(), active: true });
+    expect(screen.getByRole('status', { name: 'Lädt …' })).toBeInTheDocument();
+    await fireEvent.load(frame());
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('says after a while that nothing has arrived, and offers the app in a tab of its own', async () => {
+    vi.useFakeTimers();
+    const open = vi.fn();
+    vi.stubGlobal('open', open);
+    stubApi({});
+    render(AppFrame, { app: makeApp(), active: true });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS - 1);
+    expect(screen.queryByTestId('app-slow')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    const notice = screen.getByTestId('app-slow');
+    expect(notice).toHaveAttribute('role', 'status'); // a notice, not an alarm
+    expect(notice).toHaveTextContent('Die App ist noch nicht fertig geladen');
+    // It does not claim to know what it cannot know.
+    expect(notice).toHaveTextContent('lässt sich das nicht unterscheiden');
+    expect(frame()).toBeInTheDocument(); // the frame goes on loading under it
+    await fireEvent.click(screen.getByRole('button', { name: 'In neuem Tab öffnen' }));
+    expect(open).toHaveBeenCalledWith('https://wiki.example/', '_blank', 'noopener,noreferrer');
+  });
+
+  it('takes the notice back as soon as the app has loaded after all', async () => {
+    vi.useFakeTimers();
+    stubApi({});
+    render(AppFrame, { app: makeApp(), active: true });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    expect(screen.getByTestId('app-slow')).toBeInTheDocument();
+    await fireEvent.load(frame());
+    expect(screen.queryByTestId('app-slow')).toBeNull();
+  });
+
+  it('can be closed by somebody for whom the app works already, until the next reload', async () => {
+    vi.useFakeTimers();
+    stubApi({});
+    const view = render(AppFrame, { app: makeApp(), active: true, nonce: 0 });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    await fireEvent.click(screen.getByRole('button', { name: 'Hinweis schließen' }));
+    expect(screen.queryByTestId('app-slow')).toBeNull();
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS * 3);
+    expect(screen.queryByTestId('app-slow')).toBeNull(); // and it stays away
+    await view.rerender({ nonce: 1 });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    expect(screen.getByTestId('app-slow')).toBeInTheDocument();
+  });
+
+  it('never shows it for an app that loads in time', async () => {
+    vi.useFakeTimers();
+    stubApi({});
+    render(AppFrame, { app: makeApp(), active: true });
+    await vi.advanceTimersByTimeAsync(2000);
+    await fireEvent.load(frame());
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS * 2);
+    expect(screen.queryByTestId('app-slow')).toBeNull();
+  });
+
+  it('gives a reload its own time', async () => {
+    vi.useFakeTimers();
+    stubApi({});
+    const view = render(AppFrame, { app: makeApp(), active: true, nonce: 0 });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    expect(screen.getByTestId('app-slow')).toBeInTheDocument();
+    await view.rerender({ nonce: 1 }); // "App neu laden"
+    expect(screen.queryByTestId('app-slow')).toBeNull();
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    expect(screen.getByTestId('app-slow')).toBeInTheDocument();
+  });
+
+  it('has no other tab to offer for a custom app, which has no address of its own', async () => {
+    vi.useFakeTimers();
+    stubApi({ [LAUNCH]: () => ({ url: 'http://sandbox.test/c/token-1', expires_in: 300 }) });
+    render(AppFrame, { app: customApp(), active: true });
+    await vi.advanceTimersByTimeAsync(SLOW_AFTER_MS);
+    expect(screen.getByTestId('app-slow')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'In neuem Tab öffnen' })).toBeNull();
   });
 });

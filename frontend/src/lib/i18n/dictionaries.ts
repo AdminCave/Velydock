@@ -4,6 +4,7 @@
 
 import { common } from './messages/common';
 import { errors } from './messages/errors';
+import { icons } from './messages/icons';
 import { shell } from './messages/shell';
 import { workspace } from './messages/workspace';
 import { account } from './messages/account';
@@ -16,7 +17,7 @@ export type Language = 'de' | 'en';
 export type Messages = Record<string, readonly [de: string, en: string]>;
 export type Translations = Record<Language, Record<string, string>>;
 
-const sources: Messages[] = [common, errors, shell, workspace, account, admin, system];
+const sources: Messages[] = [common, errors, shell, workspace, account, admin, system, icons];
 
 function build(index: 0 | 1): Record<string, string> {
   const out: Record<string, string> = {};

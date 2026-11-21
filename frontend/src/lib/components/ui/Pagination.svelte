@@ -32,28 +32,31 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const to = $derived(Math.min(total, page * pageSize));
 </script>
 
-<nav class="pagination" aria-label={$t('pagination.label')}>
-  <span class="range mono">{$t('pagination.range', { from, to, total })}</span>
-  <span class="controls">
-    <IconButton
-      icon={ChevronLeft}
-      label={$t('pagination.previous')}
-      variant="secondary"
-      size="sm"
-      disabled={disabled || page <= 1}
-      onclick={() => onChange(page - 1)}
-    />
-    <span class="mono current">{$t('pagination.page', { page, pages })}</span>
-    <IconButton
-      icon={ChevronRight}
-      label={$t('pagination.next')}
-      variant="secondary"
-      size="sm"
-      disabled={disabled || page >= pages}
-      onclick={() => onChange(page + 1)}
-    />
-  </span>
-</nav>
+<!-- An empty list has no pages: "0–0 von 0 · Seite 1/1" would only be noise. -->
+{#if total > 0}
+  <nav class="pagination" aria-label={$t('pagination.label')}>
+    <span class="range mono">{$t('pagination.range', { from, to, total })}</span>
+    <span class="controls">
+      <IconButton
+        icon={ChevronLeft}
+        label={$t('pagination.previous')}
+        variant="secondary"
+        size="sm"
+        disabled={disabled || page <= 1}
+        onclick={() => onChange(page - 1)}
+      />
+      <span class="mono current">{$t('pagination.page', { page, pages })}</span>
+      <IconButton
+        icon={ChevronRight}
+        label={$t('pagination.next')}
+        variant="secondary"
+        size="sm"
+        disabled={disabled || page >= pages}
+        onclick={() => onChange(page + 1)}
+      />
+    </span>
+  </nav>
+{/if}
 
 <style>
   .pagination {

@@ -14,6 +14,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     action?: Snippet;
     // Dashed frame around the state.
     framed?: boolean;
+    // The title is the heading of the whole page (404, no access, start-up error): an h1.
+    page?: boolean;
     // Older form: a single line of text and the call to action as children.
     message?: string;
     children?: Snippet;
@@ -25,6 +27,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     icon: Icon,
     action,
     framed = true,
+    page = false,
     message,
     children,
   }: Props = $props();
@@ -34,7 +37,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <div class="empty-state" class:framed>
   {#if Icon}<span class="icon" aria-hidden="true"><Icon size={22} /></span>{/if}
-  {#if title}<h3 class="title">{title}</h3>{/if}
+  {#if title}<svelte:element this={page ? 'h1' : 'h3'} class="title">{title}</svelte:element>{/if}
   {#if description}<p class="desc">{description}</p>{/if}
   {#if message}<p class="empty-message">{message}</p>{/if}
   {#if cta}<div class="action">{@render cta()}</div>{/if}

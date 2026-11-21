@@ -5,12 +5,28 @@ SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { onDestroy, tick } from 'svelte';
   import { toasts, dismissToast } from '$lib/stores/toasts';
   import { t } from '$lib/i18n';
+
+  // Toasts lie over the bottom left of the window, where pages have controls too (the
+  // buttons of a narrow page, the last rows of a table). While toasts are shown, pages
+  // therefore end above them: the height of the stack is published as `--toast-lane`, and
+  // the scrolling part of the shell keeps that much room free at its bottom (Shell.svelte).
+  let stack = $state<HTMLElement | undefined>();
+  $effect(() => {
+    const count = $toasts.length;
+    void tick().then(() => {
+      // The stack and the gap below and above it.
+      const lane = count > 0 && stack ? stack.offsetHeight + 24 : 0;
+      document.documentElement.style.setProperty('--toast-lane', `${lane}px`);
+    });
+  });
+  onDestroy(() => document.documentElement.style.removeProperty('--toast-lane'));
 </script>
 
 <!-- Each toast is its own live region (role="status"); a click dismisses it. -->
-<div class="toast-stack">
+<div class="toast-stack" bind:this={stack}>
   {#each $toasts as toast (toast.id)}
     <div class="toast {toast.kind}" role="status" data-testid="toast" data-kind={toast.kind}>
       <span class="dot" aria-hidden="true"></span>

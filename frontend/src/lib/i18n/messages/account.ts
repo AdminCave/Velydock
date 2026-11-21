@@ -28,8 +28,12 @@ export const account = {
   'profile.org.role': ['Rolle', 'Role'],
   'profile.org.system': ['System', 'System'],
   'profile.org.none': [
-    'Du gehörst noch zu keiner Organisation.',
-    'You do not belong to an organization yet.',
+    'Dein Konto ist keiner Organisation zugeordnet. Das kann die Systemadministration ändern.',
+    'Your account is not assigned to an organization. The system administrator can change that.',
+  ],
+  'profile.org.inactive': [
+    'Du gehörst zurzeit zu keiner aktiven Organisation: Deine ist deaktiviert. Wieder aktivieren kann sie die Systemadministration.',
+    'At the moment you belong to no active organization: yours is deactivated. The system administrator can activate it again.',
   ],
   'profile.security.title': ['Passwort & Sicherheit', 'Password & security'],
   'profile.security.text': [

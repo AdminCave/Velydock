@@ -14,6 +14,9 @@ export interface FieldContext {
   readonly invalid: boolean;
   // A group (radiogroup) is no labelable element: the label then names it by id only.
   markGroup(): void;
+  // The control has reached the length it allows (or, with null, is below it again): the
+  // field says so, see FormField.
+  atLimit(max: number | null): void;
 }
 
 const KEY = Symbol('ui-field');

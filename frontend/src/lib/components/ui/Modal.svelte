@@ -23,6 +23,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts">
   import { type Snippet } from 'svelte';
   import X from '@lucide/svelte/icons/x';
+  import { focusFrame } from '$lib/frameFocus';
+  import { guardLeaving } from '$lib/router';
   import { t } from '$lib/i18n';
   import Callout from './Callout.svelte';
   import { cancelConfirm, confirmDialog } from './confirm';
@@ -109,7 +111,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
       close();
       return;
     }
-    if (how === 'backdrop' || asking) return;
+    if (how === 'backdrop') return;
+    await askToDiscard();
+  }
+
+  /** Ask whether the unsaved input may go; closes the dialog on "yes". Resolves the answer. */
+  async function askToDiscard(): Promise<boolean> {
+    if (asking) return false;
     asking = true;
     const discard = await confirmDialog($t('dialog.discard.question'), {
       title: $t('dialog.discard.title'),
@@ -118,7 +126,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
     });
     asking = false;
     if (discard && open) close();
+    return discard;
   }
+
+  // The browser's Back button would take the page away, and the dialog with its input
+  // along with it, without a word. With unsaved input it asks the same question as Escape.
+  $effect(() => {
+    if (!open || !dirty || !dismissible) return;
+    return guardLeaving(askToDiscard);
+  });
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Tab' && open) {
@@ -185,7 +201,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
     }
     const back = returnTo;
     return () => {
-      if (back instanceof HTMLElement && back.isConnected) back.focus();
+      if (!(back instanceof HTMLElement) || !back.isConnected) return;
+      // An app frame gets the focus back through its window (see lib/frameFocus.ts).
+      if (back instanceof HTMLIFrameElement) focusFrame(back);
+      else back.focus();
     };
   });
 
@@ -285,6 +304,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
     border-bottom: 1px solid var(--border);
   }
   .modal-title {
+    /* A long name in the title wraps; the close button next to it keeps its place. */
+    min-width: 0;
+    overflow-wrap: anywhere;
     margin: 0;
     font-size: var(--text-md);
     font-weight: 600;
@@ -293,6 +315,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
   .modal-panel:focus {
     outline: none;
+  }
+  .modal-body {
+    overflow-wrap: anywhere;
   }
   .modal-desc {
     margin: 0;

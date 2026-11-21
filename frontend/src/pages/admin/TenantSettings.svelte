@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api } from '$lib/api/client';
+  import { tenantApi } from '$lib/api/client';
   import { NAV_POSITIONS, type NavPosition, type TenantSettings } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
@@ -19,6 +19,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { showError, showToast } from '$lib/stores/toasts';
 
   type Choice = NavPosition | 'system';
+
+  // Bound to the organization this page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   let settings = $state<TenantSettings | null>(null);
   let failed = $state(false);
@@ -59,14 +62,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
     if (!changed || saving) return;
     saving = true;
     try {
-      apply(
-        await api.patch('/api/v1/admin/tenant', {
-          body: {
-            default_nav_position: position === 'system' ? null : position,
-            nav_position_locked: locked,
-          },
-        }),
-      );
+      // Only what was changed here: the other setting may have been changed elsewhere
+      // since this page was loaded.
+      const stored = settings;
+      const body: { default_nav_position?: NavPosition | null; nav_position_locked?: boolean } = {};
+      if (!stored || position !== (stored.default_nav_position ?? 'system')) {
+        body.default_nav_position = position === 'system' ? null : position;
+      }
+      if (!stored || locked !== stored.nav_position_locked) body.nav_position_locked = locked;
+      apply(await api.patch('/api/v1/admin/tenant', { body }));
       showToast($t('tenantSettings.saved'));
       // The own dock may move with the new default.
       await refreshMe();

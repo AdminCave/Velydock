@@ -207,7 +207,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
     // A click into an embedded app never reaches this document, so "pointer down
     // outside" cannot see it. What does happen is that the window loses the focus to
     // the frame: the menu closes then, as it does when the user turns to another window.
-    const onBlur = () => close(false);
+    // Decided a moment later, though: a hidden app that takes the focus gets it taken
+    // back at once (lib/frameFocus.ts), and the menu the user is in must not close for
+    // that.
+    const onBlur = () => {
+      setTimeout(() => {
+        const at = document.activeElement;
+        const here = document.hasFocus() && (!!menu?.contains(at) || at === button);
+        if (!here) close(false);
+      }, 0);
+    };
     document.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onResize);

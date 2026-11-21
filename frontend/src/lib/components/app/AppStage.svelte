@@ -7,16 +7,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts">
   import { untrack } from 'svelte';
   import Ban from '@lucide/svelte/icons/ban';
+  import KeyboardOff from '@lucide/svelte/icons/keyboard-off';
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import Ghost from '@lucide/svelte/icons/ghost';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Button from '$lib/components/ui/Button.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
+  import { startFrameFocusGuard } from '$lib/frameFocus';
   import { openInNewTab, presentation } from '$lib/frames';
   import { t } from '$lib/i18n';
-  import { activateFrame, frames, loadApps, workspace } from '$lib/stores/workspace';
-  import { showError } from '$lib/stores/toasts';
+  import { activateFrame, dropFrame, frames, loadApps, workspace } from '$lib/stores/workspace';
+  import { showError, showToast } from '$lib/stores/toasts';
   import AppFrame from './AppFrame.svelte';
   import AppIcon from './AppIcon.svelte';
 
@@ -34,12 +36,50 @@ SPDX-License-Identifier: GPL-3.0-or-later
   // Reload counters per app; bumping one re-creates that app's frame.
   let nonces = $state<Record<string, number>>({});
 
+  // The app on screen, if it was unloaded for taking the keyboard focus (see below). It
+  // then stays unloaded until the user asks for it again or comes back to it.
+  let closed = $state<string | null>(null);
+
   // Opening an app marks its frame as the most recently used one (and mounts it).
   $effect(() => {
     if (!app || mode !== 'frame') return;
     const id = app.id;
-    untrack(() => activateFrame(id));
+    untrack(() => {
+      if (closed !== id) activateFrame(id);
+    });
   });
+  $effect(() => {
+    const shown = appId;
+    untrack(() => {
+      if (closed !== null && closed !== shown) closed = null;
+    });
+  });
+
+  // Kept-alive frames go on running while they are hidden, and a frame can focus itself:
+  // the keys typed into Velydock or into the app on screen would then arrive in a hidden
+  // app. The guard takes the focus back each time (lib/frameFocus.ts). A frame that keeps
+  // doing it is unloaded, and the user is told which app that was and why.
+  const framesAlive = $derived($frames.length > 0);
+  $effect(() => {
+    if (!framesAlive) return;
+    return untrack(() => startFrameFocusGuard({ onRepeated: closeForFocus }));
+  });
+
+  function closeForFocus(frame: HTMLIFrameElement) {
+    const id = frame.dataset.appId;
+    if (!id) return;
+    const name = apps.find((a) => a.id === id)?.name ?? frame.title;
+    if (id === appId) closed = id;
+    dropFrame(id);
+    // Stays until it is dismissed: somebody typing a password looks at the keyboard.
+    showToast($t('app.focusTaken.closed', { name }), 'error', 0);
+  }
+
+  function reopen() {
+    if (!app) return;
+    closed = null;
+    activateFrame(app.id);
+  }
 
   function reload() {
     if (!app) return;
@@ -100,6 +140,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <Spinner size={24} />
           {:else if $workspace.status === 'error'}
             <EmptyState
+              page
               framed={false}
               title={$t('app.loadFailed.title')}
               description={$t('app.loadFailed.text')}
@@ -111,7 +152,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
               {/snippet}
             </EmptyState>
           {:else}
+            <!-- No app, so no toolbar with its name: this message is the heading of the page. -->
             <EmptyState
+              page
               framed={false}
               icon={Ghost}
               title={$t('app.missing.title')}
@@ -122,6 +165,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
               {/snippet}
             </EmptyState>
           {/if}
+        </div>
+      {:else if closed === app.id}
+        <div class="center">
+          <EmptyState
+            framed={false}
+            icon={KeyboardOff}
+            title={$t('app.focusTaken.title')}
+            description={$t('app.focusTaken.text')}
+          >
+            {#snippet action()}
+              <Button variant="secondary" iconLeft={RefreshCw} onclick={reopen}>
+                {$t('app.focusTaken.reopen')}
+              </Button>
+            {/snippet}
+          </EmptyState>
         </div>
       {:else if mode === 'blocked'}
         <div class="center">

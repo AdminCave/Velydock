@@ -70,7 +70,8 @@
   --text:           #ededee;   /* primary body */
   --text-strong:    #ffffff;   /* headings / emphasis */
   --text-muted:     #9aa1a8;   /* secondary */
-  --text-subtle:    #6e757c;   /* tertiary / placeholder */
+  --text-subtle:    #8f969d;   /* tertiary / placeholder. Design system: #6e757c, which is
+                                 3.2–3.9:1 on the surfaces; this is 4.9:1 at the least (WCAG AA) */
   --text-inverse:   #000000;   /* on light fills */
 
   /* Accent — the only chromatic color in routine use */
@@ -123,7 +124,7 @@
   --text:           #16181c;
   --text-strong:    #000000;
   --text-muted:     #565c64;
-  --text-subtle:    #868d94;
+  --text-subtle:    #696f76;   /* design system: #868d94 (3.4:1 on white); this is 4.6:1 at the least */
   --text-inverse:   #ffffff;
 
   --accent:          var(--blue-600);

@@ -47,6 +47,40 @@ function fieldNames(value: unknown, t: Translate): string {
   return value.map((name) => label('field', name, t)).join(', ');
 }
 
+/** A new value of a setting as text: "an"/"aus" for a switch, the translated choice, the text. */
+function settingValue(field: string, value: unknown, t: Translate): string {
+  if (value === true) return t('audit.value.on');
+  if (value === false) return t('audit.value.off');
+  if (value === null || value === undefined || value === '') return t('audit.value.empty');
+  if (field === 'default_nav_position') return label('nav.position', value, t);
+  if (field === 'default_theme') return label('settings.theme', value, t);
+  if (field === 'default_language')
+    return value === 'de' ? 'Deutsch' : value === 'en' ? 'English' : String(value);
+  return String(value);
+}
+
+/**
+ * Changed settings with their new values where the entry has them ("Zwei-Faktor für
+ * Administratoren: aus"), and the names of the remaining changed fields.
+ */
+function settingChanges(d: Record<string, unknown>, t: Translate): string[] {
+  const parts: string[] = [];
+  const values =
+    typeof d.values === 'object' && d.values !== null ? (d.values as Record<string, unknown>) : {};
+  for (const [field, value] of Object.entries(values)) {
+    parts.push(
+      t('audit.detail.value', {
+        field: label('field', field, t),
+        value: settingValue(field, value, t),
+      }),
+    );
+  }
+  const rest = Array.isArray(d.fields) ? d.fields.filter((name) => !(String(name) in values)) : [];
+  const names = fieldNames(rest, t);
+  if (names) parts.push(t('audit.detail.fields', { fields: names }));
+  return parts;
+}
+
 /** The noteworthy details of an entry as one short line; empty if there is nothing to add. */
 export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Translate): string {
   const d = entry.details ?? {};
@@ -87,12 +121,14 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
     case 'app.create':
       if (d.type) parts.push(t('audit.detail.type', { type: label('app.type', d.type, t) }));
       break;
-    case 'app.update':
-    case 'system.settings': {
+    case 'app.update': {
       const names = fieldNames(d.fields, t);
       if (names) parts.push(t('audit.detail.fields', { fields: names }));
       break;
     }
+    case 'system.settings':
+      parts.push(...settingChanges(d, t));
+      break;
     case 'app.reorder':
       if (typeof d.count === 'number') parts.push(t('audit.detail.apps', { count: d.count }));
       break;

@@ -73,6 +73,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   const field = getField();
   const bad = $derived(invalid || !!field?.invalid);
+  // The browser stops at `maxlength` without a word, and cuts what is pasted. Once the
+  // limit is reached the field around the control says so (see FormField).
+  const atLimit = $derived(
+    maxlength !== undefined && !readonly && !disabled && value.length >= maxlength,
+  );
+  $effect(() => {
+    if (!field || !atLimit || maxlength === undefined) return;
+    field.atLimit(maxlength);
+    return () => field.atLimit(null);
+  });
 </script>
 
 <div

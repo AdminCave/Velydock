@@ -85,6 +85,112 @@ describe('design system', () => {
     }
   });
 
+  // The one deliberate deviation from the design system's tokens: its tertiary text tone
+  // (#6e757c dark, #868d94 light) is below 4.5:1 on the surfaces it is used on.
+  it('keeps secondary and tertiary text at 4.5:1 or more on every surface, in both themes', () => {
+    const [dark, light] = colors.split(':root[data-theme="light"]');
+    const read = (block: string, name: string): string => {
+      const value = new RegExp(`--${name}:\\s*([^;]+);`).exec(block)?.[1].trim() ?? '';
+      const reference = /^var\(--([\w-]+)\)$/.exec(value);
+      return reference ? read(dark, reference[1]) : value;
+    };
+    const luminance = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((at) => {
+        const channel = parseInt(hex.slice(at, at + 2), 16) / 255;
+        return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => {
+      const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (high + 0.05) / (low + 0.05);
+    };
+    for (const [theme, block] of [
+      ['dark', dark],
+      ['light', light],
+    ]) {
+      for (const text of ['text-muted', 'text-subtle']) {
+        for (const surface of ['bg', 'bg-subtle', 'surface', 'surface-raised', 'surface-inset']) {
+          const [fg, bg] = [read(block, text), read(block, surface)];
+          expect(fg, `${theme} ${text}`).toMatch(/^#[0-9a-f]{6}$/);
+          expect(bg, `${theme} ${surface}`).toMatch(/^#[0-9a-f]{6}$/);
+          expect(
+            contrast(fg, bg),
+            `${theme}: ${text} ${fg} on ${surface} ${bg}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+
+  // Layout is the browser's business and jsdom does none. These rules are what keeps a
+  // value without a blank in it (a name, an address, a short name of full length) from
+  // breaking a layout; they were measured in a browser, and this pins them.
+  describe('long values without a blank', () => {
+    /** The declarations of every rule that ends in this selector. */
+    const rule = (css: string, selector: string): string => {
+      const found: string[] = [];
+      for (
+        let at = css.indexOf(`${selector} {`);
+        at >= 0;
+        at = css.indexOf(`${selector} {`, at + 1)
+      ) {
+        found.push(css.slice(at, css.indexOf('}', at)));
+      }
+      expect(found.length, `rule for ${selector}`).toBeGreaterThan(0);
+      return found.join('\n');
+    };
+
+    it('wrap inside a table cell of limited width', () => {
+      const cell = rule(globalCss, '.data-table td');
+      expect(cell).toMatch(/max-width:\s*\d+ch/);
+      expect(cell).toMatch(/overflow-wrap:\s*break-word/);
+      // Identifiers are no longer kept on one line; only counts and dates are.
+      expect(rule(globalCss, '.data-table .num,\n.data-table .meta')).not.toContain('nowrap');
+      expect(rule(globalCss, '.data-table td.meta')).toMatch(/max-width:\s*\d+ch/);
+      expect(rule(globalCss, '.data-table td.num')).toMatch(/white-space:\s*nowrap/);
+    });
+
+    it('never push the actions of a row out of sight', () => {
+      const actions = rule(globalCss, '.data-table .actions');
+      expect(actions).toMatch(/position:\s*sticky/);
+      expect(actions).toMatch(/right:\s*0/);
+      expect(actions).toMatch(/background:\s*var\(--surface\)/); // solid: cells pass under it
+      // The menu of a row opens inside that cell and must lie above later rows and the dock.
+      expect(rule(globalCss, ".data-table td.actions:has([aria-expanded='true'])")).toMatch(
+        /z-index:\s*41/,
+      );
+    });
+
+    it('wrap in headings, dialogs and toasts', () => {
+      expect(
+        rule(globalCss, '.page-title,\n.page-subtitle,\n.section-title,\n.section-desc'),
+      ).toMatch(/overflow-wrap:\s*anywhere/);
+      const modal = read('src/lib/components/ui/Modal.svelte');
+      expect(rule(modal, '.modal-title')).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(rule(modal, '.modal-title')).toMatch(/min-width:\s*0/);
+      expect(rule(modal, '.modal-body')).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(rule(read('src/lib/components/ui/Toast.svelte'), '.msg')).toMatch(
+        /overflow-wrap:\s*anywhere/,
+      );
+    });
+
+    it('are cut with an ellipsis in a tag and in the caption of the navigation', () => {
+      const tag = read('src/lib/components/ui/Tag.svelte');
+      expect(rule(tag, '.ui-tag')).toMatch(/max-width:\s*100%/);
+      expect(rule(tag, '.text,\n  .main')).toMatch(/text-overflow:\s*ellipsis/);
+      const caption = rule(read('src/lib/components/layout/SubNav.svelte'), '.caption');
+      expect(caption).toMatch(/text-overflow:\s*ellipsis/);
+      expect(caption).toMatch(/min-width:\s*100%/);
+    });
+  });
+
+  it('keeps room for the toasts at the bottom of the page instead of letting them cover it', () => {
+    expect(read('src/lib/components/layout/Shell.svelte')).toMatch(
+      /\.scroll \{[^}]*margin-bottom:\s*var\(--toast-lane, 0px\)/,
+    );
+  });
+
   it('draws the product mark with currentColor', () => {
     expect(mark).toContain('fill="currentColor"');
     expect(mark).not.toMatch(/#[0-9a-f]{3,6}/i);

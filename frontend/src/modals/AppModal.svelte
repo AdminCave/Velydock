@@ -68,7 +68,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import Upload from '@lucide/svelte/icons/upload';
   import { APP_ICONS, APP_ICON_NAMES, DEFAULT_APP_ICON } from '$lib/appIcons';
-  import { api } from '$lib/api/client';
+  import { embedDetail } from '$lib/embedDetail';
+  import { tenantApi } from '$lib/api/client';
   import { errorMessage } from '$lib/api/errors';
   import { fetchAllUsers } from '$lib/api/helpers';
   import {
@@ -91,7 +92,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import Switch from '$lib/components/ui/Switch.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
+  import { restoreFocus } from '$lib/utils/focus';
+  import { focusOnNewErrors, formChanged } from '$lib/utils/forms';
   import { rovingIndex } from '$lib/utils/roving';
   import { isHttpUrl } from '$lib/utils/validate';
 
@@ -107,6 +109,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 
   let { open, app, groups, canReadUsers, onClose, onSaved }: Props = $props();
+
+  // Bound to the organization the page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const formId = $props.id();
 
@@ -163,9 +168,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const dirty = $derived(formChanged(fields(), pristine));
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
-  $effect(() => {
-    if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
-  });
+  const focusErrors = focusOnNewErrors(formId);
+  $effect(() => focusErrors(errors));
 
   $effect(() => {
     if (!open) return;
@@ -202,7 +206,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       pristine = fields();
     });
     if (canReadUsers) {
-      fetchAllUsers(controller.signal)
+      fetchAllUsers(api, controller.signal)
         .then((all) => {
           users = all;
           usersLoading = false;
@@ -314,6 +318,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
   function switchToExternal() {
     type = 'external';
     check = null;
+    // The button that was pressed goes with the result of the check. The focus moves to
+    // what it changed: the type, which now reads "Neuer Tab".
+    void restoreFocus(() => [
+      document
+        .getElementById(formId)
+        ?.querySelector<HTMLElement>('[data-testid="app-type"] input:checked'),
+    ]);
   }
 
   function validate(): Record<string, string> {
@@ -396,7 +407,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>
-    <FormField label={$t('field.name')} required error={errors.name}>
+    <FormField label={$t('field.name')} required bind:error={errors.name}>
       <Input bind:value={name} maxlength={80} required />
     </FormField>
     <FormField label={$t('field.description')} hint={$t('apps.description.hint')}>
@@ -411,8 +422,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <FormField
         label={$t('field.url')}
         required
-        hint={$t('apps.url.hint')}
-        error={errors.url || undefined}
+        hint={$t(type === 'external' ? 'apps.url.hint.external' : 'apps.url.hint')}
+        bind:error={errors.url}
       >
         <div class="url-row">
           <Input
@@ -448,7 +459,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
             testid="embed-check"
           >
             {$t('apps.check.ok.text')}
-            <span class="tech mono">{checkResult.detail}</span>
+            <span class="tech">{embedDetail(checkResult.detail, $t)}</span>
           </Callout>
         {:else if checkResult.status === 'blocked'}
           <Callout
@@ -458,7 +469,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
             testid="embed-check"
           >
             {$t('apps.check.blocked.text')}
-            <span class="tech mono">{checkResult.detail}</span>
+            <span class="tech">{embedDetail(checkResult.detail, $t)}</span>
             {#snippet action()}
               <Button variant="secondary" size="sm" onclick={switchToExternal}>
                 {$t('apps.check.blocked.switch')}
@@ -473,7 +484,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
             testid="embed-check"
           >
             {$t('apps.check.unknown.text')}
-            <span class="tech mono">{checkResult.detail}</span>
+            <span class="tech">{embedDetail(checkResult.detail, $t)}</span>
           </Callout>
         {/if}
       {/if}
@@ -483,7 +494,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <Callout tone="info" title={$t('apps.custom.isolated.title')}>
         {$t('apps.custom.isolated.text')}
       </Callout>
-      <FormField label="HTML" required error={errors.custom_html}>
+      <FormField label="HTML" required bind:error={errors.custom_html}>
         <Input
           bind:value={customHtml}
           multiline
@@ -558,8 +569,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
             class:selected
             role="radio"
             aria-checked={selected}
-            aria-label={glyph}
-            title={glyph}
+            aria-label={$t(`icon.${glyph}`)}
+            title={$t(`icon.${glyph}`)}
+            data-icon={glyph}
             tabindex={glyph === iconTabStop ? 0 : -1}
             onfocus={() => (iconFocus = glyph)}
             onkeydown={onIconKeydown}

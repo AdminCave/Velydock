@@ -14,8 +14,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Input from '$lib/components/ui/Input.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
+  import { focusOnNewErrors, formChanged } from '$lib/utils/forms';
   import { SLUG_MAX_LENGTH, slugProblem, suggestSlug } from '$lib/utils/slug';
+  import { normalizeName } from '$lib/utils/validate';
 
   interface Props {
     open: boolean;
@@ -40,9 +41,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const dirty = $derived(formChanged([name, slug], [tenant?.name ?? '', tenant?.slug ?? '']));
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
-  $effect(() => {
-    if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
-  });
+  const focusErrors = focusOnNewErrors(formId);
+  $effect(() => focusErrors(errors));
 
   $effect(() => {
     if (!open) return;
@@ -81,9 +81,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
     saving = true;
     try {
       if (tenant) {
+        if (normalizeName(name) === tenant.name) {
+          // The same name (or the same but for blanks): nothing is renamed, nothing sent.
+          onClose();
+          return;
+        }
         const saved = await api.patch('/api/v1/system/tenants/{tenant_id}', {
           path: { tenant_id: tenant.id },
-          body: { name: name.trim() },
+          body: { name: normalizeName(name) },
         });
         onSaved(saved, false);
       } else {
@@ -112,14 +117,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>
-    <FormField label={$t('field.name')} required error={errors.name}>
+    <FormField label={$t('field.name')} required bind:error={errors.name}>
       <Input bind:value={name} maxlength={120} required oninput={onNameInput} />
     </FormField>
     <FormField
       label={$t('field.slug')}
       required={!tenant}
       hint={tenant ? $t('tenants.slug.fixed') : $t('tenants.slug.hint')}
-      error={errors.slug}
+      bind:error={errors.slug}
     >
       <Input
         bind:value={slug}

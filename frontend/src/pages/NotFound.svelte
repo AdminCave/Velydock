@@ -20,6 +20,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <div class="page page-narrow" data-testid={forbidden ? 'forbidden-page' : 'not-found-page'}>
   <EmptyState
+    page
     icon={forbidden ? LockKeyhole : Compass}
     title={forbidden ? $t('forbidden.title') : $t('notFound.title')}
     description={forbidden ? $t('forbidden.text') : $t('notFound.text')}

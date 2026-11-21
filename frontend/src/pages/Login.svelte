@@ -12,8 +12,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Mark from '$lib/components/brand/Mark.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
-  import { hasMessage, hasStoredLanguage, isLanguage, setLanguage, t } from '$lib/i18n';
+  import { hasMessage, hasStoredLanguage, isLanguage, language, setLanguage, t } from '$lib/i18n';
   import { location, navigate, safeReturnPath, signInUrl } from '$lib/router';
+  import { instanceName } from '$lib/stores/instance';
   import { session } from '$lib/stores/session';
   import { hasStoredTheme, isThemePreference, setThemePreference } from '$lib/theme';
   import { leaveTo } from '$lib/utils/browser';
@@ -35,6 +36,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
       .get('/api/v1/public')
       .then((value) => {
         info = value;
+        // The browser tab is named after the installation as soon as its name is known.
+        instanceName.set(value.instance_name);
         if (!hasStoredLanguage() && isLanguage(value.default_language)) {
           setLanguage(value.default_language, { persist: false });
         }
@@ -66,7 +69,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   // Sign-in happens at the identity provider: a full page navigation, not a fetch.
   function signIn() {
     leaving = true;
-    leaveTo(signInUrl(returnTo));
+    leaveTo(signInUrl(returnTo, $language));
   }
 </script>
 

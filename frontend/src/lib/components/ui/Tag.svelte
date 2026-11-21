@@ -18,6 +18,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     onClick?: (e: MouseEvent) => void;
     onRemove?: () => void;
     removeLabel?: string;
+    /** The full text, for a tag that may be cut short (a long name in a narrow place). */
+    title?: string;
     children: Snippet;
   }
 
@@ -28,6 +30,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     onClick,
     onRemove,
     removeLabel,
+    title,
     children,
   }: Props = $props();
 
@@ -40,7 +43,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <!-- Two sibling controls, never one inside the other: children of role=button are
      presentational, so a nested remove button would vanish for screen readers. -->
-<span class="ui-tag ui-tag-{tone} ui-tag-{size}" class:mono class:clickable={!!onClick}>
+<span class="ui-tag ui-tag-{tone} ui-tag-{size}" class:mono class:clickable={!!onClick} {title}>
   {#if onClick}
     <button type="button" class="main" onclick={onClick}>{@render children()}</button>
   {:else}
@@ -67,6 +70,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
     border-radius: var(--radius-pill);
     font-weight: 500;
     white-space: nowrap;
+    /* Never wider than the place it is in: a long text is cut with an ellipsis. */
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .text,
+  .main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ui-tag-sm {
     height: 20px;

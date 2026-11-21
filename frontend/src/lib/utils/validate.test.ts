@@ -4,7 +4,15 @@
 
 import { describe, expect, it } from 'vitest';
 import { dayPart, formatDateTime } from './datetime';
-import { isHttpUrl, isValidEmail, isValidUsername } from './validate';
+import {
+  hasForbiddenNameCharacter,
+  instanceNameProblem,
+  isHttpUrl,
+  isValidEmail,
+  isValidUsername,
+  normalizeName,
+  personNameProblem,
+} from './validate';
 
 describe('isValidUsername', () => {
   it('follows the rules of the API', () => {
@@ -56,5 +64,62 @@ describe('date helpers', () => {
     expect(dayPart(new Date(2026, 0, 1, 13))).toBe('day');
     expect(dayPart(new Date(2026, 0, 1, 20))).toBe('evening');
     expect(dayPart(new Date(2026, 0, 1, 2))).toBe('evening');
+  });
+});
+
+describe('names of people', () => {
+  it('are compared and sent as the server stores them: one blank between words, none around', () => {
+    expect(normalizeName('  Anna   Maria \t Beispiel ')).toBe('Anna Maria Beispiel');
+    expect(normalizeName('Anna')).toBe('Anna');
+    expect(normalizeName('   ')).toBe('');
+  });
+
+  it('may hold letters of any script, hyphens, apostrophes, dots and commas', () => {
+    for (const ok of ['Anna-Lena', "O'Brien", 'Jr., Max', 'Zoë Åström', '李小龙', 'José María']) {
+      expect(hasForbiddenNameCharacter(ok), ok).toBe(false);
+      expect(personNameProblem(ok), ok).toBeNull();
+    }
+  });
+
+  it('must not hold the characters the identity provider refuses', () => {
+    for (const character of '<>&"$%!#?§;*~/\\|^=[]{}()') {
+      expect(hasForbiddenNameCharacter(`An${character}na`), character).toBe(true);
+    }
+    expect(hasForbiddenNameCharacter('An\u0007na')).toBe(true);
+    expect(hasForbiddenNameCharacter('An\nna')).toBe(true);
+    expect(personNameProblem('Anna <b>')).toBe('validation.personName');
+  });
+
+  it('must not be empty, which is said as that and not as a matter of characters', () => {
+    expect(personNameProblem('')).toBe('validation.required');
+    expect(personNameProblem('   ')).toBe('validation.required');
+  });
+});
+
+describe('the name of the installation', () => {
+  it('may be any text, an ampersand included', () => {
+    for (const ok of ['Velydock', 'Müller & Söhne', 'AT&T', 'Stadtwerke – Intranet 🚀', 'a; b']) {
+      expect(instanceNameProblem(ok), ok).toBeNull();
+    }
+  });
+
+  it('must not be empty', () => {
+    expect(instanceNameProblem('')).toBe('validation.required');
+    expect(instanceNameProblem('  \t ')).toBe('validation.required');
+  });
+
+  it('must not read as markup: no angle brackets, no character references', () => {
+    for (const bad of [
+      '<b>Intranet</b>',
+      'a < b',
+      'a > b',
+      'Intranet &lt;b&gt;',
+      'A &amp; B',
+      'A &#60; B',
+      'A &#x3C; B',
+      'A &#X3c; B',
+    ]) {
+      expect(instanceNameProblem(bad), bad).toBe('systemSettings.instanceName.markup');
+    }
   });
 });

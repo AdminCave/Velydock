@@ -100,6 +100,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
           label={$t('systemUsers.add.tenant')}
           required
           error={missing ? $t('validation.required') : undefined}
+          onedit={() => (missing = false)}
         >
           <Select
             bind:value={tenantId}
@@ -111,6 +112,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <FormField label={$t('field.role')} hint={$t('users.role.hint')}>
           <Select bind:value={role} options={roleOptions} fullWidth />
         </FormField>
+        {#if role !== 'member'}
+          <Callout tone="warning" role="status" testid="role-signs-out">
+            {$t('users.role.signsOut')}
+          </Callout>
+        {/if}
       {/if}
     </form>
   {/if}

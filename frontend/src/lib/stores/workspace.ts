@@ -66,3 +66,11 @@ export function activateFrame(appId: string): void {
   if (!app || presentation(app) !== 'frame') return;
   _frames.update((list) => touchFrame(list, appId, ++tick));
 }
+
+/**
+ * Unload the frame of an app (see lib/frameFocus.ts). The app itself stays in the dock;
+ * opening it again mounts a fresh frame.
+ */
+export function dropFrame(appId: string): void {
+  _frames.update((list) => list.filter((frame) => frame.appId !== appId));
+}

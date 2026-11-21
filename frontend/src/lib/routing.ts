@@ -21,6 +21,13 @@ export interface RouteDef<C = unknown> {
   component?: C;
   /** Permission the user needs to open the page. */
   permission?: Permission;
+  /**
+   * The page shows and changes data of the active organization. Such a page starts over
+   * when the organization changes (App.svelte), and sends its requests through
+   * tenantApi(), which binds them to the organization it was opened for. Pages without
+   * this (system administration, the user's own profile and settings) stay as they are.
+   */
+  tenantScoped?: boolean;
   /** i18n key for the document title. */
   title?: string;
   /** Target of a redirect; null means the user may not go anywhere from here. */

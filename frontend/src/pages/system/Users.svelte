@@ -23,7 +23,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import Tag from '$lib/components/ui/Tag.svelte';
   import { language, t } from '$lib/i18n';
+  import { pageFromQuery, readListQuery, writeListQuery } from '$lib/listQuery';
   import { hasPermission } from '$lib/nav';
+  import { location } from '$lib/router';
   import { me, permissions, refreshMe } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
   import { loadApps } from '$lib/stores/workspace';
@@ -33,9 +35,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const PAGE_SIZE = 25;
   const SEARCH_DELAY_MS = 300;
 
-  let search = $state('');
-  let query = $state('');
-  let page = $state(1);
+  // Search and page start from the address and are written back to it (see
+  // lib/listQuery.ts): a reload and the browser's Back button keep them.
+  const opened = readListQuery();
+  let search = $state((opened.get('q') ?? '').trim());
+  let query = $state((opened.get('q') ?? '').trim());
+  let page = $state(pageFromQuery(opened));
+  $effect(() => {
+    writeListQuery({ q: query || null, page: page === 1 ? null : page });
+  });
+  // The other way round, when the address changes under the open page (the link to this
+  // page in the navigation, Back and Forward between two states).
+  $effect(() => {
+    const params = new URLSearchParams($location.search);
+    const q = (params.get('q') ?? '').trim();
+    const at = pageFromQuery(params);
+    untrack(() => {
+      if (q !== query) {
+        query = q;
+        search = q;
+      }
+      if (at !== page) page = at;
+    });
+  });
   let data = $state<SystemUserPage | null>(null);
   let loading = $state(true);
   let failed = $state(false);
@@ -207,7 +229,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <Pill tone="muted">{$t('status.inactive')}</Pill>
               {/if}
             </td>
-            <td class="meta">
+            <td class="meta num">
               {formatDateTime(user.last_login_at, $language) || $t('users.neverSignedIn')}
             </td>
             <td class="actions">
@@ -229,6 +251,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
                   >
                     {$t('systemUsers.action.revoke')}
                   </MenuItem>
+                  {#if isSelf(user)}
+                    <p class="menu-note" data-testid="revoke-self">
+                      {$t('systemUsers.revoke.self')}
+                    </p>
+                  {/if}
                 {:else}
                   <MenuItem icon={ShieldCheck} onSelect={() => void setSystemAdmin(user, true)}>
                     {$t('systemUsers.action.grant')}

@@ -77,6 +77,27 @@ describe('route table', () => {
     }
   });
 
+  it('marks the pages of the active organization, and only those', () => {
+    // A permission inside an organization means a page of that organization. Such a page
+    // starts over when the organization changes and speaks to the API through
+    // tenantApi(); the lint rule for that covers src/pages/admin, hence the path check.
+    for (const route of routes) {
+      const ofOrganization =
+        route.kind === 'page' &&
+        route.permission !== undefined &&
+        route.permission !== 'system:admin';
+      expect(route.tenantScoped ?? false, route.pattern).toBe(ofOrganization);
+      expect(route.pattern.startsWith('/admin/'), route.pattern).toBe(ofOrganization);
+    }
+    expect(routes.filter((r) => r.tenantScoped).map((r) => r.pattern)).toEqual([
+      '/admin/users',
+      '/admin/groups',
+      '/admin/apps',
+      '/admin/settings',
+      '/admin/audit',
+    ]);
+  });
+
   it('keeps only the login page public', () => {
     expect(routes.filter((r) => r.kind === 'public').map((r) => r.pattern)).toEqual(['/login']);
   });

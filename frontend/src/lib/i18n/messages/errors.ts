@@ -16,8 +16,8 @@ export const errors = {
     'The server cannot be reached. Check your connection.',
   ],
   'error.not_authenticated': [
-    'Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.',
-    'Your session has expired. Please sign in again.',
+    'Deine Sitzung ist beendet. Bitte melde dich erneut an.',
+    'Your session has ended. Please sign in again.',
   ],
   'error.forbidden': ['Dafür fehlt dir die Berechtigung.', 'You are not allowed to do this.'],
   'error.not_found': [
@@ -74,6 +74,22 @@ export const errors = {
     'Für den Versand wird eine E-Mail-Adresse gebraucht.',
     'An e-mail address is required to send the link.',
   ],
+  'error.email_failed': [
+    'Die E-Mail konnte nicht verschickt werden, deshalb wurde nichts geändert. Prüf die SMTP-Einstellungen unter System → Systemeinstellungen oder bitte die Systemadministration darum.',
+    'The e-mail could not be sent, so nothing was changed. Check the SMTP settings under System → System settings, or ask the system administrator to.',
+  ],
+  'error.smtp_password_required': [
+    'Gib das SMTP-Passwort noch einmal ein: Die Verbindungsdaten haben sich geändert, und das gespeicherte Passwort gilt nur für die bisherigen.',
+    'Enter the SMTP password again: the connection settings have changed, and the stored password only goes with the previous ones.',
+  ],
+  'error.managed_by_idp': [
+    'Die Zugehörigkeit dieses Kontos zur Organisation verwaltet der Anmeldedienst selbst (das Konto kam über einen externen Identitätsanbieter oder eine Einladung der Organisation in Keycloak). Das lässt sich nur dort ändern.',
+    'The identity provider manages this account’s membership of the organization itself (the account came in through an external identity provider or an invitation of the organization in Keycloak). This can only be changed there.',
+  ],
+  'error.missing_at_idp': [
+    'Dieses Konto gibt es im Anmeldedienst (Keycloak) nicht mehr – es wurde dort gelöscht. Hier kannst du es nur noch deaktivieren oder löschen.',
+    'This account no longer exists at the identity provider (Keycloak) – it was deleted there. All you can still do here is deactivate or delete it.',
+  ],
   'error.smtp_not_configured': [
     'Der E-Mail-Versand ist nicht eingerichtet. Leg das Konto ohne E-Mail-Versand an oder bitte die Systemadministration, SMTP einzurichten.',
     'E-mail delivery is not set up. Create the account without sending an e-mail, or ask the system administrator to configure SMTP.',
@@ -123,6 +139,10 @@ export const errors = {
     'Nur eingebettete Apps können geprüft werden.',
     'Only embedded apps can be checked.',
   ],
+  'error.unavailable': [
+    'Velydock kann gerade nicht arbeiten, weil seine Datenbank nicht erreichbar ist. Es wurde nichts geändert – versuch es gleich noch einmal.',
+    'Velydock cannot work right now because its database cannot be reached. Nothing was changed – try again in a moment.',
+  ],
   'error.try_again': [
     'Zwei Änderungen sind sich in die Quere gekommen. Es wurde nichts geändert – versuch es einfach noch einmal.',
     'Two changes got in each other’s way. Nothing was changed – just try again.',
@@ -165,6 +185,10 @@ export const errors = {
   'login.error.account_conflict': [
     'Für diesen Benutzernamen oder diese E-Mail-Adresse gibt es bereits ein anderes Konto. Bitte wende dich an deine Administration.',
     'Another account already uses this username or e-mail address. Please contact your administrator.',
+  ],
+  'login.error.account_unsupported': [
+    'Der Benutzername dieses Kontos ist länger, als Velydock unterstützt (höchstens 150 Zeichen). Bitte wende dich an deine Administration.',
+    'The user name of this account is longer than Velydock supports (150 characters at most). Please contact your administrator.',
   ],
   'login.error.disabled': [
     'Dein Konto ist deaktiviert. Bitte wende dich an deine Administration.',

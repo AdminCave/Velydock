@@ -48,4 +48,33 @@ export default [
       'svelte/no-navigation-without-resolve': 'off',
     },
   },
+  {
+    // Pages of the active organization (routes with `tenantScoped`), their dialogs and
+    // the app frames. They are destroyed when the organization changes, but what they
+    // started lives on; their requests therefore go through tenantApi(), which binds them
+    // to the organization they were opened for. The plain `api` names whatever
+    // organization is on screen when a request is sent.
+    files: [
+      'src/pages/admin/**/*.svelte',
+      'src/modals/AppModal.svelte',
+      'src/modals/GroupModal.svelte',
+      'src/modals/UserCreateModal.svelte',
+      'src/modals/UserEditModal.svelte',
+      'src/lib/components/app/AppFrame.svelte',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '$lib/api/client',
+              importNames: ['api', 'request'],
+              message: 'A page of the active organization sends its requests through tenantApi().',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

@@ -81,6 +81,14 @@ export const admin = {
     'Link zum Passwort-Setzen per E-Mail senden',
     'Send a link for setting the password by e-mail',
   ],
+  'users.sendEmail.unavailable': [
+    'Dafür muss der E-Mail-Versand eingerichtet sein (System → Systemeinstellungen). Du bekommst stattdessen ein Einmalpasswort angezeigt, das du weitergibst.',
+    'This needs e-mail delivery to be set up (System → System settings). You are shown a one-time password to pass on instead.',
+  ],
+  'users.role.signsOut': [
+    'Mit dieser Rolle bekommt die Person Verwaltungsrechte. Beim Speichern wird sie abgemeldet: Die neuen Rechte gelten erst nach einer neuen Anmeldung.',
+    'This role gives the person administrative rights. Saving signs them out: the new rights only apply after signing in again.',
+  ],
   'users.sendEmail.text': [
     'Die Person legt ihr Passwort selbst fest. Ohne Haken bekommst du ein Einmalpasswort angezeigt, das du weitergibst.',
     'The person chooses their own password. Without the tick you are shown a one-time password to pass on.',
@@ -227,6 +235,10 @@ export const admin = {
   'apps.actions': ['Aktionen für {name}', 'Actions for {name}'],
   'apps.move.up': ['{name} nach oben', 'Move {name} up'],
   'apps.move.down': ['{name} nach unten', 'Move {name} down'],
+  'apps.moved': [
+    '{name}: Position {position} von {total}',
+    '{name}: position {position} of {total}',
+  ],
   'apps.orderHint': [
     'Die Reihenfolge hier ist die Reihenfolge im Dock.',
     'The order here is the order in the dock.',
@@ -288,6 +300,10 @@ export const admin = {
     'Die vollständige Adresse der Seite, beginnend mit https://',
     'The full address of the site, starting with https://',
   ],
+  'apps.url.hint.external': [
+    'Die vollständige Adresse der Seite, beginnend mit https:// oder http://',
+    'The full address of the site, starting with https:// or http://',
+  ],
   'apps.check.button': ['Einbettbarkeit prüfen', 'Check embedding'],
   'apps.check.ok.title': ['Die Seite lässt sich einbetten', 'The site can be embedded'],
   'apps.check.ok.text': [
@@ -312,8 +328,8 @@ export const admin = {
   ],
   'apps.custom.network.label': ['Netzwerkzugriff erlauben', 'Allow network access'],
   'apps.custom.network.text': [
-    'Aus: Die App kann nichts von außen laden und nichts nach außen senden. An: Sie darf Inhalte über https:// laden und Daten dorthin schicken, etwa Schriften, Bilder, Skripte oder Schnittstellen.',
-    'Off: the app can load nothing from outside and send nothing out. On: it may load content via https:// and send data there, such as fonts, images, scripts or APIs.',
+    'Aus: Die App kann nichts von außen laden und nichts nach außen senden; auch Links in der App öffnen dann nicht. An: Sie darf Inhalte über https:// laden und Daten dorthin schicken, etwa Schriften, Bilder, Skripte oder Schnittstellen, und Links in einem neuen Tab öffnen.',
+    'Off: the app can load nothing from outside and send nothing out; links in the app do not open either. On: it may load content via https:// and send data there, such as fonts, images, scripts or APIs, and open links in a new tab.',
   ],
   'apps.custom.footnote': [
     'Läuft in einer Sandbox, getrennt von Velydock',
@@ -434,6 +450,10 @@ export const admin = {
   'audit.detail.renamedTo': ['neuer Name: {name}', 'new name: {name}'],
   'audit.detail.type': ['Typ: {type}', 'Type: {type}'],
   'audit.detail.fields': ['Geändert: {fields}', 'Changed: {fields}'],
+  'audit.detail.value': ['{field}: {value}', '{field}: {value}'],
+  'audit.value.on': ['an', 'on'],
+  'audit.value.off': ['aus', 'off'],
+  'audit.value.empty': ['leer', 'empty'],
   'audit.detail.apps': ['Apps: {count}', 'Apps: {count}'],
   'audit.detail.slug': ['Kurzname: {slug}', 'Short name: {slug}'],
   'audit.detail.deletedUsers': ['gelöschte Konten: {count}', 'deleted accounts: {count}'],

@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ApiError, api } from '$lib/api/client';
+  import { ApiError, tenantApi } from '$lib/api/client';
   import { errorMessage } from '$lib/api/errors';
   import { fetchAllUsers } from '$lib/api/helpers';
   import type { Group, GroupDetail, User } from '$lib/api/types';
@@ -16,7 +16,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Modal from '$lib/components/ui/Modal.svelte';
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
+  import { focusOnNewErrors, formChanged } from '$lib/utils/forms';
+  import { normalizeName } from '$lib/utils/validate';
 
   interface Props {
     open: boolean;
@@ -29,6 +30,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 
   let { open, group, canReadUsers, onClose, onSaved }: Props = $props();
+
+  // Bound to the organization the page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const formId = $props.id();
   let name = $state('');
@@ -45,15 +49,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   // The members count from what the server reported, which arrives after opening.
   const dirty = $derived(
     formChanged(
-      [name, description, [...memberIds].sort()],
-      [group?.name ?? '', group?.description ?? '', [...originalMembers].sort()],
+      [name, description, [...memberIds]],
+      [group?.name ?? '', group?.description ?? '', originalMembers],
     ),
   );
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
-  $effect(() => {
-    if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
-  });
+  const focusErrors = focusOnNewErrors(formId);
+  $effect(() => focusErrors(errors));
 
   // Opening loads the organization's users for the picker and, when editing, the
   // group's current members.
@@ -72,7 +75,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       loading = true;
     });
     Promise.all([
-      canReadUsers ? fetchAllUsers(controller.signal) : Promise.resolve([]),
+      canReadUsers ? fetchAllUsers(api, controller.signal) : Promise.resolve([]),
       current
         ? api.get('/api/v1/admin/groups/{group_id}', {
             path: { group_id: current.id },
@@ -122,14 +125,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
     saving = true;
     try {
       if (group) {
+        // Only what was changed here is sent. The dialog may have been open for a while:
+        // sending the name it was opened with would take back a rename made elsewhere in
+        // the meantime. Names are compared as the server stores them.
+        const body: { name?: string; description?: string; member_ids?: string[] } = {};
+        if (normalizeName(name) !== group.name) body.name = normalizeName(name);
+        if (description.trim() !== (group.description ?? '')) body.description = description.trim();
+        if (!sameIds(memberIds, originalMembers)) body.member_ids = memberIds;
+        if (Object.keys(body).length === 0) {
+          // Nothing to save, so nothing is sent and nothing is announced as saved.
+          onClose();
+          return;
+        }
         const saved = await api.patch('/api/v1/admin/groups/{group_id}', {
           path: { group_id: group.id },
-          body: {
-            name: name.trim(),
-            description: description.trim(),
-            // Members are only sent when they changed.
-            ...(sameIds(memberIds, originalMembers) ? {} : { member_ids: memberIds }),
-          },
+          body,
         });
         onSaved(saved, false);
       } else {
@@ -159,7 +169,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   {onClose}
 >
   <form id={formId} class="form" onsubmit={submit} novalidate>
-    <FormField label={$t('field.name')} required error={errors.name}>
+    <FormField label={$t('field.name')} required bind:error={errors.name}>
       <Input bind:value={name} maxlength={100} required />
     </FormField>
     <FormField label={$t('field.description')} hint={$t('groups.description.hint')}>

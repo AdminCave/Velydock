@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ApiError, api } from '$lib/api/client';
+  import { ApiError, tenantApi } from '$lib/api/client';
   import { errorMessage } from '$lib/api/errors';
   import { ROLES, type Group, type Role, type User, type UserUpdate } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
@@ -17,8 +17,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import MultiPicker from '$lib/components/ui/MultiPicker.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import { t } from '$lib/i18n';
-  import { focusFirstInvalid, formChanged } from '$lib/utils/forms';
-  import { isValidEmail } from '$lib/utils/validate';
+  import { focusOnNewErrors, formChanged, refusedFields } from '$lib/utils/forms';
+  import { isValidEmail, normalizeName, personNameProblem } from '$lib/utils/validate';
 
   interface Props {
     /** The user to edit; null keeps the dialog closed. */
@@ -33,6 +33,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 
   let { user, groups, canEditGroups, isSelf, onClose, onSaved }: Props = $props();
+
+  // Bound to the organization the page was opened for (see tenantApi()).
+  const api = tenantApi();
 
   const formId = $props.id();
   let firstName = $state('');
@@ -50,9 +53,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const dirty = $derived(formChanged(fields(), pristine));
 
   // A field marked invalid gets the focus, so the message is seen even in a long form.
-  $effect(() => {
-    if (Object.values(errors).some(Boolean)) void focusFirstInvalid(formId);
-  });
+  const focusErrors = focusOnNewErrors(formId);
+  $effect(() => focusErrors(errors));
 
   $effect(() => {
     const current = user;
@@ -74,6 +76,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const identityLocked = $derived(!user?.can_edit_identity);
   const roleLocked = $derived(!user?.can_assign_role);
   const groupsLocked = $derived(!user?.can_edit_membership || !canEditGroups);
+  // Nothing in the dialog can be changed by this administrator: it only shows the account.
+  const readOnly = $derived(identityLocked && roleLocked && (groupsLocked || groups.length === 0));
+  // A role with administrative rights that is higher than the one the person has: the
+  // server ends their sessions then, so that the new rights start with a fresh sign-in.
+  const promotes = $derived(
+    !!user &&
+      !roleLocked &&
+      role !== 'member' &&
+      ROLES.indexOf(role) > ROLES.indexOf(user.role ?? 'member'),
+  );
 
   const roleOptions = $derived(ROLES.map((value) => ({ value, label: $t(`role.${value}`) })));
   const groupOptions = $derived(groups.map((g) => ({ id: g.id, label: g.name })));
@@ -87,8 +99,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
   function patch(current: User): UserUpdate {
     const body: UserUpdate = {};
     if (!identityLocked) {
-      if (firstName.trim() !== current.first_name) body.first_name = firstName.trim();
-      if (lastName.trim() !== current.last_name) body.last_name = lastName.trim();
+      // Compared as the server stores names (one blank between words): a change of
+      // blanks alone is none.
+      if (normalizeName(firstName) !== current.first_name)
+        body.first_name = normalizeName(firstName);
+      if (normalizeName(lastName) !== current.last_name) body.last_name = normalizeName(lastName);
       if (email.trim().toLowerCase() !== (current.email ?? '')) body.email = email.trim() || null;
     }
     if (!roleLocked && role !== current.role) body.role = role;
@@ -109,8 +124,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
     if (!user || saving) return;
     const found: Record<string, string> = {};
     if (!identityLocked) {
-      if (!firstName.trim()) found.first_name = $t('validation.required');
-      if (!lastName.trim()) found.last_name = $t('validation.required');
+      const first = personNameProblem(firstName);
+      const last = personNameProblem(lastName);
+      if (first) found.first_name = $t(first);
+      if (last) found.last_name = $t(last);
       if (email.trim() && !isValidEmail(email)) found.email = $t('validation.email');
     }
     errors = found;
@@ -128,8 +145,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
         await api.patch('/api/v1/admin/users/{user_id}', { path: { user_id: user.id }, body }),
       );
     } catch (err) {
+      // What the server refuses about one field is said at that field.
+      const refused = refusedFields(err, {
+        first_name: () => $t(personNameProblem(firstName) ?? 'validation.invalid'),
+        last_name: () => $t(personNameProblem(lastName) ?? 'validation.invalid'),
+        email: () => $t('validation.email'),
+      });
       if (err instanceof ApiError && err.code === 'email_taken') {
         errors = { email: $t('error.email_taken') };
+      } else if (Object.keys(refused).length > 0) {
+        errors = refused;
       } else {
         failure = errorMessage(err, $t);
       }
@@ -158,14 +183,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <Input value={user.username} readonly mono />
       </FormField>
       <div class="form-row">
-        <FormField label={$t('field.first_name')} required error={errors.first_name}>
+        <FormField label={$t('field.first_name')} required bind:error={errors.first_name}>
           <Input bind:value={firstName} maxlength={100} readonly={identityLocked} required />
         </FormField>
-        <FormField label={$t('field.last_name')} required error={errors.last_name}>
+        <FormField label={$t('field.last_name')} required bind:error={errors.last_name}>
           <Input bind:value={lastName} maxlength={100} readonly={identityLocked} required />
         </FormField>
       </div>
-      <FormField label={$t('field.email')} error={errors.email}>
+      <FormField label={$t('field.email')} bind:error={errors.email}>
         <Input bind:value={email} type="email" maxlength={254} readonly={identityLocked} />
       </FormField>
       <FormField
@@ -178,6 +203,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
       >
         <Select bind:value={role} options={roleOptions} fullWidth disabled={roleLocked} />
       </FormField>
+      {#if promotes}
+        <Callout tone="warning" role="status" testid="role-signs-out">
+          {$t('users.role.signsOut')}
+        </Callout>
+      {/if}
       {#if groups.length > 0}
         <FormField
           label={$t('field.groups')}
@@ -189,7 +219,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
     </form>
   {/if}
   {#snippet footer()}
-    <Button variant="ghost" onclick={onClose}>{$t('action.cancel')}</Button>
-    <Button type="submit" form={formId} loading={saving}>{$t('action.save')}</Button>
+    {#if readOnly}
+      <!-- Nothing to save: no button that pretends otherwise. -->
+      <Button variant="secondary" onclick={onClose}>{$t('action.close')}</Button>
+    {:else}
+      <Button variant="ghost" onclick={onClose}>{$t('action.cancel')}</Button>
+      <Button type="submit" form={formId} loading={saving}>{$t('action.save')}</Button>
+    {/if}
   {/snippet}
 </Modal>

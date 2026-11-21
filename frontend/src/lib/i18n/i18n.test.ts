@@ -156,6 +156,8 @@ describe('dictionaries', () => {
       'audit.action.',
       'settings.theme.',
       'dashboard.greeting.',
+      'icon.',
+      'embed.detail.',
     ];
     const dead = de.filter(
       (key) => !dynamic.some((prefix) => key.startsWith(prefix)) && !code.includes(`'${key}'`),

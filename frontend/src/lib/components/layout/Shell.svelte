@@ -8,9 +8,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import type { Snippet } from 'svelte';
   import type { Me } from '$lib/api/types';
   import AppStage from '$lib/components/app/AppStage.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { t } from '$lib/i18n';
   import { dockEdge } from '$lib/nav';
   import { narrowViewport } from '$lib/stores/media';
+  import { endedSessionToLogin, sessionEnded } from '$lib/stores/session';
   import { workspace } from '$lib/stores/workspace';
   import Dock from './Dock.svelte';
 
@@ -48,6 +51,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
     {activeAppId}
   />
   <main id="main" class="content" tabindex="-1">
+    <!-- The session is gone, but apps are open in their frames (see `sessionEnded`): the
+         page stays so that nothing is lost in them, and says what to do. It does not
+         cover the app. -->
+    {#if $sessionEnded}
+      <div class="ended">
+        <Callout
+          tone="warning"
+          role="alert"
+          title={$t('session.ended.title')}
+          testid="session-ended"
+        >
+          {$t('session.ended.text')}
+          {#snippet action()}
+            <Button size="sm" onclick={endedSessionToLogin}>{$t('session.ended.signIn')}</Button>
+          {/snippet}
+        </Callout>
+      </div>
+    {/if}
     <!-- The stage stays mounted on every page so opened app frames keep their state. -->
     <AppStage appId={activeAppId} />
     {#if activeAppId === null}
@@ -96,7 +117,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   .content:focus {
     outline: none;
   }
+  .ended {
+    flex: 0 0 auto;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border);
+  }
   .scroll {
+    /* Room for the toasts, so that they never lie over a control of the page (Toast.svelte). */
+    margin-bottom: var(--toast-lane, 0px);
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;

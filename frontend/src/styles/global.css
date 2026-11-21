@@ -118,6 +118,13 @@ textarea {
   flex-wrap: wrap;
 }
 
+.page-title,
+.page-subtitle,
+.section-title,
+.section-desc {
+  overflow-wrap: anywhere;
+}
+
 .page-title {
   font-size: var(--text-2xl);
   font-weight: var(--fw-semibold);
@@ -207,6 +214,14 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+/* A value without a blank in it (a name, an address, a short name of full length) wraps
+   inside its cell and takes no more than this width, instead of pushing the other columns
+   out of the table. Values of ordinary length are laid out as they always were. */
+.data-table td {
+  max-width: 32ch;
+  overflow-wrap: break-word;
+}
+
 .data-table th {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -230,6 +245,14 @@ textarea {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+/* Counts and dates stay on one line; a short name or user name of full length may wrap. */
+.data-table td.meta {
+  max-width: 28ch;
+}
+
+.data-table td.num {
   white-space: nowrap;
 }
 
@@ -237,6 +260,26 @@ textarea {
   width: 1%;
   white-space: nowrap;
   text-align: right;
+  /* A table that is wider than its place scrolls sideways (a narrow window, several long
+     values in one row). The actions stay in view at its right edge all the same. */
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* A cell that sticks is a layer of its own, and the menu of the row opens inside it: while
+   it is open the cell lies above the rows that follow and above the dock (as the menu
+   itself does elsewhere, see Menu.svelte), and below dialogs. */
+.data-table td.actions:has([aria-expanded='true']) {
+  z-index: 41;
+}
+
+/* The hover colour is translucent; on the cell that other cells pass under it lies on
+   the solid surface. */
+.data-table tbody tr:hover td.actions {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 100vmax var(--surface-hover);
 }
 
 .data-table .primary {
@@ -263,6 +306,20 @@ textarea {
 
 .subtle {
   color: var(--text-subtle);
+}
+
+/* Why an entry of a row's menu is not offered: one line under the entries. */
+.menu-note {
+  max-width: 260px;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--lh-normal);
+  /* The menu opens inside the cell of the actions, which is set flush right. */
+  text-align: left;
+  white-space: normal;
 }
 
 /* ── Forms ──────────────────────────────────────────────────────────── */

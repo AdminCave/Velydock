@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
-  import { errorMessage } from '$lib/api/errors';
+  import { errorMessage, fieldErrors } from '$lib/api/errors';
   import {
     LANGUAGES,
     NAV_POSITIONS,
@@ -30,7 +30,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { t } from '$lib/i18n';
   import { refreshMe } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
-  import { isValidEmail } from '$lib/utils/validate';
+  import { focusFirstInvalid, refusedFields } from '$lib/utils/forms';
+  import { instanceNameProblem, isValidEmail, normalizeName } from '$lib/utils/validate';
 
   type Encryption = SmtpSettings['encryption'];
 
@@ -57,6 +58,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let savingSmtp = $state(false);
   let smtpErrors = $state<Record<string, string>>({});
   let smtpFailure = $state('');
+  const smtpFormId = $props.id();
+  const generalFormId = `${smtpFormId}-general`;
 
   function apply(value: SystemSettings) {
     settings = value;
@@ -106,11 +109,20 @@ SPDX-License-Identifier: GPL-3.0-or-later
   async function saveGeneral(event: SubmitEvent) {
     event.preventDefault();
     if (savingGeneral || !settings) return;
-    generalErrors = instanceName.trim() ? {} : { instance_name: $t('validation.required') };
-    if (generalErrors.instance_name) return;
+    // The rule for the name is the server's (see instanceNameProblem()); said here first,
+    // at the field, with the reason.
+    const problem = instanceNameProblem(instanceName);
+    generalErrors = problem ? { instance_name: $t(problem) } : {};
+    if (problem) {
+      void focusFirstInvalid(generalFormId);
+      return;
+    }
     // Only what was changed is sent (and ends up in the audit log); SMTP has its own button.
+    // The name is compared as the server stores it: one blank between words.
     const body: SystemSettingsUpdate = {};
-    if (instanceName.trim() !== settings.instance_name) body.instance_name = instanceName.trim();
+    if (normalizeName(instanceName) !== settings.instance_name) {
+      body.instance_name = normalizeName(instanceName);
+    }
     if (navPosition !== settings.default_nav_position) body.default_nav_position = navPosition;
     if (theme !== settings.default_theme) body.default_theme = theme;
     if (lang !== settings.default_language) body.default_language = lang;
@@ -130,7 +142,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
       // Instance name and defaults are part of what every page shows.
       await refreshMe();
     } catch (err) {
-      showError(err);
+      // The server has the last word on the name; what it refuses is said at the field.
+      const refused = refusedFields(err, {
+        instance_name: () =>
+          $t(instanceNameProblem(instanceName) ?? 'systemSettings.instanceName.markup'),
+      });
+      if (Object.keys(refused).length > 0) {
+        generalErrors = refused;
+        void focusFirstInvalid(generalFormId);
+      } else {
+        showError(err);
+      }
     } finally {
       savingGeneral = false;
     }
@@ -149,6 +171,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
     smtpErrors = found;
     smtpFailure = '';
     if (Object.keys(found).length > 0) return;
+    // The same as what is stored, and no new password: nothing to save.
+    const stored = settings?.smtp;
+    if (
+      stored &&
+      smtpPassword === '' &&
+      host.trim() === (stored.host ?? '') &&
+      portNumber === (stored.port ?? 587) &&
+      encryption === (stored.encryption ?? 'starttls') &&
+      fromAddress.trim() === (stored.from_address ?? '') &&
+      fromName.trim() === (stored.from_name ?? '') &&
+      smtpUser.trim() === (stored.username ?? '')
+    ) {
+      showToast($t('systemSettings.unchanged'), 'info');
+      return;
+    }
     savingSmtp = true;
     try {
       const saved = await api.patch('/api/v1/system/settings', {
@@ -170,7 +207,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
       ({ instanceName, navPosition, theme, lang, require2fa } = generalDraft);
       showToast($t('systemSettings.smtp.saved'));
     } catch (err) {
-      smtpFailure = errorMessage(err, $t);
+      // The stored password only goes with the connection it was saved for: when that
+      // was changed and the field left empty, the server asks for it again. Said at the
+      // field it is about, which also gets the focus.
+      if ('smtp.password' in fieldErrors(err)) {
+        smtpErrors = { password: errorMessage(err, $t) };
+        void focusFirstInvalid(smtpFormId);
+      } else {
+        smtpFailure = errorMessage(err, $t);
+      }
     } finally {
       savingSmtp = false;
     }
@@ -186,7 +231,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   </header>
 
   {#if settings}
-    <form class="card card-pad form block" onsubmit={saveGeneral} novalidate>
+    <form id={generalFormId} class="card card-pad form block" onsubmit={saveGeneral} novalidate>
       <div>
         <h2 class="section-title">{$t('systemSettings.general.title')}</h2>
         <p class="section-desc">{$t('systemSettings.general.text')}</p>
@@ -195,7 +240,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         label={$t('systemSettings.instanceName')}
         required
         hint={$t('systemSettings.instanceName.hint')}
-        error={generalErrors.instance_name}
+        bind:error={generalErrors.instance_name}
       >
         <Input bind:value={instanceName} maxlength={60} required />
       </FormField>
@@ -226,7 +271,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       </div>
     </form>
 
-    <form class="card card-pad form block" onsubmit={saveSmtp} novalidate>
+    <form id={smtpFormId} class="card card-pad form block" onsubmit={saveSmtp} novalidate>
       <div class="smtp-head">
         <div>
           <h2 class="section-title">{$t('systemSettings.smtp.title')}</h2>
@@ -252,15 +297,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
             spellcheck={false}
           />
         </FormField>
-        <FormField label={$t('systemSettings.smtp.port')} error={smtpErrors.port}>
-          <Input bind:value={port} mono inputmode="numeric" maxlength={5} />
+        <FormField label={$t('systemSettings.smtp.port')} bind:error={smtpErrors.port}>
+          <Input bind:value={port} mono inputmode="numeric" />
         </FormField>
         <FormField label={$t('systemSettings.smtp.encryption')}>
           <Select bind:value={encryption} options={encryptionOptions} fullWidth />
         </FormField>
       </div>
       <div class="form-row">
-        <FormField label={$t('systemSettings.smtp.fromAddress')} error={smtpErrors.from_address}>
+        <FormField
+          label={$t('systemSettings.smtp.fromAddress')}
+          bind:error={smtpErrors.from_address}
+        >
           <Input
             bind:value={fromAddress}
             type="email"
@@ -285,6 +333,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <FormField
           label={$t('systemSettings.smtp.password')}
           hint={$t('systemSettings.smtp.password.hint')}
+          bind:error={smtpErrors.password}
         >
           <Input
             bind:value={smtpPassword}

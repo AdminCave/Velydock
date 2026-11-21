@@ -7,14 +7,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts">
   import { untrack } from 'svelte';
   import ScrollText from '@lucide/svelte/icons/scroll-text';
-  import { api } from '$lib/api/client';
+  import { api, tenantApi } from '$lib/api/client';
   import type { AuditPage } from '$lib/api/types';
   import { auditActionLabel, auditDetail } from '$lib/audit';
   import Button from '$lib/components/ui/Button.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
-  import Pagination from '$lib/components/ui/Pagination.svelte';
+  import Pagination, { pageCount } from '$lib/components/ui/Pagination.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import { language, t } from '$lib/i18n';
+  import { pageFromQuery, readListQuery, writeListQuery } from '$lib/listQuery';
+  import { location } from '$lib/router';
   import { showError } from '$lib/stores/toasts';
   import { formatDateTime } from '$lib/utils/datetime';
 
@@ -25,9 +27,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   let { scope }: Props = $props();
 
+  // The log of the organization is read through the API bound to the organization this
+  // page was opened for (see tenantApi()); the system log belongs to none.
+  const ofTenant = tenantApi();
+
   const PAGE_SIZE = 50;
 
-  let page = $state(1);
+  // The page number lives in the address (see lib/listQuery.ts): a reload and the
+  // browser's Back button keep it.
+  let page = $state(pageFromQuery(readListQuery()));
+  $effect(() => {
+    writeListQuery({ page: page === 1 ? null : page });
+  });
+  $effect(() => {
+    const at = pageFromQuery(new URLSearchParams($location.search));
+    untrack(() => {
+      if (at !== page) page = at;
+    });
+  });
   let data = $state<AuditPage | null>(null);
   let loading = $state(true);
   let failed = $state(false);
@@ -41,10 +58,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
       const result =
         scope === 'system'
           ? await api.get('/api/v1/system/audit', { query })
-          : await api.get('/api/v1/admin/audit', { query });
+          : await ofTenant.get('/api/v1/admin/audit', { query });
       if (mine !== latest) return;
       data = result;
       failed = false;
+      // A page number from the address may lie beyond the end.
+      const pages = pageCount(result.total, PAGE_SIZE);
+      if (page > pages) page = pages;
     } catch (err) {
       if (mine !== latest) return;
       failed = true;
@@ -75,7 +95,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       {#each data?.items ?? [] as entry (entry.id)}
         {@const detail = auditDetail(entry, $t)}
         <tr data-action={entry.action}>
-          <td class="meta">{formatDateTime(entry.created_at, $language)}</td>
+          <td class="meta num">{formatDateTime(entry.created_at, $language)}</td>
           <td class="meta">{entry.actor_name}</td>
           <td>
             <span class="primary">{auditActionLabel(entry.action, $t)}</span>

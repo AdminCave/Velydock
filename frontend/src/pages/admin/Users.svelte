@@ -14,7 +14,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import UserCheck from '@lucide/svelte/icons/user-check';
   import UserPlus from '@lucide/svelte/icons/user-plus';
   import UserX from '@lucide/svelte/icons/user-x';
-  import { api } from '$lib/api/client';
+  import { tenantApi } from '$lib/api/client';
   import {
     ROLES,
     type Group,
@@ -36,11 +36,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import Tag from '$lib/components/ui/Tag.svelte';
   import { language, t } from '$lib/i18n';
+  import { pageFromQuery, readListQuery, writeListQuery } from '$lib/listQuery';
   import { hasPermission } from '$lib/nav';
+  import { location } from '$lib/router';
   import { me, permissions, refreshMe } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
   import { loadApps } from '$lib/stores/workspace';
   import { formatDateTime } from '$lib/utils/datetime';
+  import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
   import TempPasswordModal from '../../modals/TempPasswordModal.svelte';
   import UserCreateModal from '../../modals/UserCreateModal.svelte';
   import UserEditModal from '../../modals/UserEditModal.svelte';
@@ -48,16 +51,57 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const PAGE_SIZE = 25;
   const SEARCH_DELAY_MS = 300;
 
+  // Bound to the organization this page was opened for (see tenantApi()).
+  const api = tenantApi();
+
   const canWrite = $derived(hasPermission($permissions, 'users:write'));
   const canAssignRoles = $derived(hasPermission($permissions, 'roles:assign'));
   const canReadGroups = $derived(hasPermission($permissions, 'groups:read'));
   const canEditGroups = $derived(hasPermission($permissions, 'groups:write'));
 
-  let search = $state('');
-  let query = $state('');
-  let role = $state<Role | 'all'>('all');
-  let status = $state<'all' | 'active' | 'inactive'>('all');
-  let page = $state(1);
+  // Search, filters and page start from the address and are written back to it (see
+  // lib/listQuery.ts): a reload and the browser's Back button keep them.
+  type Status = 'all' | 'active' | 'inactive';
+  function fromAddress(params: URLSearchParams) {
+    const givenRole = params.get('role');
+    const givenStatus = params.get('status');
+    const status: Status =
+      givenStatus === 'active' || givenStatus === 'inactive' ? givenStatus : 'all';
+    return {
+      q: (params.get('q') ?? '').trim(),
+      role: ROLES.find((r) => r === givenRole) ?? ('all' as const),
+      status,
+      page: pageFromQuery(params),
+    };
+  }
+  const opened = fromAddress(readListQuery());
+  let search = $state(opened.q);
+  let query = $state(opened.q);
+  let role = $state<Role | 'all'>(opened.role);
+  let status = $state<Status>(opened.status);
+  let page = $state(opened.page);
+  $effect(() => {
+    writeListQuery({
+      q: query || null,
+      role: role === 'all' ? null : role,
+      status: status === 'all' ? null : status,
+      page: page === 1 ? null : page,
+    });
+  });
+  // The other way round, when the address changes under the open page: the link to this
+  // page in the navigation (the list as it opens), or Back and Forward between two states.
+  $effect(() => {
+    const next = fromAddress(new URLSearchParams($location.search));
+    untrack(() => {
+      if (next.q !== query) {
+        query = next.q;
+        search = next.q;
+      }
+      if (next.role !== role) role = next.role;
+      if (next.status !== status) status = next.status;
+      if (next.page !== page) page = next.page;
+    });
+  });
 
   let data = $state<UserPage | null>(null);
   let loading = $state(true);
@@ -118,7 +162,20 @@ SPDX-License-Identifier: GPL-3.0-or-later
     untrack(() => void load());
   });
 
+  // What the installation can do, apart from what the role allows: whether a link for
+  // setting the password can be sent by e-mail. Asked on the side; until the answer is
+  // there, and if it never comes, the option is not offered.
+  let emailInvitations = $state(false);
+
   onMount(() => {
+    if (canWrite) {
+      api
+        .get('/api/v1/admin/capabilities')
+        .then((capabilities) => (emailInvitations = capabilities.email_invitations))
+        .catch(() => {
+          /* not offered then; creating an account with a one-time password still works */
+        });
+    }
     if (!canReadGroups) return;
     api
       .get('/api/v1/admin/groups')
@@ -249,6 +306,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
           confirmLabel: $t('users.action.removeGuest'),
         });
     if (!ok) return;
+    const table = document.querySelector('[data-testid="users-table"]');
+    const at = rowIndex(table, 'data-user-id', user.id);
     try {
       const result = await api.delete('/api/v1/admin/users/{user_id}', {
         path: { user_id: user.id },
@@ -259,6 +318,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
         }),
       );
       await load();
+      // The row is gone, and with it the button that had the focus.
+      await restoreFocus(() => [rowMenuAt(table, at), document.getElementById('main')]);
     } catch (err) {
       showError(err);
     }
@@ -335,7 +396,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <td>
               <span class="cell-tags">
                 {#each user.groups as group (group.id)}
-                  <Tag tone="neutral" size="sm" mono={false}>{group.name}</Tag>
+                  <Tag tone="neutral" size="sm" mono={false} title={group.name}>{group.name}</Tag>
                 {:else}
                   <span class="subtle">–</span>
                 {/each}
@@ -348,7 +409,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <Pill tone="muted">{$t('status.inactive')}</Pill>
               {/if}
             </td>
-            <td class="meta">
+            <td class="meta num">
               {formatDateTime(user.last_login_at, $language) || $t('users.neverSignedIn')}
             </td>
             {#if canWrite}
@@ -427,6 +488,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   open={creating}
   {groups}
   {canAssignRoles}
+  {emailInvitations}
   onClose={() => (creating = false)}
   {onCreated}
 />

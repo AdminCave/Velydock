@@ -4,16 +4,22 @@ SPDX-FileCopyrightText: 2026 Kevin Stenzel
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
+<script lang="ts" module>
+  /** After this long without the frame's `load` event the page says that nothing has arrived. */
+  export const SLOW_AFTER_MS = 10_000;
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import { get } from 'svelte/store';
-  import { api } from '$lib/api/client';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
+  import { tenantApi } from '$lib/api/client';
   import { errorMessage } from '$lib/api/errors';
   import type { WorkspaceApp } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
-  import { frameAttributes } from '$lib/frames';
+  import { frameAttributes, openInNewTab } from '$lib/frames';
   import { language, t } from '$lib/i18n';
   import { resolvedTheme } from '$lib/theme';
 
@@ -27,6 +33,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
 
   let { app, active, nonce = 0 }: Props = $props();
+
+  // Bound to the organization whose app this is (see tenantApi()).
+  const api = tenantApi();
 
   // Primitives, so a refreshed app list (new objects, same values) does not reload the frame.
   const id = $derived(app.id);
@@ -43,6 +52,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let loading = $state(true);
   let failure = $state<unknown>(null);
   let attempt = $state(0);
+  // Nothing has loaded for a while. All a page learns about a frame of another site is
+  // its `load` event: whether the app is slow, unreachable or refuses to be embedded
+  // cannot be told apart from here, and the notice does not pretend it can. Every (re)load
+  // gets its own time.
+  let slow = $state(false);
+  // The user has closed the notice: the app works for them, whatever `load` says (a page
+  // with one slow picture has not "loaded" either).
+  let dismissed = $state(false);
+  $effect(() => {
+    void reload;
+    void attempt;
+    slow = false;
+    dismissed = false;
+    if (!loading) return;
+    const timer = setTimeout(() => (slow = true), SLOW_AFTER_MS);
+    return () => clearTimeout(timer);
+  });
 
   // (Re)load the frame. Embedded apps load their own address. Custom apps are served from
   // the sandbox host under a short-lived signed address, so every (re)load asks for a
@@ -110,6 +136,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
         {/snippet}
       </Callout>
     </div>
+  {:else if loading && slow && !dismissed}
+    <!-- In a corner of the frame, not over all of it: the app may be showing something
+         although it has not finished loading. -->
+    <div class="slow">
+      <Callout tone="neutral" role="status" title={$t('app.slow.title')} testid="app-slow">
+        {$t('app.slow.text')}
+        {#snippet action()}
+          {#if app.type === 'embedded' && app.url}
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={ExternalLink}
+              onclick={() => openInNewTab(app.url ?? '')}
+            >
+              {$t('app.openInNewTab')}
+            </Button>
+          {/if}
+          <Button variant="ghost" size="sm" onclick={() => (dismissed = true)}>
+            {$t('app.slow.dismiss')}
+          </Button>
+        {/snippet}
+      </Callout>
+    </div>
   {:else if loading}
     <div class="loading"><Spinner size={22} /></div>
   {/if}
@@ -129,6 +178,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
     /* Pages without their own background would otherwise show the dark shell through. */
     background: #fff;
     color-scheme: normal;
+  }
+  .slow {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+    max-width: min(380px, calc(100% - 2 * var(--space-4)));
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
   }
   .loading {
     position: absolute;

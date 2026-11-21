@@ -127,6 +127,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
     font-family: var(--font-mono);
     font-size: 11px;
   }
+  /* On the highlighted entry the subtle tone would fall below 4.5:1. */
+  .item:hover .meta,
+  .item:focus-visible .meta {
+    color: var(--text-muted);
+  }
   /* In effect: weight, not a filled background. */
   .current {
     color: var(--text-strong);
