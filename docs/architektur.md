@@ -8,7 +8,7 @@ Proxy ist von außen erreichbar.
                             │ HTTPS
                             ▼
    ┌──────────────────────────────────────────────────┐
-   │ Traefik – TLS, Routing, Ratenbegrenzung der API  │
+   │ Traefik – TLS, Routing, Ratenbegrenzung          │
    └──────┬───────────────────┬─────────────────┬─────┘
    dock.example.com   sandbox.example.com   auth.example.com
           │                   │                 │ nur /realms/velydock und /resources
@@ -34,7 +34,7 @@ Proxy ist von außen erreichbar.
 
 | Dienst | Image | Aufgabe |
 |---|---|---|
-| `traefik` | `traefik:v3` | TLS mit Let's Encrypt, Routing nach Hostname, Ratenbegrenzung der API. Konfiguration über Dateien im Verzeichnis `deploy/traefik/dynamic/`, das Traefik beobachtet (Änderungen gelten ohne Neustart); kein Zugriff auf den Docker-Socket. Abschaltbar, wenn ein eigener Proxy vorhanden ist. |
+| `traefik` | `traefik:v3` | TLS mit Let's Encrypt, Routing nach Hostname, Ratenbegrenzung der API und der Anmeldeschritte von Keycloak je Client-Adresse. Konfiguration über Dateien im Verzeichnis `deploy/traefik/dynamic/`, das Traefik beobachtet (Änderungen gelten ohne Neustart); kein Zugriff auf den Docker-Socket. Abschaltbar, wenn ein eigener Proxy vorhanden ist. |
 | `velydock` | `ghcr.io/admincave/velydock` | Oberfläche, API, Anmeldung und die Auslieferung eigener Apps. Ein Prozess, zwei ASGI-Anwendungen (siehe unten). |
 | `theme` | dasselbe Image | Läuft einmal beim Start und kopiert das Login-Theme in das Volume, aus dem Keycloak Themes lädt. |
 | `keycloak` | `quay.io/keycloak/keycloak:26.x` | Identity Provider: Anmeldeseite, Passwörter, Zwei-Faktor, Sitzungen, OIDC für Velydock und angebundene Apps. |
@@ -84,17 +84,25 @@ system_settings                Instanzname, Standardwerte, Zwei-Faktor-Pflicht
 ## Weg einer Anfrage
 
 1. Der Browser sendet das Session-Cookie. `get_principal` sucht (im Systemkontext) die Session,
-   prüft Leerlauf- und Maximaldauer und ob das Konto aktiv ist.
+   prüft Leerlauf- und Maximaldauer und ob das Konto aktiv ist. Alle fünf Minuten fragt es
+   zusätzlich bei Keycloak nach, ob Konto und Sitzung dort noch gelten.
 2. Bei schreibenden Anfragen wird die CSRF-Prüfung ausgeführt.
 3. Der Mandant der Anfrage wird aus der Session bestimmt – nie aus der Anfrage selbst. Mitglieder
    können nur Mandanten betreten, in denen sie Mitglied sind.
-4. Die Datenbanktransaktion wird auf diesen Mandanten festgelegt (`app.scope`, `app.tenant_id`,
-   `app.user_id`). Ab hier sieht die Anfrage nur noch Zeilen ihres Mandanten.
-5. Die Route prüft die nötige Berechtigung (`require(Permission.…)`), die Fachlogik prüft die
-   feineren Regeln aus `policy.py` und filtert zusätzlich ausdrücklich nach Mandant.
-6. Änderungen an Identitäten werden zuerst an Keycloak geschickt und dann gespeichert. Schlägt
-   das Speichern fehl, wird der Keycloak-Aufruf rückgängig gemacht.
-7. Die Transaktion wird am Ende der Anfrage abgeschlossen; bei einem Fehler wird alles verworfen.
+4. Was zur Session gehört (letzte Nutzung, gebundene Organisation), wird in einer eigenen kurzen
+   Transaktion gespeichert. Danach beginnt die Transaktion der Anfrage, festgelegt auf den
+   Mandanten (`app.scope`, `app.tenant_id`, `app.user_id`). Ab hier sieht die Anfrage nur noch
+   Zeilen ihres Mandanten.
+5. Die Route prüft die nötige Berechtigung (`require(Permission.…)`) und ob der Client dieselbe
+   Organisation anzeigt, in der die Session arbeitet (`X-Velydock-Tenant`); die Fachlogik prüft
+   die feineren Regeln aus `policy.py` und filtert zusätzlich ausdrücklich nach Mandant.
+6. Änderungen an Identitäten warten, bis sie an der Reihe sind (eine Sperre je Konto), schreiben
+   in die Datenbank und danach nach Keycloak – nur die geänderten Felder. Lehnt Keycloak ab,
+   wird die Datenbank zurückgerollt; hat Keycloak schon einen Teil übernommen, wird er dort
+   zurückgenommen. Beim Anlegen ist es umgekehrt: erst Keycloak (das die Kennung vergibt), dann
+   die Datenbank; schlägt sie fehl, wird das Konto in Keycloak wieder entfernt.
+7. Die Transaktion wird abgeschlossen, bevor die Antwort gesendet wird; bei einem Fehler wird
+   alles verworfen.
 
 ## Anmeldung
 

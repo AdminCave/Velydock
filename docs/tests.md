@@ -1,14 +1,14 @@
 # Tests
 
-Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 20.11.2026.
+Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 21.11.2026.
 
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
-| Unit-Tests Backend | pytest | 265 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 206 Tests | PostgreSQL |
-| Integration mit Keycloak | pytest gegen Keycloak | 26 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 331 Tests | nichts |
-| Browser-Tests (End-to-End) | Playwright, Chromium | 64 Tests | kompletter Stack |
+| Unit-Tests Backend | pytest | 324 Tests | nichts |
+| Integrationstests Backend | pytest gegen PostgreSQL | 253 Tests | PostgreSQL |
+| Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
+| Unit-Tests Frontend | Vitest, Testing Library | 566 Tests | nichts |
+| Browser-Tests (End-to-End) | Playwright, Chromium | 68 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` |
 
@@ -177,9 +177,11 @@ veröffentlichen.
 
 **Backup und Wiederherstellung** (`scripts/tests/backup-restore.sh`)
 
-Sichert, zerstört Daten in beiden Datenbanken, weist ein beschädigtes Backup ab, stellt wieder
-her und vergleicht Zählungen, Prüfsumme der Benutzerdaten, Tabelleneigentümer und Anzahl der
-Richtlinien mit dem Zustand vor dem Backup.
+Sichert, zerstört Daten in beiden Datenbanken, weist ein beschädigtes Backup ab – auch eines,
+dessen Dump abgeschnitten ist, die Prüfsummen aber stimmen –, ohne dabei etwas anzuhalten oder zu
+verändern, prüft, dass ein fehlgeschlagenes Backup nichts hinterlässt, stellt wieder her und
+vergleicht Zählungen, Prüfsumme der Benutzerdaten, Tabelleneigentümer und Anzahl der Richtlinien
+mit dem Zustand vor dem Backup.
 
 ## Fehler, die die Tests gefunden haben
 
@@ -217,6 +219,58 @@ abseits der getesteten Wege. Jeder ist behoben und durch einen Test belegt.
 | Die Einbettungsprüfung meldete „einbettbar“, wenn die App auf eine eigene Seite mit Framing-Verbot weiterleitete. | `TestEmbedCheckOverHttp`, `TestFramingHeaders` |
 | Der Sandbox-Hostname mit Punkt am Ende lieferte die Hauptanwendung aus. | `test_request_guard.py::TestHostDispatch`, `08-deployment` |
 | Die CI wäre grün geblieben, wenn Datenbank und Keycloak nicht erreichbar gewesen wären (übersprungene Tests). | `tests/conftest.py::unavailable` |
+
+## Fehler aus der zweiten Durchsicht
+
+Eine zweite Runde hat nicht noch einmal den Code gelesen, sondern das Produkt benutzt: sechs
+voneinander unabhängige Prüfungen (Abläufe mit echtem Keycloak unter Gleichzeitigkeit, Rechte und
+Datenbank, Sandbox im Browser, Oberfläche Seite für Seite, Betriebsabläufe nach Anleitung, die neue
+Frontend-Logik) an eigenen, kurzlebigen Installationen. Die wichtigsten Funde:
+
+| Fehler | Jetzt geprüft durch |
+|---|---|
+| „Passwort vergessen“ entfernte den zweiten Faktor: Wer nur das Postfach hatte, kam in ein Konto mit Authenticator-App. | `keycloak/…::TestRealmHardening` (zwei Tests am echten Keycloak, mit E-Mail) |
+| Eine Profiländerung, die gleichzeitig mit einer Sperre lief, hob die Sperre in Keycloak wieder auf (Keycloak führt gleichzeitige Änderungen an einem Konto nicht zusammen). | `TestOneAccountOneChangeAtATime`, `keycloak/…::TestConcurrentChangesAtKeycloak`, `test_keycloak_client.py::TestAccountChangesCarryOnlyWhatChanges` |
+| Ein in Keycloak deaktiviertes oder gelöschtes Konto blieb in Velydock bis zu zwölf Stunden angemeldet. | `TestWhatTheIdentityProviderKnows`, `keycloak/…::TestWhatKeycloakKnows` |
+| „Aus Organisation entfernen“ löschte bei von Keycloak verwalteten Mitgliedern das ganze Konto. | `TestMembershipsTheProviderManages`, `test_keycloak_client.py::TestMembersKeycloakManagesItself` |
+| Velydock startete nicht mehr, nachdem eine Organization in Keycloak gelöscht oder umbenannt worden war. | `TestOrganizationsBehindVelydocksBack` |
+| Zwei Administratoren, die einander gleichzeitig sperrten, blockierten sich gegenseitig (Deadlock) – jede Anfrage hielt eine Sperre auf ihrer eigenen Session. | `test_commit_order.py`, `TestOneAccountOneChangeAtATime` |
+| Das Einmalpasswort ließ sich bei der erzwungenen Änderung als eigenes Passwort behalten. | `keycloak/…::TestBrowserSignIn` |
+| Die Aufforderung, einen zweiten Faktor einzurichten, blieb bestehen, nachdem jemand die Rolle wieder verloren hatte oder die Pflicht abgeschaltet war. | `TestPendingSecondFactorEnrolment`, `keycloak/…::TestRealmHardening` |
+| Passwörter ließen sich direkt an Keycloaks Token-Endpunkt durchprobieren (Passwort-Anmeldung des eingebauten Clients `admin-cli`). | `keycloak/…::TestRealmHardening` |
+| Eine eigene App ohne Netzwerkzugriff konnte Eingaben trotzdem hinausgeben: indem sie sich selbst auf eine fremde Adresse umleitete oder ein Fenster öffnete. | `test_embed_and_custom_apps.py::TestCustomAppLockdown`, `04-custom-app-isolation` |
+| Eine geöffnete, aber gerade nicht sichtbare App konnte den Tastaturfokus an sich ziehen und mitlesen, was auf einer Velydock-Seite getippt wurde. | Frontend: `frameFocus.test.ts`, `AppStage.test.ts` |
+| Die Einladung per E-Mail war Keycloaks englischer Standardtext ohne Benutzernamen. | `05-administration` (liest die echte E-Mail) |
+| Ein nicht erreichbarer Mail-Server wurde als „Anmeldedienst nicht erreichbar“ gemeldet, und das Konto blieb halb angelegt. | `test_keycloak_client.py::TestInvitationMail`, `keycloak/…::TestRealmHardening` |
+| Wer nach geänderten SMTP-Einstellungen das Passwortfeld leer ließ, schickte das gespeicherte Passwort an den neuen Server. | `TestSettingsThatReachTheProvider` |
+| Die Einbettungsprüfung wertete `frame-ancestors` und `X-Frame-Options` anders aus als Browser (Schema, Wildcards, mehrere Header). | `test_embed_and_custom_apps.py::TestFramingHeaders` |
+| Eine neue Session nach Leerlauf-Ablauf begann die Maximaldauer von vorn. | `TestSessionLifetimeDetails` |
+| Mitglieder einer deaktivierten Organisation lasen, sie gehörten keiner Organisation an. | `TestWhatTheInterfaceIsTold`, Frontend-Tests |
+| Namen, die sich nur in Leerzeichen unterscheiden, waren möglich und sahen gleich aus; Listen waren uneinheitlich sortiert. | `TestNamesAndOrder` |
+| Fiel die Datenbank aus, antwortete die API mit einem Serverfehler und `/api/health` meldete „gesund“. | `TestDatabaseOutage` |
+| Ein Bestätigungsdialog überlebte den Wechsel der Organisation und löschte danach in der neuen. | Frontend: `client.test.ts`, `pages.test.ts`, `App.test.ts` |
+| Das Image enthielt `pip` mit bekannten Schwachstellen und veraltete Systempakete. | Scan des gebauten Images (manuell, siehe unten) |
+| Markup im Namen der Installation erschien auf Keycloaks Anmeldeseite als Link oder Bild; Maskieren half nicht, weil Keycloak vor dem Filtern dekodiert. | `keycloak/…::TestRealmHardening` (liest die ausgelieferte Seite), `TestSettingsThatReachTheProvider` |
+| Aktionen an einem Konto, das in Keycloak gelöscht worden war, endeten in „Anmeldedienst hat die Anfrage abgelehnt“. | `TestWhatTheIdentityProviderKnows` |
+| Eine übergroße Anfrage wurde beantwortet, während der Proxy sie noch sendete; in einem von drei Läufen der Browser-Suite meldete der Proxy deshalb 502 statt 413. | `test_request_guard.py::TestBodyLimit`; `08-deployment` (40 Wiederholungen ohne Fehler, auf Abruf ließ sich der Fehler nicht auslösen) |
+
+Zwei Fehler steckten in den Korrekturen dieser Runde selbst. Gefunden hat sie erst der erneute
+Lauf der Prüfskripte gegen eine Installation, die vom vorherigen Stand aktualisiert wurde – die
+automatisierten Tests waren grün, weil sie die betroffene Stelle nur gegen den nachgebauten
+Anmeldedienst prüften:
+
+| Fehler | Jetzt geprüft durch |
+|---|---|
+| Abgelehnte Anmeldungen endeten am echten Keycloak auf dessen Fehlerseite „Invalid redirect uri“: Keycloak nimmt keine Rücksprungadresse mit einem Parameter namens `error` an. | `keycloak/…::TestBrowserSignIn` (ganzer Rückweg am echten Keycloak) |
+| Die strengere Passwort-Richtlinie galt nur für neu angelegte Realms; aktualisierte Installationen ließen das Einmalpasswort weiter als eigenes Passwort zu. | `keycloak/…::TestWhatOperatorsChangeInKeycloak` |
+
+Die Lehre daraus steht jetzt als Regel in der Suite: Was von Keycloaks Verhalten abhängt, wird an
+Keycloak geprüft – und zwar am Ergebnis (der ausgelieferten Seite, der Weiterleitung), nicht am
+gespeicherten Wert.
+
+Nicht automatisiert, sondern einmalig von Hand geprüft: der Schwachstellen-Scan des Images, das
+Verhalten des Organization-Scopes bei Rückfragen ([sso.md](sso.md)), und was eine eigene App
+ohne Netzwerkzugriff über WebRTC dennoch senden kann ([sicherheit.md](sicherheit.md#eigene-apps)).
 
 ## Continuous Integration
 

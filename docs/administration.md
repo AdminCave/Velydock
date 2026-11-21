@@ -35,14 +35,22 @@ Bindestriche). Der Kurzname ist dauerhaft; er erscheint in Keycloak als Alias de
 | **Organisation anlegen** | Legt die Organisation und ihr Gegenstück in Keycloak an. Sie ist zunächst leer. |
 | **Betreten** | Wechselt in die Organisation. Als Systemadministrator kannst du dort alles verwalten, ohne Mitglied zu sein, und siehst alle ihre Apps. |
 | **Umbenennen** | Ändert den Namen; der Kurzname bleibt. |
-| **Deaktivieren** | Mitglieder behalten ihr Konto, können die Organisation aber nicht mehr betreten. Wer nur dieser Organisation angehört, sieht nach der Anmeldung einen Hinweis statt des Workspace. |
+| **Deaktivieren** | Mitglieder behalten ihr Konto, können die Organisation aber nicht mehr betreten. Wer nur dieser Organisation angehört, sieht nach der Anmeldung statt des Workspace den Hinweis, dass seine Organisation deaktiviert ist. |
 | **Löschen** | Entfernt die Organisation mit Gruppen, Apps und Protokoll **und löscht alle Konten, die ihr gehören**. Gäste aus anderen Organisationen behalten ihr Konto. Zur Bestätigung muss der Kurzname eingegeben werden. Nicht umkehrbar. |
 
-Die Organisation, der ein Systemadministrator angehört, lässt sich weder deaktivieren noch löschen.
+Die Organisation, der das Konto eines Systemadministrators gehört, lässt sich weder deaktivieren
+noch löschen; die beiden Aktionen sind dort ausgegraut.
+
+Namen werden bereinigt: Mehrere Leerzeichen hintereinander zählen als eines, damit nicht zwei
+Organisationen, Gruppen oder Apps entstehen, die gleich aussehen. Listen sind nach Namen
+sortiert, Umlaute bei ihrem Grundbuchstaben.
 
 **Eine neue Organisation einrichten:** anlegen → „Betreten“ → unter *Verwaltung → Benutzer* den
 ersten Benutzer mit der Rolle „Administration“ anlegen. Ab dann kann die Organisation sich selbst
 verwalten.
+
+Suche, Filter und Seite einer Liste stehen in der Adresse: Neu laden und „Zurück“ behalten sie,
+und eine gefilterte Liste lässt sich als Link weitergeben.
 
 Zwischen Organisationen wechselst du über den Organisations-Umschalter im Dock. Er erscheint, wenn
 du mehr als einer Organisation angehörst oder Systemadministrator bist.
@@ -66,8 +74,11 @@ filtern.
 
 Nach „Konto anlegen“ zeigt Velydock ein **Einmalpasswort** – nur dieses eine Mal. Gib es der
 Person auf sicherem Weg weiter. Bei der ersten Anmeldung muss sie ein eigenes Passwort wählen
-(mindestens 12 Zeichen). Mit der E-Mail-Option erhält sie stattdessen einen Link (drei Tage
-gültig), über den sie ihr Passwort selbst setzt, und es wird kein Passwort angezeigt.
+(mindestens 12 Zeichen, nicht das Einmalpasswort selbst). Mit der E-Mail-Option erhält sie
+stattdessen eine E-Mail mit ihrem Benutzernamen und einem Link (drei Tage gültig), über den sie ihr
+Passwort selbst setzt; es wird kein Passwort angezeigt. Die Option gibt es nur, wenn der
+E-Mail-Versand eingerichtet ist. Ein verschickter Link lässt sich nicht zurückziehen: Er wird
+ungültig, wenn du die E-Mail-Adresse des Kontos änderst oder das Konto deaktivierst.
 
 Meldet Velydock, dass Benutzername oder E-Mail-Adresse vergeben sind, existiert das Konto bereits
 – möglicherweise in einer anderen Organisation. Soll diese Person auch bei dir arbeiten, fügt sie
@@ -80,7 +91,7 @@ ein Systemadministrator hinzu (siehe „Gäste“).
 | **Bearbeiten** | Name, E-Mail-Adresse, Rolle, Gruppen. |
 | **Passwort zurücksetzen** | Zeigt ein neues Einmalpasswort und meldet die Person überall ab. |
 | **Sitzungen beenden** | Meldet die Person überall ab, in Velydock und in Keycloak. |
-| **Deaktivieren / Reaktivieren** | Sperrt die Anmeldung sofort und beendet laufende Sitzungen. Daten und Zuordnungen bleiben erhalten. |
+| **Deaktivieren / Reaktivieren** | Sperrt die Anmeldung sofort und beendet laufende Sitzungen. Daten und Zuordnungen bleiben erhalten. Wird ein Konto direkt in Keycloak deaktiviert oder gelöscht, während die Person angemeldet ist, erscheint es wenige Minuten später auch hier als deaktiviert. Ein in Keycloak gelöschtes Konto, das niemand mehr benutzt, bleibt hier stehen: Änderungen daran lehnt Velydock mit einem Hinweis ab, deaktivieren und löschen lässt es sich. |
 | **Konto löschen** | Löscht das Konto endgültig, auch in Keycloak. |
 | **Aus Organisation entfernen** | Nur bei Gästen: beendet die Mitgliedschaft; das Konto bleibt bestehen. |
 
@@ -112,6 +123,11 @@ Unter *System → Alle Benutzer* erscheinen auch Konten ohne Organisation. Sie e
 jemand anmeldet, den Velydock noch nicht kennt – etwa ein Konto aus einem angebundenen
 Verzeichnis. Die Person sieht nach der Anmeldung nur einen Hinweis, bis ein Systemadministrator
 sie einer Organisation hinzufügt. Die erste Organisation wird zur Eigentümerin des Kontos.
+
+Konten, deren Mitgliedschaft Keycloak selbst verwaltet (aus einem Identity Provider einer
+Organization oder einer Einladung in Keycloak), lassen sich hier nicht aus der Organisation
+entfernen, und ihre E-Mail-Adresse lässt sich nicht löschen – Keycloak würde dabei das ganze Konto
+löschen. Velydock meldet das und verweist auf Keycloak.
 
 ### Systemadministratoren
 
@@ -180,16 +196,17 @@ Systemeinstellungen, Systemadministrator-Rechte), stehen im **Systemprotokoll**.
 
 | Einstellung | Wirkung |
 |---|---|
-| **Name der Installation** | Erscheint in der Oberfläche und auf der Anmeldeseite. |
+| **Name der Installation** | Erscheint in der Oberfläche, auf der Anmeldeseite und in den E-Mails. Die Zeichen `<` und `>` sowie Zeichenreferenzen wie `&lt;` sind nicht erlaubt. |
 | **Standardposition des Docks**, **Standard-Design**, **Standardsprache** | Gelten, solange weder Organisation noch Benutzer etwas anderes wählen. |
-| **Zwei-Faktor für Administratoren verlangen** | Wer eine Rolle mit Verwaltungsrechten hat, muss bei der Anmeldung eine Authenticator-App einrichten, falls noch keine vorhanden ist. |
-| **E-Mail-Versand (SMTP)** | Server, Port, Verschlüsselung, Absender, Zugangsdaten. Danach kann Velydock Passwort-Links verschicken, und die Anmeldeseite bietet „Passwort vergessen“ an. Das Passwort wird nie wieder angezeigt; ein leeres Feld behält das gespeicherte. |
+| **Standardsprache** (zusätzlich) | Ist auch die Sprache der E-Mails und – für alle ohne eigene Wahl – der Anmeldeseiten von Keycloak. |
+| **Zwei-Faktor für Administratoren verlangen** | Wer eine Rolle mit Verwaltungsrechten hat, muss bei der Anmeldung eine Authenticator-App einrichten, falls noch keine vorhanden ist. Wird die Pflicht abgeschaltet oder verliert jemand die Rolle, bevor die Einrichtung abgeschlossen ist, verlangt Keycloak sie nicht mehr. |
+| **E-Mail-Versand (SMTP)** | Server, Port, Verschlüsselung, Absender, Zugangsdaten. Danach kann Velydock Passwort-Links verschicken, und die Anmeldeseite bietet „Passwort vergessen“ an. Das Passwort wird nie wieder angezeigt; ein leeres Feld behält das gespeicherte – außer du änderst Server, Port, Verschlüsselung, Absenderadresse oder Benutzername: dann muss das Passwort neu eingegeben werden. |
 
 ## Was Benutzer selbst tun
 
 - **Profil:** Vor- und Nachname ändern. Die E-Mail-Adresse ändert die Administration.
 - **Passwort & Sicherheit:** führt zur Kontoseite von Keycloak – Passwort ändern, zweiten Faktor
-  oder Passkey einrichten, angemeldete Geräte ansehen.
+  (Authenticator-App) einrichten, angemeldete Geräte ansehen.
 - **Einstellungen:** Design (System, Hell, Dunkel), Position der Navigation, Sprache. Die Wahl
   wird am Konto gespeichert und gilt auf jedem Gerät.
 
@@ -199,4 +216,5 @@ Apps per Single Sign-On anbinden, Verzeichnisse (LDAP/AD) und externe Identity P
 einrichten, die Passwort-Richtlinie oder die Schwellenwerte des Brute-Force-Schutzes ändern: siehe
 [sso.md](sso.md) und [betrieb.md](betrieb.md#zugang-zur-keycloak-verwaltung). Passwort-Richtlinie
 und Schwellenwerte setzt Velydock nur beim Anlegen des Realms; eine in Keycloak geänderte
-Einstellung bleibt bestehen.
+Einstellung bleibt bestehen. (Eine unveränderte Richtlinie aus einer früheren Velydock-Version
+wird beim Update auf den aktuellen Ausgangswert gebracht.)

@@ -73,8 +73,9 @@ Danach:
    Administratoren standardmäßig Pflicht).
 
 **Zugang verloren?** Derselbe Befehl mit einem vorhandenen Benutzernamen setzt dessen Passwort
-zurück, aktiviert das Konto und macht es zum Systemadministrator. Einen eingerichteten zweiten
-Faktor lässt er unverändert.
+zurück, aktiviert das Konto und macht es zum Systemadministrator. Laufende Sitzungen des Kontos
+beendet er dabei, in Velydock und in Keycloak; wer damit angemeldet war, meldet sich mit dem
+Einmalpasswort neu an. Einen eingerichteten zweiten Faktor lässt er unverändert.
 
 **Zweiten Faktor verloren?** Velydock kann einen eingerichteten zweiten Faktor nicht entfernen;
 das geht nur in Keycloaks Konsole. Hat kein anderer Systemadministrator mehr Zugang, führt
@@ -115,12 +116,14 @@ Alle Einstellungen stehen in `.env`. Nach einer Änderung: `docker compose up -d
 | `COMPOSE_PROFILES` | `proxy` startet den mitgelieferten Traefik. Leer lassen für einen eigenen Proxy. |
 | `HTTP_BIND`, `HTTPS_BIND` | Adresse und Port, an die Traefik bindet (Standard `0.0.0.0:80` und `0.0.0.0:443`). |
 | `TLS_RESOLVER` | Standard `letsencrypt`. Leer: Traefik verwendet ein selbstsigniertes Zertifikat (nur zum Testen). |
-| `PUBLIC_PORT_SUFFIX` | Nur nötig, wenn Velydock nicht auf Port 443 erreichbar ist, z. B. `:8443`. |
+| `PUBLIC_PORT_SUFFIX` | Nur nötig, wenn Velydock nicht auf Port 443 erreichbar ist, z. B. `:8443`. Die Umleitung von HTTP nach HTTPS zeigt auch dann auf Port 443. |
 | `VELYDOCK_IMAGE` | Image und Version, z. B. `ghcr.io/admincave/velydock:0.1.0`. |
+| `KEYCLOAK_IMAGE` | Image und Version von Keycloak. Ohne Angabe die Version, mit der Velydock getestet ist ([betrieb.md](betrieb.md#update)). |
 
 ### Geheimnisse
 
-Von `install.sh` erzeugt; von Hand jeweils mit `openssl rand -hex 32`.
+Von `install.sh` erzeugt; von Hand jeweils mit `openssl rand -hex 32`. Wer `.env` selbst aus
+`.env.example` anlegt, nimmt anderen Benutzern des Servers das Leserecht: `chmod 600 .env`.
 
 | Variable | Verwendung |
 |---|---|
@@ -129,12 +132,44 @@ Von `install.sh` erzeugt; von Hand jeweils mit `openssl rand -hex 32`.
 | `VELYDOCK_SECRET_KEY` | Signiert Login-Zustand und Links zu eigenen Apps. |
 | `VELYDOCK_OIDC_CLIENT_SECRET` | Geheimnis des OIDC-Clients `velydock`. |
 | `VELYDOCK_IDP_ADMIN_CLIENT_SECRET` | Geheimnis des Dienstzugangs `velydock-admin` für Keycloaks Admin-API. |
-| `KEYCLOAK_BOOTSTRAP_SECRET` | Nur für den ersten Start: damit legt Velydock seinen Realm an. |
+| `KEYCLOAK_BOOTSTRAP_SECRET` | Damit legt Velydock beim ersten Start seinen Realm an. Muss danach in `.env` stehen bleiben: Keycloak startet ohne den Wert nicht, und Compose verweigert deshalb den Start. |
 
-Das Geheimnis des OIDC-Clients wird bei jedem Start nach Keycloak übertragen und lässt sich
-durch Ändern in `.env` und Neustart tauschen. Für das Geheimnis des Dienstzugangs gilt das nur,
-solange `KEYCLOAK_BOOTSTRAP_SECRET` gesetzt ist. Die Datenbank-Passwörter lassen sich so nicht
-ändern: PostgreSQL setzt sie nur beim Anlegen der Datenbank.
+### Geheimnisse tauschen
+
+| Geheimnis | So geht es |
+|---|---|
+| `VELYDOCK_OIDC_CLIENT_SECRET` | Neuen Wert in `.env` eintragen, `docker compose up -d`. Velydock überträgt ihn beim Start nach Keycloak. Wer angemeldet ist, bleibt es. |
+| `VELYDOCK_IDP_ADMIN_CLIENT_SECRET` | Ebenso. Velydock trägt den neuen Wert über den Bootstrap-Zugang in Keycloak ein; das gelingt nur, wenn `KEYCLOAK_BOOTSTRAP_SECRET` in `.env` unverändert der Wert der Installation ist. Sonst startet `velydock` nicht mehr, bis der alte Wert wieder eingetragen ist. |
+| `VELYDOCK_SECRET_KEY` | Neuen Wert in `.env` eintragen, `docker compose up -d`. Sitzungen bleiben gültig; Links zu eigenen Apps, die vorher ausgegeben wurden (fünf Minuten gültig), verfallen. |
+| `KEYCLOAK_BOOTSTRAP_SECRET` | Lässt sich über `.env` nicht tauschen: Keycloak übernimmt den Wert nur beim allerersten Start. Ein geänderter Wert bewirkt in Keycloak nichts, macht aber `keycloak-admin` und den Tausch des Dienstzugang-Geheimnisses unbrauchbar („identity provider rejected the service account (401)“), bis wieder der ursprüngliche eingetragen ist. Der Zugang ist nur aus dem internen Docker-Netz nutzbar ([einschraenkungen.md](einschraenkungen.md)). |
+| `POSTGRES_PASSWORD`, `VELYDOCK_DB_PASSWORD`, `KEYCLOAK_DB_PASSWORD` | Nicht durch Ändern in `.env` allein: PostgreSQL setzt Passwörter nur beim Anlegen des Datenverzeichnisses, Keycloak und Velydock kämen mit dem neuen Wert nicht mehr an die Datenbank. In vier Schritten, siehe unten. |
+
+Datenbank-Passwörter tauschen:
+
+```bash
+# 1. Neue Werte in .env eintragen (alle drei oder einzelne)
+
+# 2. PostgreSQL die neuen Werte übergeben. Es startet dafür kurz neu; Keycloak und Velydock
+#    arbeiten mit den alten Passwörtern weiter.
+docker compose up -d --wait postgres
+
+# 3. Die Rollen auf die neuen Passwörter setzen. psql liest sie aus der Umgebung des Containers,
+#    sie stehen also in keiner Befehlszeile.
+docker compose exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+\getenv p POSTGRES_PASSWORD
+\getenv v VELYDOCK_DB_PASSWORD
+\getenv k KEYCLOAK_DB_PASSWORD
+ALTER ROLE postgres PASSWORD :'p';
+ALTER ROLE velydock PASSWORD :'v';
+ALTER ROLE keycloak PASSWORD :'k';
+SQL
+
+# 4. Keycloak und Velydock mit den neuen Werten starten (Unterbrechung wie bei einem Update)
+docker compose up -d --wait
+```
+
+Wurde nach Schritt 1 schon `docker compose up -d` ausgeführt, starten Keycloak und Velydock nicht
+(`password authentication failed` im Log von PostgreSQL); die Schritte 3 und 4 holen das nach.
 
 ### Verhalten
 
@@ -144,7 +179,7 @@ solange `KEYCLOAK_BOOTSTRAP_SECRET` gesetzt ist. Die Datenbank-Passwörter lasse
 | `VELYDOCK_SESSION_IDLE_MINUTES` | `120` | Sitzung endet nach dieser Zeit ohne Aktivität. Ein sichtbares Velydock-Fenster mit Fokus gilt als Aktivität ([sso.md](sso.md#sessions-und-abmeldung)). |
 | `VELYDOCK_SESSION_MAX_HOURS` | `12` | Sitzung endet spätestens nach dieser Zeit. |
 | `VELYDOCK_EMBED_CHECK_ALLOW_PRIVATE` | `false` | Erlaubt der Einbettungsprüfung, Adressen in privaten Netzen abzurufen. |
-| `VELYDOCK_TRUSTED_PROXIES` | private Netze und `127.0.0.1` | Adressen und Netze (kommagetrennt), deren `X-Forwarded-For` geglaubt wird. Daraus stammt die Client-Adresse im Protokoll. Der Standard passt für den mitgelieferten Traefik und für einen Proxy auf demselben Server; nur ein Proxy mit öffentlicher Adresse muss hier eingetragen werden. |
+| `VELYDOCK_TRUSTED_PROXIES` | private Netze und `127.0.0.1` | Adressen und Netze (kommagetrennt), deren `X-Forwarded-For` geglaubt wird. Daraus stammt die Client-Adresse im Protokoll. Der Standard passt für den mitgelieferten Traefik und für einen Proxy auf demselben Server; nur ein Proxy mit öffentlicher Adresse muss hier eingetragen werden. Der Wert ersetzt den Standard. |
 | `VELYDOCK_LOG_LEVEL` | `INFO` | Protokollstufe des Backends. |
 
 Weitere Einstellungen (Instanzname, Standardsprache, Standard-Design, Navigationsposition,

@@ -13,7 +13,9 @@ Mitglieder, an Gruppen oder an einzelne Benutzer freigegeben.
 
 Geöffnete eingebettete Apps bleiben beim Wechsel geladen (bis zu fünf gleichzeitig), sodass
 Eingaben und Position erhalten bleiben. Jede App hat in der Kopfzeile „Neu laden“ und „In neuem
-Tab öffnen“.
+Tab öffnen“. Meldet eine App nach zehn Sekunden noch nicht, dass sie geladen ist, bietet Velydock
+„In neuem Tab öffnen“ in einem Hinweis an. Ob eine App wirklich etwas anzeigt, kann Velydock
+nicht sehen: Auch die Fehlerseite des Browsers gilt als geladen.
 
 ### Zwei Voraussetzungen
 
@@ -27,10 +29,14 @@ Velydock prüft das beim Speichern der App und mit der Schaltfläche „Einbettb
 |---|---|
 | Einbettbar | Kein Verbot gefunden, oder Velydocks Adresse ist ausdrücklich erlaubt. |
 | Blockiert | Die App verbietet das Einbetten. Velydock zeigt statt eines leeren Frames einen Hinweis mit „In neuem Tab öffnen“. Empfehlung: Typ auf „Neuer Tab“ stellen oder die App umkonfigurieren. |
-| Ungeprüft | Die Adresse war vom Server aus nicht prüfbar (privates Netz, nicht erreichbar, Weiterleitung auf eine andere Adresse, etwa eine Anmeldeseite). Velydock versucht die Einbettung. |
+| Ungeprüft | Die Adresse war vom Server aus nicht prüfbar (privates Netz, nicht erreichbar, Weiterleitung auf einen anderen Host, etwa einen Anmeldedienst). Velydock versucht die Einbettung. |
 
-Die Prüfung sieht nur die Antwort auf die eingegebene Adresse. Leitet eine App erst nach der
-Anmeldung auf eine Seite mit Verbot, bleibt das unentdeckt.
+Unter dem Ergebnis steht der Grund – zum Beispiel, welche Regel der App das Einbetten verbietet
+oder wohin sie weiterleitet.
+
+Die Prüfung folgt Weiterleitungen innerhalb desselben Hosts (etwa auf die eigene Anmeldeseite der
+App) und beurteilt die Seite, die am Ende angezeigt würde. Leitet eine App erst nach der Anmeldung
+auf eine Seite mit Verbot, bleibt das unentdeckt.
 
 Um das Einbetten zu erlauben, muss die App (oder der Proxy davor) Velydocks Adresse zulassen:
 
@@ -56,6 +62,10 @@ Für einen Dienstleister mit Kunden unter eigenen Domains heißt das: Apps der K
 der Regel als „Neuer Tab“ eingebunden, solange Velydock nicht unter der Kundendomain erreichbar
 ist.
 
+Dieselbe Domain hat eine Kehrseite: Jede App unter ihr kann Cookies für die ganze Domain setzen
+und damit die Anmeldung bei Keycloak beeinflussen ([sicherheit.md](sicherheit.md#eingebettete-fremde-apps)).
+Unter die Domain von Velydock gehören nur Apps, deren Betreiber man vertraut.
+
 ### Anmeldung in eingebetteten Apps
 
 Ist die App per OIDC an Keycloak angebunden ([sso.md](sso.md)), meldet sie den Benutzer im Frame
@@ -67,9 +77,15 @@ Keycloak-Sitzung), bleibt der Frame leer; „In neuem Tab öffnen“ führt dann
 
 Kamera, Mikrofon, Zwischenablage (lesen/schreiben), Vollbild und Bildschirmfreigabe stehen einer
 eingebetteten App nur zur Verfügung, wenn sie in den App-Einstellungen angehakt sind – nötig etwa
-für Videokonferenzen.
+für Videokonferenzen. Eine Ausnahme macht der Browser selbst: Nach einem Klick in der App kann
+jede eingebettete Seite etwas in die Zwischenablage legen, auch ohne das Häkchen. Lesen kann sie
+die Zwischenablage ohne Häkchen nicht.
 
 Eingebettete Apps können die Velydock-Seite nicht von sich aus durch eine andere ersetzen.
+
+Geöffnete Apps bleiben im Hintergrund geladen, damit der Wechsel zwischen ihnen schnell geht.
+Tastatureingaben erhält aber nur die App, die gerade zu sehen ist: Zieht eine App im Hintergrund
+den Tastaturfokus an sich, nimmt Velydock ihn zurück und beendet die App, wenn sie es wiederholt.
 
 ## Apps im neuen Tab
 
@@ -85,9 +101,9 @@ setzt daraus ein Dokument zusammen und zeigt es in einem abgeschotteten Frame.
 Was eigener Code kann:
 
 - Inhalte anzeigen, auf Eingaben reagieren, Formulare und Dialoge verwenden.
-- Links in neuen Tabs öffnen (`target="_blank"`).
-- Mit „Netzwerkzugriff erlauben“: Daten von `https://`-Adressen laden (`fetch`, Bilder, Schriften,
-  Skripte), sofern die Gegenseite das zulässt.
+- Mit „Netzwerkzugriff erlauben“: Links in neuen Tabs öffnen (`target="_blank"`) und Daten von
+  `https://`-Adressen laden (`fetch`, Bilder, Schriften, Skripte), sofern die Gegenseite das
+  zulässt.
 - Das Design des Benutzers übernehmen: `<html data-theme="dark|light" lang="de|en">`.
 
 Was eigener Code nicht kann:
@@ -96,9 +112,12 @@ Was eigener Code nicht kann:
   Zustand geht beim Neuladen verloren.
 - Auf die Velydock-Seite, die Sitzung oder die API zugreifen.
 - Die Velydock-Seite auf eine andere Adresse umleiten.
-- Ohne die Netzwerk-Option irgendeine Verbindung aufbauen.
+- Ohne die Netzwerk-Option Inhalte laden, Daten per `fetch`, Formular oder Fenster an eine
+  Adresse senden, sich selbst auf eine fremde Adresse umleiten oder Links öffnen. (Zwei
+  technische Ausnahmen lassen sich mit Browser-Mitteln nicht schließen; siehe
+  [sicherheit.md](sicherheit.md#eigene-apps).)
 
-Beispiel einer Linkliste:
+Beispiel einer Linkliste – sie braucht „Netzwerkzugriff erlauben“, damit die Links aufgehen:
 
 ```html
 <h1>Wichtige Links</h1>

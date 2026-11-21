@@ -92,14 +92,19 @@ Begründung: Der Code läuft so in einem leeren Origin ohne Cookies und Speicher
 Schichten (Header und iFrame-Attribut) plus ein fremder Hostname schützen auch dann, wenn eine
 davon versagt.
 
-## 7. Identitätsänderungen: erst Keycloak, dann Datenbank
+## 7. Identitätsänderungen ohne gemeinsame Transaktion
 
-Beim Anlegen eines Benutzers wird zuerst das Keycloak-Konto erzeugt, dann die Datenbankzeile.
-Schlägt der zweite Schritt fehl, wird das Konto wieder gelöscht.
+Es gibt keine Transaktion über Keycloak und die Datenbank zugleich. Die Reihenfolge ist deshalb
+so gewählt, dass ein Fehler nichts hinterlässt:
 
-Begründung: Es gibt keine gemeinsame Transaktion über beide Systeme. Diese Reihenfolge
-hinterlässt im Fehlerfall nichts. `velydock bootstrap` gleicht beim Start zusätzlich
-Organizations und Mitgliedschaften ab.
+- **Anlegen:** zuerst das Keycloak-Konto (Keycloak vergibt die Kennung), dann die Datenbankzeile.
+  Schlägt der zweite Schritt fehl, wird das Konto wieder gelöscht.
+- **Ändern, Sperren, Löschen:** zuerst die Datenbank (noch nicht abgeschlossen), dann Keycloak,
+  zuletzt der Commit. Lehnt die Datenbank ab, wurde Keycloak nie angefasst; lehnt Keycloak ab,
+  wird die Datenbank zurückgerollt (siehe auch Entscheidung 12).
+
+`velydock bootstrap` gleicht beim Start zusätzlich Organizations (Name, Zustand, Mitglieder) mit
+den Mandanten ab; scheitert das für einen Mandanten, startet Velydock trotzdem.
 
 ## 8. Zwei-Faktor für Administratoren über Keycloak
 
@@ -146,7 +151,48 @@ Sign-On. Der Ablauf begrenzt daher, wie lange ein unbenutztes Session-Cookie gü
 ersetzt weder das Abmelden noch die Bildschirmsperre
 ([einschraenkungen.md](einschraenkungen.md#sicherheitsrelevant)).
 
-## 12. Abweichungen vom freigegebenen Vorschlag
+## 12. Session-Verwaltung in eigener Transaktion, Änderungen an einem Konto nacheinander
+
+Eine Anfrage ist eine Transaktion – mit einer Ausnahme: Was zur Session selbst gehört (letzte
+Nutzung, gebundene Organisation, das Ergebnis der Nachfrage bei Keycloak), wird zu Beginn in
+einer eigenen kurzen Transaktion gespeichert.
+
+Begründung: Bliebe es Teil der Anfrage, hielte jede Anfrage eine Sperre auf ihrer eigenen
+Session-Zeile, bis sie fertig ist. Wer diese Session beenden will (ein Administrator, Keycloaks
+Logout-Meldung), müsste darauf warten, und zwei Administratoren, die einander gleichzeitig
+sperren, blockierten sich gegenseitig.
+
+Änderungen an einem Konto oder einer Organisation nehmen außerdem eine Sperre je Konto bzw.
+Organisation (PostgreSQL Advisory Locks, immer in derselben Reihenfolge) und schreiben erst in
+die Datenbank, dann nach Keycloak, zuletzt der Commit.
+
+Begründung: Keycloak führt zwei gleichzeitige Änderungen an einem Konto nicht zusammen; die
+spätere schreibt das ganze Konto zurück, wie sie es gelesen hat. Ohne Reihenfolge konnte eine
+Profiländerung eine gleichzeitig gesetzte Sperre aufheben.
+
+## 13. Keycloak wird regelmäßig gefragt, ob eine Session noch gilt
+
+Keycloak meldet Abmeldungen (Back-Channel-Logout), aber nicht alles: Ein in der Konsole
+deaktiviertes oder gelöschtes Konto, „alle Sitzungen abmelden“ für den Realm und eine dort
+abgelaufene Sitzung kommen ohne Meldung. Velydock fragt deshalb für jede benutzte Session alle
+fünf Minuten nach.
+
+Begründung: Sonst gälte eine Velydock-Session bis zu zwölf Stunden weiter, obwohl der Betreiber
+das Konto in Keycloak gesperrt hat. Ist Keycloak nicht erreichbar, bleibt die Session bestehen –
+ein Ausfall von Keycloak soll nicht alle aus Velydock abmelden.
+
+## 14. Eigene Apps ohne Netzwerkzugriff in einem Zwischendokument
+
+Eine eigene App ohne Netzwerkzugriff wird nicht direkt im Frame ausgeliefert, sondern in einem
+skriptlosen Zwischendokument, das sie seinerseits einbettet und dessen `frame-src` nur den
+Sandbox-Host zulässt.
+
+Begründung: Die Content Security Policy eines Dokuments kann nicht verhindern, dass es sich selbst
+auf eine andere Adresse umleitet – und in der Adresse Daten mitgibt. Wohin ein Frame navigieren
+darf, bestimmt das Dokument, das ihn enthält; das ist beim Zwischendokument unter Kontrolle, bei
+der Velydock-Seite nicht (sie muss beliebige `https`-Apps einbetten können).
+
+## 15. Abweichungen vom freigegebenen Vorschlag
 
 - Python 3.13 statt 3.14: identisch mit der Entwicklungs- und Testumgebung.
 - Bits UI wurde nicht benötigt; die Komponenten basieren auf denen von AdminHelper.

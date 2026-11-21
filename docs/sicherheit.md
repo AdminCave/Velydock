@@ -1,7 +1,8 @@
 # Sicherheitskonzept
 
-Jede Aussage hier ist durch einen automatisierten Test belegt, sofern nicht anders vermerkt. Die
-Tests stehen in [tests.md](tests.md).
+Jede Aussage über einen Schutz ist durch einen automatisierten Test belegt, sofern nicht anders
+vermerkt. Die Tests stehen in [tests.md](tests.md). Aussagen über Grenzen – was sich mit
+Browser-Mitteln nicht verhindern lässt – stammen aus einer manuellen Sicherheitsprüfung im Browser.
 
 ## Wovor Velydock schützt
 
@@ -12,7 +13,9 @@ Tests stehen in [tests.md](tests.md).
 | Gestohlene oder erratene Sitzung | Zufallswert mit 256 Bit, nur als Hash gespeichert, HttpOnly, kurze Laufzeiten, sofortiges Beenden |
 | Fremde Website löst Aktionen aus (CSRF) | SameSite-Cookie, Pflicht-Header, Herkunftsprüfung |
 | Eingeschleustes Skript in der Oberfläche (XSS) | Strikte Content Security Policy, keine Tokens im Browser |
+| Erraten von Passwörtern | Brute-Force-Schutz von Keycloak, Drosselung der Anmeldeschritte am Proxy, keine Passwort-Anmeldung am Token-Endpunkt für die mitgelieferten Clients |
 | Eigene Apps greifen auf Velydock zu | Fremder Hostname, Sandbox ohne eigenen Origin, keine Cookies |
+| Eine App im Hintergrund fängt Tastatureingaben ab | Nur die sichtbare App darf den Tastaturfokus halten |
 | Clickjacking | `frame-ancestors 'none'` und `X-Frame-Options: DENY` |
 | Server ruft interne Adressen ab (SSRF) | Einbettungsprüfung nur gegen öffentliche Adressen, Weiterleitungen nur innerhalb desselben Hosts |
 | Überlastung durch einzelne Anfragen | Größenbegrenzung für Anfragen, Zeit- und Mengenbegrenzung der Einbettungsprüfung, Rate-Limit am Proxy |
@@ -50,6 +53,14 @@ einem anderen Mandanten zuschiebt oder Name, Kurzname und Status eines Mandanten
 Voraussetzung: Die Anwendung verbindet sich mit einer Rolle ohne Superuser- und `BYPASSRLS`-Recht.
 Das Init-Skript legt sie so an.
 
+**Wogegen Schicht 2 und 3 schützen – und wogegen nicht.** Sie fangen Fehler im Anwendungscode ab:
+eine Abfrage ohne Mandantenfilter liefert trotzdem nur eigene Zeilen. Sie sind keine Barriere
+gegen eingeschleustes SQL. Die Anwendung kann den Systemkontext selbst betreten, und ihrer
+Datenbankrolle gehören die Tabellen, sodass sie Richtlinien und Trigger auch ändern könnte. Wer
+beliebiges SQL über die Verbindung der Anwendung ausführen kann, hat deshalb Zugriff auf alle
+Mandanten. Dagegen stehen andere Mittel: ausschließlich gebundene Parameter, kein aus Eingaben
+zusammengesetztes SQL, Schemaprüfung aller Eingaben.
+
 ## Rollen und Rechte
 
 | Rolle | Darf |
@@ -73,7 +84,12 @@ Zusätzliche Regeln:
   gelöscht werden – auch nicht, wenn zwei Administratoren das gleichzeitig beieinander versuchen.
   Der Mandant eines Systemadministrators kann nicht gelöscht oder deaktiviert werden.
 - Wer Verwaltungsrechte neu erhält, wird abgemeldet: Die Rechte gelten erst in einer neuen
-  Session, an deren Beginn die Zwei-Faktor-Pflicht geprüft wird.
+  Session, an deren Beginn die Zwei-Faktor-Pflicht geprüft wird. Das gilt auch für
+  `velydock setup-admin` auf ein vorhandenes Konto.
+- Änderungen an einem Konto laufen nacheinander. Velydock schreibt jede Änderung an zwei Stellen
+  (Keycloak und eigene Datenbank), und Keycloak führt gleichzeitige Änderungen an einem Konto
+  nicht zusammen: Ohne Reihenfolge könnte eine Sperre von einer gleichzeitigen Profiländerung
+  überschrieben werden. An Keycloak gehen außerdem nur die Felder, die sich ändern.
 
 ## Sitzungen
 
@@ -82,6 +98,9 @@ Zusätzliche Regeln:
 - In der Datenbank steht nur der SHA-256 des Cookie-Werts.
 - Leerlauf- und Maximaldauer, Back-Channel-Logout, sofortiges Beenden bei Sperre oder
   Passwort-Reset ([sso.md](sso.md)).
+- Was Keycloak nicht meldet (Konto dort deaktiviert oder gelöscht, Sitzung dort beendet oder
+  abgelaufen), bemerkt Velydock durch Nachfragen: spätestens fünf Minuten später ist die Session
+  beendet.
 - „Abmelden“ beendet die Keycloak-Sitzung auch dann, wenn die Velydock-Session schon abgelaufen ist.
 - Nach der Abmeldung zeigt der Zurück-Knopf des Browsers keine alte Seite mit Daten: Die
   Oberfläche lädt neu, sobald der Browser sie aus seinem Seitenspeicher wiederherstellt.
@@ -106,33 +125,69 @@ die Anmeldedaten zugreifen kann:
    keine Oberfläche, setzt keine Cookies und ignoriert mitgeschickte.
 2. **CSP-Header `sandbox`** ohne `allow-same-origin`: Der Browser gibt dem Dokument einen leeren
    Origin – auch wenn jemand die Adresse direkt öffnet.
-3. **iFrame-Attribut `sandbox`** mit denselben Rechten. `allow-top-navigation` fehlt: Die App kann
-   die Velydock-Seite nicht durch eine andere ersetzen.
-4. **Netzwerk standardmäßig zu** (`connect-src 'none'`, keine externen Skripte). „Netzwerkzugriff
-   erlauben“ öffnet ausschließlich `https:`.
+3. **iFrame-Attribut `sandbox`** ohne `allow-same-origin`. `allow-top-navigation` fehlt: Die App
+   kann die Velydock-Seite nicht durch eine andere ersetzen.
+4. **Netzwerk standardmäßig zu.** Ohne „Netzwerkzugriff erlauben“ unterbindet die CSP jede
+   ausgehende Verbindung des Skripts (`connect-src 'none'`, `form-action 'none'`, keine externen
+   Skripte, Bilder, Schriften, Rahmen oder Objekte). Die App läuft außerdem in einem skriptlosen
+   Zwischendokument, dessen `frame-src` nur den Sandbox-Host zulässt: Sie kann sich nicht selbst
+   auf eine fremde Adresse umleiten. Und ohne `allow-popups` öffnet auch ein Klick kein fremdes
+   Fenster. „Netzwerkzugriff erlauben“ öffnet `https:` und hebt diese Abschottung auf.
 5. **Signierter Link, fünf Minuten gültig**, nur für Benutzer, denen die App freigegeben ist. Jede
    Änderung an der App macht alte Links ungültig.
+6. **Kein Tastaturfokus im Hintergrund.** Geöffnete Apps bleiben geladen, auch wenn sie gerade
+   nicht zu sehen sind. Eine solche App darf den Tastaturfokus nicht halten: Zieht sie ihn an
+   sich, nimmt Velydock ihn sofort zurück; tut sie es wiederholt, wird sie beendet. Sonst könnte
+   sie mitlesen, was jemand auf einer Velydock-Seite oder in einer anderen App tippt. Das gilt
+   für eigene wie für eingebettete Apps. Nimmt eine App im Hintergrund den Fokus einer anderen
+   App weg, meldet der Browser das der Velydock-Seite nicht; Velydock schaut deshalb in kurzen
+   Abständen nach (20 ms). In dieser Spanne könnte ein einzelner Tastendruck die falsche App
+   erreichen; nach dem dritten Versuch ist sie beendet.
 
 Im Browser geprüft: kein Zugriff auf Cookies, `localStorage`, das Elternfenster oder die
-Velydock-API.
+Velydock-API; keine Anfrage, kein Fenster und keine Umleitung zu einer fremden Adresse ohne
+Netzwerkzugriff.
 
-Restrisiko: Eine eigene App kann Inhalte anzeigen, die wie eine Anmeldemaske aussehen. Eigene Apps
-dürfen deshalb nur Administratoren anlegen; jede Änderung steht im Protokoll.
+Was ohne Netzwerkzugriff dennoch möglich ist: Über WebRTC kann eine App kleine Datenmengen an
+einen STUN/TURN-Server geben; kein Antwort-Header unterbindet das in heutigen Browsern. Und
+Verbindungshinweise (`preconnect`) können einen Hostnamen auflösen lassen. „Netzwerkzugriff aus“
+ist also eine starke Einschränkung, aber keine Garantie gegen Datenabfluss.
+
+Restrisiko: Eine eigene App kann Inhalte anzeigen, die wie eine Anmeldemaske aussehen, und sie
+sieht, was jemand in ihr selbst eingibt. Eigene Apps dürfen deshalb nur Administratoren anlegen;
+jede Änderung steht im Protokoll.
 
 ## Eingebettete fremde Apps
 
 Eingebettete Apps laufen in ihrem eigenen Origin und unterliegen der Same-Origin-Policy. Der iFrame
 verbietet ihnen, die Velydock-Seite ohne Benutzeraktion zu ersetzen. Kamera, Mikrofon,
 Zwischenablage, Vollbild und Bildschirmfreigabe erhält eine App nur, wenn ein Administrator es
-für sie einschaltet.
+für sie einschaltet. Eine Ausnahme setzt der Browser: Nach einem Klick in der App kann jede
+eingebettete Seite in die Zwischenablage *schreiben* (ältere Browser-Schnittstelle); das Lesen
+bleibt gesperrt.
+
+Apps unter derselben registrierbaren Domain wie Velydock und Keycloak (empfohlen, damit ihre
+Cookies im Frame funktionieren) können Cookies für die ganze Domain setzen. Velydocks eigenes
+Session-Cookie ist dagegen geschützt (`__Host-`), Keycloaks Cookies sind es nicht: Eine böswillige
+oder übernommene App unter einer Schwester-Subdomain könnte einem Besucher eine fremde
+Keycloak-Sitzung unterschieben, sodass er sich unbemerkt als jemand anderes anmeldet. Unter die
+eigene Domain gehören deshalb nur Apps, denen man vertraut
+([einschraenkungen.md](einschraenkungen.md)).
 
 ## Eingaben
 
 - Alle Anfragen werden gegen ein Schema geprüft; unbekannte Felder führen zu einem Fehler.
-- Anfragen über 4 MB werden abgewiesen, bevor sie gelesen werden – auch ohne Anmeldung.
+- Anfragen über 4 MB werden abgewiesen, ohne eine Verarbeitung zu erreichen oder im Speicher zu
+  landen – auch ohne Anmeldung.
 - NUL-Zeichen werden in Adresse und Inhalt abgelehnt.
 - Vor- und Nachnamen dürfen die Zeichen nicht enthalten, die auch Keycloak ablehnt
   (`< > & " $ % ! # ? § ; * ~ / \ | ^ = [ ] { } ( )`); Benutzernamen haben mindestens drei Zeichen.
+- Folgen von Leerzeichen, Tabulatoren und Zeilenumbrüchen in Namen werden zu einem Leerzeichen:
+  Zwei Namen, die sich nur darin unterscheiden, sähen gleich aus.
+- Der Name der Installation darf weder `<` noch `>` noch Zeichenreferenzen wie `&lt;` enthalten.
+  Keycloak gibt ihn auf seinen Seiten und in seinen E-Mails über einen HTML-Filter aus, der
+  Zeichenreferenzen zuerst auflöst und Links und Bilder durchlässt; ein maskierter Link käme dort
+  als Link an. Ein einfaches `&` ist erlaubt.
 - App-Adressen: nur `http`/`https`, keine Zugangsdaten in der Adresse; eingebettete Apps nur `https`.
 - Icons: höchstens 256 KB; der Typ wird am Inhalt erkannt, nicht an der Angabe. Icons werden mit
   einer eigenen sandboxenden CSP ausgeliefert, sodass ein Skript in einer SVG-Datei nie läuft.
@@ -157,10 +212,13 @@ dann können Mandantenadministratoren erkennen, ob interne Adressen antworten.
 ## Administration
 
 - Kein Standardpasswort. `velydock setup-admin` erzeugt ein Einmalpasswort, das einmal angezeigt
-  wird und bei der ersten Anmeldung geändert werden muss.
-- Zwei-Faktor-Pflicht für alle Rollen mit Verwaltungsrechten (abschaltbar).
+  wird und bei der ersten Anmeldung geändert werden muss. Das Einmalpasswort selbst wird dabei
+  nicht als eigenes Passwort angenommen (Passwort-Historie).
+- Zwei-Faktor-Pflicht für alle Rollen mit Verwaltungsrechten (abschaltbar). Es zählt die
+  Authenticator-App; „Passwort vergessen“ führt nicht an ihr vorbei.
 - Einmalpasswörter neuer Benutzer werden einmal angezeigt und nirgends gespeichert.
-- Das Protokoll ist nur anfügbar: Für Ändern und Löschen existiert keine Datenbank-Richtlinie.
+- Das Protokoll ist über die Anwendung nur anfügbar: Für Ändern und Löschen existiert keine
+  Datenbank-Richtlinie.
 - Keycloaks Verwaltungsoberfläche, Admin-API und der Realm `master` sind von außen nicht
   erreichbar; Traefik leitet nur `/realms/velydock/` und `/resources/` weiter.
 
@@ -168,12 +226,24 @@ dann können Mandantenadministratoren erkennen, ob interne Adressen antworten.
 
 - Der Dienstzugang von Velydock hat nur die Rollen, die er braucht (Benutzer, Organizations,
   Realm-Einstellungen, eigene Clients) – nicht `realm-admin`, nicht Impersonation.
-- Realm: Registrierung aus, Brute-Force-Schutz an, Passwörter mindestens 12 Zeichen und weder
-  Benutzername noch E-Mail, Anmeldeereignisse 30 Tage. Passwort-Richtlinie und Schwellenwerte des
-  Brute-Force-Schutzes sind Ausgangswerte beim Anlegen des Realms; wer sie in Keycloak verschärft,
-  behält seine Einstellung.
+- Realm: Registrierung aus, Brute-Force-Schutz an, Passwörter mindestens 12 Zeichen, weder
+  Benutzername noch E-Mail und keines der letzten drei, Anmeldeereignisse 30 Tage.
+  Passwort-Richtlinie und Schwellenwerte des Brute-Force-Schutzes sind Ausgangswerte beim Anlegen
+  des Realms; wer sie in Keycloak ändert, behält seine Einstellung. Nur eine Richtlinie, die noch
+  genau dem Ausgangswert einer früheren Velydock-Version entspricht, wird beim Start auf den
+  aktuellen gebracht.
 - Die E-Mail-Adresse ändern nur Administratoren. Eine selbst geänderte Adresse könnte in
-  angebundenen Apps zur Übernahme fremder Konten führen.
+  angebundenen Apps zur Übernahme fremder Konten führen. Aus demselben Grund gilt eine von
+  Administratoren eingetragene Adresse gegenüber angebundenen Apps nicht als bestätigt
+  ([sso.md](sso.md)).
+- Der eingebaute öffentliche Client `admin-cli` des Realms nimmt keine Passwort-Anmeldung an.
+  Sonst könnte jeder Passwörter direkt am Token-Endpunkt durchprobieren.
+- Die Anmeldeschritte und der Token-Endpunkt von Keycloak sind am Proxy je Client-Adresse
+  gedrosselt (im Mittel 20 Anfragen je Sekunde). Das bremst massenhaftes Raten von Passwörtern;
+  gegen das gezielte Aussperren eines Kontos hilft es nicht.
+- Der Brute-Force-Schutz sperrt ein Konto nach acht Fehlversuchen für kurze Zeit. Die Kehrseite:
+  Wer einen Benutzernamen kennt, kann dieses Konto von außen vorübergehend aussperren
+  ([einschraenkungen.md](einschraenkungen.md)).
 
 ## Container
 
