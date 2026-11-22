@@ -116,7 +116,8 @@ describe('the focus guard', () => {
 
   it('leaves the app on screen its focus, however long the user works in it', () => {
     userClicksInto(shown);
-    vi.advanceTimersByTime(10 * 60_000);
+    // Two minutes of looking every few milliseconds (more would only make the test slow).
+    vi.advanceTimersByTime(2 * 60_000);
     expect(active()).toBe(shown);
     expect(toShown).not.toHaveBeenCalled();
     expect(onRepeated).not.toHaveBeenCalled();
@@ -127,10 +128,25 @@ describe('the focus guard', () => {
     takesFromFrame(hidden);
     // Found by looking, and soon: what is typed until then arrives in the hidden app.
     vi.advanceTimersByTime(WATCH_INTERVAL_MS);
-    expect(WATCH_INTERVAL_MS).toBeLessThanOrEqual(25);
+    expect(WATCH_INTERVAL_MS).toBeLessThanOrEqual(10);
     // Back to the app on screen, through its window (see focusFrame()).
     expect(toShown).toHaveBeenCalledTimes(1);
     expect(active()).toBe(shown);
+  });
+
+  it('has a frame unloaded the first time it takes the focus from the app on screen', () => {
+    // Nothing announces this take, so a key may already have gone the wrong way (one did in
+    // 8 of 12 runs with real typing while three takes were allowed). No second chance.
+    userClicksInto(shown);
+    takesFromFrame(hidden);
+    expect(onRepeated).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(WATCH_INTERVAL_MS);
+    expect(onRepeated).toHaveBeenCalledTimes(1);
+    expect(onRepeated).toHaveBeenCalledWith(hidden);
+    expect(active()).toBe(shown);
+    // The app on screen is not blamed for anything, and keeps its focus.
+    vi.advanceTimersByTime(5000);
+    expect(onRepeated).toHaveBeenCalledTimes(1);
   });
 
   it('still looks now and then while no frame holds the focus, should an event be missed', () => {

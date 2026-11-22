@@ -60,13 +60,13 @@ export const workspace = {
   'app.type.custom': ['Eigene App', 'Custom app'],
   'app.reload': ['Neu laden', 'Reload'],
   'app.focusTaken.closed': [
-    '„{name}“ wurde geschlossen: Die App hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
-    '“{name}” was closed: the app repeatedly took over the keyboard while you were typing elsewhere. Open it again when you need it.',
+    '„{name}“ wurde geschlossen: Die App hat die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
+    '“{name}” was closed: the app took over the keyboard while you were typing elsewhere. Open it again when you need it.',
   ],
   'app.focusTaken.title': ['Diese App wurde geschlossen', 'This app was closed'],
   'app.focusTaken.text': [
-    'Sie hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast.',
-    'It repeatedly took over the keyboard while you were typing elsewhere.',
+    'Sie hat die Tastatureingabe an sich gezogen, während du woanders getippt hast.',
+    'It took over the keyboard while you were typing elsewhere.',
   ],
   'app.focusTaken.reopen': ['App neu laden', 'Load the app again'],
   'app.openInNewTab': ['In neuem Tab öffnen', 'Open in new tab'],

@@ -201,7 +201,7 @@ describe('an app that takes the keyboard focus although it is not its turn', () 
     await waitFor(() => expect(mounted()).toEqual(['a']));
     expect(document.activeElement).toBe(field);
     expect(get(toasts).map((toast) => toast.message)).toEqual([
-      '„Wiki“ wurde geschlossen: Die App hat wiederholt die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
+      '„Wiki“ wurde geschlossen: Die App hat die Tastatureingabe an sich gezogen, während du woanders getippt hast. Öffne sie neu, wenn du sie brauchst.',
     ]);
     // Opening it again loads it fresh.
     await view.rerender({ appId: 'wiki' });

@@ -10,7 +10,13 @@
 // clicked - in Velydock, or in the app that is on screen - stays empty: a hidden app can
 // read a password that is typed somewhere else. Neither `inert`, nor another way of
 // hiding, nor a permissions policy prevents this. What works is to notice it and to take
-// the focus back; a frame that does it again and again is unloaded.
+// the focus back; a frame that does it again and again is unloaded - and one that takes it
+// from another app is unloaded at once, because that cannot be noticed in time (see below).
+//
+// Measured with real typing in real windows: Firefox does not let a frame that is not
+// rendered take the focus at all. Chromium and WebKit do. Taken from Velydock itself, the
+// focus is back before a key arrives (0 keys in every run). Taken from the app on screen,
+// one key reached the hidden app in 8 of 12 runs in Chromium while three takes were allowed.
 //
 // The rule: an app frame may hold the focus only while it is the one on screen and no
 // dialog of Velydock is open over it.
@@ -23,7 +29,7 @@ export const APP_FRAME = 'iframe[data-testid="app-frame"]';
  * that takes it from another frame, so that is found by looking, and what is typed until
  * then arrives in the wrong frame: hence this often.
  */
-export const WATCH_INTERVAL_MS = 20;
+export const WATCH_INTERVAL_MS = 10;
 /** How often otherwise: a safety net, should the browser not announce a change. */
 export const IDLE_INTERVAL_MS = 250;
 /** A frame that takes the focus this often … */
@@ -32,7 +38,10 @@ export const STEAL_LIMIT = 3;
 export const STEAL_WINDOW_MS = 60_000;
 
 export interface FrameFocusGuardOptions {
-  /** A frame took the focus STEAL_LIMIT times within STEAL_WINDOW_MS: it is to be unloaded. */
+  /**
+   * A frame is to be unloaded: it took the focus STEAL_LIMIT times within STEAL_WINDOW_MS
+   * from Velydock itself, or once from the app on screen.
+   */
   onRepeated: (frame: HTMLIFrameElement) => void;
   /** The clock (for tests). */
   now?: () => number;
@@ -137,9 +146,17 @@ export function startFrameFocusGuard(options: FrameFocusGuardOptions): () => voi
     // from when it was on screen, the user went elsewhere without the focus following
     // (the browser's Back, say): that is nothing the frame did.
     const took = holder !== active;
+    // Taken from the app on screen, where the user is typing: no event announced it, so
+    // keys may already have arrived in the wrong app, and each further take would be
+    // another chance. There is no second one: the frame goes at once.
+    const fromAnotherApp = took && holder !== null;
     holder = null;
+    if (fromAnotherApp) {
+      steals.delete(active.dataset.appId ?? '');
+      options.onRepeated(active);
+    }
     giveBack(active);
-    if (took) count(active);
+    if (took && !fromAnotherApp) count(active);
   }
 
   // Looking is done from a task of its own (see above), at once after an event and
