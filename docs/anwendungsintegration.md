@@ -85,7 +85,10 @@ Eingebettete Apps können die Velydock-Seite nicht von sich aus durch eine ander
 
 Geöffnete Apps bleiben im Hintergrund geladen, damit der Wechsel zwischen ihnen schnell geht.
 Tastatureingaben erhält aber nur die App, die gerade zu sehen ist: Zieht eine App im Hintergrund
-den Tastaturfokus an sich, nimmt Velydock ihn zurück und beendet die App, wenn sie es wiederholt.
+den Tastaturfokus an sich, nimmt Velydock ihn zurück und beendet die App – sofort, wenn sie ihn
+einer anderen App weggenommen hat, sonst nach dem dritten Mal. Eine App, die sich im Hintergrund
+selbst den Fokus holt (etwa ein Suchfeld, das sich nach dem Laden aktiviert), kann deshalb
+geschlossen werden, während man in einer anderen App arbeitet; sie lässt sich neu öffnen.
 
 ## Apps im neuen Tab
 

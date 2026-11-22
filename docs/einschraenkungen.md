@@ -79,5 +79,8 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - Der Versand von E-Mails über den SMTP-Server eines Anbieters mit Anmeldung und TLS. Getestet
   ist der Weg über einen lokalen Mail-Empfänger ohne beides ([tests.md](tests.md)).
 - Let's-Encrypt-Zertifikate (die Tests laufen mit Traefiks selbstsigniertem Zertifikat).
-- Andere Browser als Chromium.
+- Firefox und WebKit in der CI. Die Browser-Suite läuft auf Wunsch auch in beiden
+  ([tests.md](tests.md#andere-browser)) und ist dort einmal vollständig gelaufen; die CI
+  prüft nur Chromium. Safari selbst (macOS, iOS) und Edge sind nicht geprüft – WebKit unter
+  Linux ist dieselbe Engine wie Safari, aber nicht derselbe Browser.
 - Der Betrieb hinter einem fremden Reverse Proxy.

@@ -1,14 +1,14 @@
 # Tests
 
-Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 21.11.2026.
+Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 22.11.2026.
 
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
 | Unit-Tests Backend | pytest | 324 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 253 Tests | PostgreSQL |
+| Integrationstests Backend | pytest gegen PostgreSQL | 254 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 566 Tests | nichts |
-| Browser-Tests (End-to-End) | Playwright, Chromium | 68 Tests | kompletter Stack |
+| Unit-Tests Frontend | Vitest, Testing Library | 567 Tests | nichts |
+| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 68 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` |
 
@@ -22,8 +22,10 @@ cd backend && .venv/bin/pytest -q
 # Frontend
 cd frontend && npm run check && npm run lint && npm run test:unit
 
-# Browser-Tests: setzt den Entwicklungs-Stack zurück, baut neu, testet
+# Browser-Tests: setzt den Entwicklungs-Stack zurück, baut neu, testet (Chromium)
 ./scripts/tests/e2e.sh
+# … in anderen Browsern (einmalig vorher: cd e2e && npx playwright install firefox webkit)
+E2E_BROWSERS=firefox,webkit ./scripts/tests/e2e.sh
 
 # Backup und Wiederherstellung am laufenden Entwicklungs-Stack
 ./scripts/tests/backup-restore.sh
@@ -271,6 +273,33 @@ gespeicherten Wert.
 Nicht automatisiert, sondern einmalig von Hand geprüft: der Schwachstellen-Scan des Images, das
 Verhalten des Organization-Scopes bei Rückfragen ([sso.md](sso.md)), und was eine eigene App
 ohne Netzwerkzugriff über WebRTC dennoch senden kann ([sicherheit.md](sicherheit.md#eigene-apps)).
+
+## Andere Browser
+
+Die CI prüft Chromium. Am 22.11.2026 lief die Suite zusätzlich vollständig in Firefox und in
+WebKit, der Engine von Safari (je 68 von 68 Tests). Dazu kam eine Prüfung von Hand mit echten
+Maus- und Tastaturereignissen in echten Browserfenstern – Chromium, WebKit und der installierte
+Firefox 153 ESR –, weil sich gerade das Verhalten des Tastaturfokus mit simulierten Eingaben
+nicht verlässlich beurteilen lässt.
+
+Was die anderen Browser gezeigt haben:
+
+| Befund | Folge |
+|---|---|
+| WebKit schickt bei Anfragen aus dem abgeschotteten Frame einer eigenen App das Session-Cookie mit; Chromium und Firefox tun das nicht. Blinde Lesezugriffe der App wurden dadurch im Namen des Benutzers ausgeführt (die Antwort konnte sie nicht lesen). | Behoben: Anfragen, die der Browser als fremd kennzeichnet, weist der Server auch beim Lesen ab. `test_auth_flow.py::TestCsrf`, `04-custom-app-isolation` |
+| In Chromium bekam eine App im Hintergrund, die einer anderen App den Tastaturfokus wegnahm, in 8 von 12 Läufen einen Tastendruck mit, solange drei Versuche erlaubt waren. | Behoben: Sie wird beim ersten Mal sofort beendet; danach 0 Tastendrücke in 12 von 12 Läufen. `frameFocus.test.ts` |
+| Firefox lässt eine nicht angezeigte App den Tastaturfokus gar nicht nehmen und wirft bei `window.open` in einer Sandbox eine Ausnahme, statt `null` zu liefern. | Kein Fehler; zwei Tests unterscheiden jetzt nach Browser. |
+| Im Firefox, den Playwright mitbringt (Version 157), nimmt ein Feld in einem Frame keinen Klick als Fokus an, sobald vorher etwas auf der Seite angeklickt wurde – auch auf einer Testseite ohne Velydock und ohne Playwrights Steuerung. Der installierte Firefox 153 ESR zeigt das nicht. | Kein Fehler von Velydock. Eingaben in App-Feldern lassen sich in diesem Firefox nicht testen; sie sind im installierten Firefox von Hand geprüft. Ein offizieller Firefox 157 war nicht zur Hand. |
+
+Ergebnis der Prüfung mit echten Eingaben (eine App im Hintergrund versucht mitzulesen):
+
+| Browser | getippt auf einer Velydock-Seite | getippt in einer anderen App |
+|---|---|---|
+| Chromium 156 | alles kommt an, App hört nichts, wird nach dem dritten Versuch beendet | App hört nichts und wird sofort beendet; die Eingabe bricht ab, ein Klick setzt sie fort |
+| WebKit 27 | wie Chromium | App hört nichts und wird sofort beendet; die Eingabe kommt vollständig an |
+| Firefox 153 ESR | alles kommt an; die App kommt gar nicht an den Fokus | ebenso |
+
+Nicht geprüft: Safari selbst (macOS, iOS), Edge, Firefox auf Windows oder macOS.
 
 ## Continuous Integration
 

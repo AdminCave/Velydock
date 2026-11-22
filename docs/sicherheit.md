@@ -116,6 +116,16 @@ Schreibende Anfragen brauchen den Header `X-Velydock-CSRF: 1`. Fremde Seiten kö
 setzen, weil der Browser dafür eine CORS-Freigabe verlangt, die Velydock nie erteilt. Zusätzlich
 werden `Origin` und `Sec-Fetch-Site` geprüft; auch der Sandbox-Hostname gilt als fremd.
 
+Auch **lesende** Anfragen mit Session führt Velydock nur aus, wenn sie von der eigenen Oberfläche
+kommen: Kennzeichnet der Browser eine Anfrage als fremd (`Sec-Fetch-Site: cross-site` oder
+`same-site`), wird sie abgewiesen, bevor die Session überhaupt angesehen wird – sie zählt dann
+auch nicht als Aktivität. Die fremde Seite könnte die Antwort zwar ohnehin nicht lesen, die
+Anfrage liefe aber im Namen des Benutzers: Sie hielte seine Session am Leben, und aus Dauer oder
+Erfolg der Antworten ließe sich schließen, was es gibt. `SameSite=Lax` schützt davor nicht, weil
+Apps unter derselben Domain als „gleiche Site“ gelten. Chromium und Firefox schicken aus dem
+abgeschotteten Frame einer eigenen App kein Cookie mit; WebKit (Safari) tut es – dort greift
+diese Prüfung.
+
 ## Eigene Apps
 
 Eigener HTML-, CSS- und JavaScript-Code wird so ausgeliefert, dass er weder auf Velydock noch auf
@@ -136,13 +146,22 @@ die Anmeldedaten zugreifen kann:
 5. **Signierter Link, fünf Minuten gültig**, nur für Benutzer, denen die App freigegeben ist. Jede
    Änderung an der App macht alte Links ungültig.
 6. **Kein Tastaturfokus im Hintergrund.** Geöffnete Apps bleiben geladen, auch wenn sie gerade
-   nicht zu sehen sind. Eine solche App darf den Tastaturfokus nicht halten: Zieht sie ihn an
-   sich, nimmt Velydock ihn sofort zurück; tut sie es wiederholt, wird sie beendet. Sonst könnte
-   sie mitlesen, was jemand auf einer Velydock-Seite oder in einer anderen App tippt. Das gilt
-   für eigene wie für eingebettete Apps. Nimmt eine App im Hintergrund den Fokus einer anderen
-   App weg, meldet der Browser das der Velydock-Seite nicht; Velydock schaut deshalb in kurzen
-   Abständen nach (20 ms). In dieser Spanne könnte ein einzelner Tastendruck die falsche App
-   erreichen; nach dem dritten Versuch ist sie beendet.
+   nicht zu sehen sind. Eine solche App darf den Tastaturfokus nicht halten – sonst könnte sie
+   mitlesen, was jemand auf einer Velydock-Seite oder in einer anderen App tippt. Das gilt für
+   eigene wie für eingebettete Apps. Firefox lässt eine nicht angezeigte App den Fokus gar nicht
+   erst nehmen; Chromium und WebKit (Safari) lassen es zu, dort greift Velydock ein:
+   - Nimmt sie ihn einer **Velydock-Seite** weg, meldet der Browser das, und Velydock holt ihn
+     zurück, bevor eine Taste ankommt. Nach dem dritten Versuch innerhalb einer Minute wird die
+     App beendet.
+   - Nimmt sie ihn einer **anderen App** weg, meldet der Browser das nicht. Velydock schaut
+     deshalb alle 10 ms nach und beendet die App beim ersten Mal sofort. Die Eingabe in der
+     sichtbaren App bricht dabei ab; ein Klick in das Feld setzt sie fort.
+
+   Gemessen mit echten Tastatureingaben in echten Browserfenstern (nicht automatisiert, siehe
+   [tests.md](tests.md)): In allen Läufen kam bei der App im Hintergrund kein Tastendruck an.
+   Ausgeschlossen ist ein einzelner Tastendruck im zweiten Fall nicht – er müsste in die
+   Hundertstelsekunde bis zum Bemerken fallen. (Solange drei Versuche erlaubt waren, geschah
+   das in 8 von 12 Läufen; deshalb gibt es dort keinen zweiten.)
 
 Im Browser geprüft: kein Zugriff auf Cookies, `localStorage`, das Elternfenster oder die
 Velydock-API; keine Anfrage, kein Fenster und keine Umleitung zu einer fremden Adresse ohne
