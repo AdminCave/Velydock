@@ -8,6 +8,20 @@ import { DOCK_URL } from './support/stack';
  * The suite seeds its own data once (global-setup.ts) and expects a fresh stack; see
  * scripts/tests/e2e.sh.
  */
+const DEVICES = { chromium: 'Desktop Chrome', firefox: 'Desktop Firefox', webkit: 'Desktop Safari' } as const;
+type BrowserName = keyof typeof DEVICES;
+
+/**
+ * Chromium unless told otherwise: E2E_BROWSERS=firefox,webkit runs the suite in those (install
+ * them once with `npx playwright install firefox webkit`). The stack is seeded with Chromium in
+ * any case.
+ */
+const browsers = (process.env.E2E_BROWSERS ?? 'chromium')
+  .split(',')
+  .map((name) => name.trim())
+  .filter((name): name is BrowserName => name in DEVICES);
+if (browsers.length === 0) throw new Error(`E2E_BROWSERS names no known browser (${Object.keys(DEVICES).join(', ')})`);
+
 export default defineConfig({
   testDir: './tests',
   globalSetup: './global-setup.ts',
@@ -28,5 +42,5 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: browsers.map((name) => ({ name, use: { ...devices[DEVICES[name]] } })),
 });
