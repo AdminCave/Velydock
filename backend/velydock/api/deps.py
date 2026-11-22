@@ -24,7 +24,7 @@ from velydock.idp.base import AccountState, IdentityProvider, IdpError
 from velydock.models import AuditLog, AuthSession, Membership, Role, Tenant, User, UserSettings
 from velydock.policy import Actor, Permission, permissions_for
 from velydock.security import sessions
-from velydock.security.http import verify_csrf
+from velydock.security.http import verify_csrf, verify_same_origin
 from velydock.security.oidc import OidcClient
 from velydock.security.sessions import client_ip, resolve_session
 
@@ -197,6 +197,9 @@ async def get_principal(
     cookie = request.cookies.get(settings.session_cookie)
     if not cookie:
         raise not_authenticated()
+    # Before the session is looked up: a request from another origin must not even count as
+    # activity of this session.
+    verify_same_origin(request)
 
     await set_rls_context(db, scope=Scope.SYSTEM)
     session = await resolve_session(db, settings, cookie)

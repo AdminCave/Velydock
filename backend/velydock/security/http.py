@@ -15,6 +15,27 @@ CSRF_HEADER = "x-velydock-csrf"
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+def verify_same_origin(request: Request) -> None:
+    """Refuse a request that a page of another origin made with the user's session.
+
+    Browsers say where a request comes from (``Sec-Fetch-Site``). The interface is the only
+    page that has any business with the API, and it is same-origin. Everything else - an
+    embedded app under a sibling host name, a custom app in its sandbox - is turned away
+    before the session is even looked at, reads included.
+
+    Why reads: the other page cannot see the answer, but the request would be carried out as
+    the user. It could keep a session alive, and time or count answers to learn what exists.
+    ``SameSite=Lax`` does not help here: sibling host names are the same site. Chromium and
+    Firefox withhold cookies from sandboxed frames; WebKit (Safari) sends them along.
+
+    A request without the header (an older browser, a script, a monitoring check) passes; so
+    does "none": the user typed the address or used a bookmark.
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+        raise ApiError(403, "csrf", "Cross-site request rejected.")
+
+
 def verify_csrf(request: Request, settings: Settings) -> None:
     """Reject cross-site state changes.
 

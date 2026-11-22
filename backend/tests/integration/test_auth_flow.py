@@ -400,6 +400,36 @@ class TestCsrf:
             )
             assert ok.status_code == 201
 
+    async def test_a_page_of_another_origin_cannot_even_read_with_the_users_session(
+        self, world: World
+    ) -> None:
+        """It could not see the answer, but the request would be carried out as the user: it
+        would keep the session alive, and timing or counting answers tells what exists. Sibling
+        host names are the same site, so SameSite does not stop it, and WebKit sends the cookie
+        along even from a sandboxed frame (seen in the browser suite)."""
+        acme = await world.tenant("Acme")
+        anna = await world.user(acme, "anna", Role.TENANT_ADMIN)
+        async with await world.login(anna) as client:
+
+            async def last_used() -> datetime:
+                async with transaction(Scope.SYSTEM) as db:
+                    return (
+                        await db.execute(
+                            select(AuthSession.last_seen_at).where(AuthSession.user_id == anna.id)
+                        )
+                    ).scalar_one()
+
+            before = await last_used()
+            for site in ("cross-site", "same-site"):
+                for path in ("/api/v1/me", "/api/v1/admin/users", "/api/v1/workspace/apps"):
+                    response = await client.get(path, headers={"Sec-Fetch-Site": site})
+                    assert response.status_code == 403, (site, path)
+                    assert response.json()["error"]["code"] == "csrf"
+            assert await last_used() == before, "such a request does not count as activity"
+            # The interface itself, an address typed by the user, and clients that say nothing.
+            for headers in ({"Sec-Fetch-Site": "same-origin"}, {"Sec-Fetch-Site": "none"}, {}):
+                assert (await client.get("/api/v1/me", headers=headers)).status_code == 200, headers
+
 
 class TestSecurityHeaders:
     async def test_api_and_error_responses_carry_the_headers(self, world: World) -> None:
