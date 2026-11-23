@@ -174,13 +174,32 @@ alle Apps der Organisation stehen in dieser Tabelle.
 
 ## Einstellungen der Organisation (Verwaltung → Einstellungen)
 
-- **Standardposition** der Navigation: Links, Rechts, Oben, Unten oder „Systemstandard“. Gilt für
-  alle, die keine eigene Position gewählt haben.
-- **Position für alle festlegen:** Die Standardposition gilt dann für alle; die persönliche
-  Einstellung ist gesperrt und wird erklärt.
+Hier legt eine Organisation ihr Erscheinungsbild fest.
 
-Reihenfolge der Geltung: persönliche Wahl, dann Standard der Organisation, dann Systemstandard.
-Eine Festlegung der Organisation überstimmt die persönliche Wahl.
+| Einstellung | Wirkung |
+|---|---|
+| **Logo** | Erscheint im Dock anstelle des Velydock-Zeichens – nur für diese Organisation. PNG, JPEG, GIF, WebP oder SVG, höchstens 256 KB; am besten quadratisch (breite Logos werden auf die Höhe des Docks verkleinert). Das Dock ist je nach Design hell oder dunkel, und das Logo bekommt keinen eigenen Hintergrund: Die Vorschau zeigt es auf beidem. Ein Logo gibt es nur je Organisation, nicht je Benutzer. |
+| **Design** | Hell, Dunkel oder dem Gerät folgen. |
+| **Akzentfarbe** | Eine Farbe für Links, Markierungen, aktive Einträge, Hinweise und den Fokusrahmen: aus der Palette oder ein eigener Farbwert. Velydock hellt sie im dunklen und dunkelt sie im hellen Design so weit ab, dass Text lesbar bleibt (Kontrast mindestens 4,5:1); die Vorschau zeigt beide Ergebnisse. Schaltflächen behalten ihre Farbe. |
+| **Dock-Position** | Links, Rechts, Oben oder Unten. |
+| **App-Leiste** | Die Leiste mit Name, „Neu laden“ und „In neuem Tab öffnen“ über einer geöffneten App: oben, unten oder ausgeblendet. Ausgeblendet gehört der ganze Platz der App; die beiden Aktionen stehen dann im Benutzermenü. |
+
+Jede der vier Einstellungen außer dem Logo ist eine **Vorgabe**: Sie gilt für alle, die nichts
+Eigenes gewählt haben. „Keine Vorgabe“ überlässt die Entscheidung dem Systemstandard.
+
+Bei jeder der vier steht ein eigenes **… für alle festlegen**. Damit gilt die Vorgabe für alle
+Mitglieder; die persönliche Einstellung ist dann gesperrt und erklärt, warum. Die eigene Wahl der
+Mitglieder geht dabei nicht verloren – wird die Festlegung aufgehoben, gilt sie wieder.
+Standardmäßig ist nichts festgelegt. Gespeichert wird alles zusammen mit **Speichern**.
+
+Reihenfolge der Geltung je Einstellung: persönliche Wahl, dann Vorgabe der Organisation, dann
+Systemstandard. Eine Festlegung der Organisation überstimmt die persönliche Wahl. Wer in mehreren
+Organisationen arbeitet, sieht jeweils das Erscheinungsbild der Organisation, in der er gerade
+ist; die eigenen Einstellungen gelten überall, wo nichts festgelegt ist.
+
+Die Anmeldeseite sieht für alle Organisationen gleich aus: Dort ist noch nicht bekannt, zu
+welcher Organisation jemand gehört. Sie zeigt weder Logo noch Akzentfarbe und beim Design die
+eigene Wahl aus diesem Browser, sonst den Systemstandard.
 
 ## Protokoll (Verwaltung → Protokoll)
 
@@ -207,8 +226,11 @@ Systemeinstellungen, Systemadministrator-Rechte), stehen im **Systemprotokoll**.
 - **Profil:** Vor- und Nachname ändern. Die E-Mail-Adresse ändert die Administration.
 - **Passwort & Sicherheit:** führt zur Kontoseite von Keycloak – Passwort ändern, zweiten Faktor
   (Authenticator-App) einrichten, angemeldete Geräte ansehen.
-- **Einstellungen:** Design (System, Hell, Dunkel), Position der Navigation, Sprache. Die Wahl
-  wird am Konto gespeichert und gilt auf jedem Gerät.
+- **Einstellungen:** Design (System, Hell, Dunkel), Akzentfarbe, Position des Docks, App-Leiste
+  (oben, unten, ausgeblendet) und Sprache. Die Wahl wird am Konto gespeichert und gilt auf jedem
+  Gerät. „Standard“ heißt jeweils: was die Organisation vorgibt – die Seite nennt, was das gerade
+  ist. Was die Organisation für alle festgelegt hat, lässt sich nicht umstellen; die Seite sagt
+  es bei der jeweiligen Einstellung.
 
 ## Was nur in Keycloak geht
 

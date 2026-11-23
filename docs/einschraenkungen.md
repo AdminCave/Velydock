@@ -48,6 +48,9 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - **Die Reihenfolge der Apps legt der Administrator fest.** Benutzer können sie nicht selbst ändern.
 - **Eigene Apps bestehen aus einem Dokument** ohne Dateien, ohne Speicher und ohne Schnittstelle
   zu Velydock.
+- **Erscheinungsbild je Organisation:** Logo, Design, Akzentfarbe, Dock-Position und App-Leiste.
+  Eigene Flächenfarben, Schriften oder eigenes CSS gibt es nicht. Systemweite Vorgaben gibt es für
+  Design, Dock-Position und Sprache, nicht für Akzentfarbe und App-Leiste.
 - **Login-Theme** und die Sprache von Keycloaks E-Mails gelten für alle Mandanten. Die Oberfläche
   gibt es auf Deutsch und Englisch. Keycloaks Anmeldeseiten folgen der in Velydock gewählten
   Sprache, seine Kontoseite der Sprache des Browsers.

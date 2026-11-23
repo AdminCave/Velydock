@@ -219,8 +219,12 @@ eigene Domain gehören deshalb nur Apps, denen man vertraut
   Zeichenreferenzen zuerst auflöst und Links und Bilder durchlässt; ein maskierter Link käme dort
   als Link an. Ein einfaches `&` ist erlaubt.
 - App-Adressen: nur `http`/`https`, keine Zugangsdaten in der Adresse; eingebettete Apps nur `https`.
-- Icons: höchstens 256 KB; der Typ wird am Inhalt erkannt, nicht an der Angabe. Icons werden mit
-  einer eigenen sandboxenden CSP ausgeliefert, sodass ein Skript in einer SVG-Datei nie läuft.
+- Icons und Logos: höchstens 256 KB; der Typ wird am Inhalt erkannt, nicht an der Angabe. Sie
+  werden mit einer eigenen sandboxenden CSP ausgeliefert, sodass ein Skript in einer SVG-Datei nie
+  läuft. Das Logo gibt es nur unter einer Adresse ohne Organisationsangabe: Jeder erhält das der
+  Organisation, in der seine Session arbeitet.
+- Die Akzentfarbe ist ein Farbwert (`#rrggbb`), kein CSS: Eine Organisation kann die Oberfläche
+  einfärben, aber nichts verstecken, überlagern oder nachladen.
 - Datenbankzugriffe verwenden ausschließlich gebundene Parameter.
 
 ## Einbettungsprüfung (SSRF)

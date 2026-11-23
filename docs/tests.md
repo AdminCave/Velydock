@@ -1,14 +1,14 @@
 # Tests
 
-Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 22.11.2026.
+Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 23.11.2026.
 
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
 | Unit-Tests Backend | pytest | 324 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 254 Tests | PostgreSQL |
+| Integrationstests Backend | pytest gegen PostgreSQL | 270 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 567 Tests | nichts |
-| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 68 Tests | kompletter Stack |
+| Unit-Tests Frontend | Vitest, Testing Library | 688 Tests | nichts |
+| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 74 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` |
 
@@ -74,6 +74,26 @@ Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
 | 9 | Benutzerdefinierte Anwendungen werden sicher isoliert | `test_embed_and_custom_apps.py::TestCustomAppLockdown`, `…::TestSandboxHost` | `04-custom-app-isolation` (7 Tests) |
 | 10 | Logout und Session-Ablauf funktionieren | `test_auth_flow.py::TestSessionLifetime`, `TestSignOut`, `TestBackChannelLogout`, `test_edge_cases.py::TestSignOutWithoutALiveSession` | `01-auth`: Abmeldung, Back-Channel-Logout, Sitzungen beenden, Ablauf mit Hinweis, Abmelden nach Ablauf |
 | 11 | Die Docker-Installation funktioniert | – | `08-deployment`, `scripts/tests/install-smoke.sh`, `scripts/tests/backup-restore.sh` |
+
+## Erscheinungsbild
+
+Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je Benutzer
+(`test_appearance.py`, `03b-appearance`, im Frontend `accent.test.ts`, `appearance.test.ts`):
+
+- Welche Einstellung gilt: eigene Wahl, Vorgabe der Organisation, Systemstandard – und dass eine
+  Festlegung die eigene Wahl überstimmt, ohne sie zu löschen. Im Browser: Die Organisation legt
+  fest, die Seite des Mitglieds zeigt die Vorgabe und sperrt die Einstellung mit Begründung; nach
+  dem Aufheben gilt wieder die eigene Wahl.
+- Das Logo sieht nur die eigene Organisation; es gibt keine Adresse, unter der eine andere es
+  abrufen könnte. Dateityp am Inhalt, Größengrenze, Auslieferung mit sandboxender CSP.
+- **Lesbarkeit jeder Akzentfarbe.** Der Kontrast wird nicht behauptet, sondern gemessen: im
+  Frontend-Test aus der WCAG-Formel für Gelb, Weiß, Schwarz, Grautöne, die Palette und 108 weitere
+  Farben je Design gegen fünf Flächen (mindestens 4,5:1), im Browser an der ausgelieferten Seite
+  aus den Farben, die der Browser tatsächlich berechnet hat.
+- App-Leiste oben, unten, ausgeblendet: Lage am Bildschirm gemessen; ausgeblendet hat die App die
+  ganze Höhe, behält für Hilfstechnik ihren Namen, und „Neu laden“ aus dem Benutzermenü lädt sie
+  wirklich neu.
+- Die Anmeldeseite bekommt nichts vom Erscheinungsbild einer Organisation.
 
 ## Sicherheitstests im Einzelnen
 
@@ -277,7 +297,8 @@ ohne Netzwerkzugriff über WebRTC dennoch senden kann ([sicherheit.md](sicherhei
 ## Andere Browser
 
 Die CI prüft Chromium. Am 22.11.2026 lief die Suite zusätzlich vollständig in Firefox und in
-WebKit, der Engine von Safari (je 68 von 68 Tests). Dazu kam eine Prüfung von Hand mit echten
+WebKit, der Engine von Safari (je 68 von 68 Tests), am 23.11.2026 erneut mit dem
+Erscheinungsbild (je 74 von 74). Dazu kam eine Prüfung von Hand mit echten
 Maus- und Tastaturereignissen in echten Browserfenstern – Chromium, WebKit und der installierte
 Firefox 153 ESR –, weil sich gerade das Verhalten des Tastaturfokus mit simulierten Eingaben
 nicht verlässlich beurteilen lässt.

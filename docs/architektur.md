@@ -70,7 +70,7 @@ tenants ──< memberships >── users          Mitgliedschaft mit Rolle
    │       └──< app_user_grants  >── users  Freigaben einer App
    └──< audit_log
 
-users ──1 user_settings        Theme, Navigationsposition, Sprache, zuletzt genutzter Mandant
+users ──1 user_settings        Design, Akzentfarbe, Dock-Position, App-Leiste, Sprache, zuletzt genutzter Mandant
 users ──< sessions             serverseitige Sitzungen (nur der Hash des Cookies)
 system_settings                Instanzname, Standardwerte, Zwei-Faktor-Pflicht
 ```
@@ -78,6 +78,9 @@ system_settings                Instanzname, Standardwerte, Zwei-Faktor-Pflicht
 - `users` enthält eine Zeile je Identität im gemeinsamen Keycloak-Realm. `home_tenant_id` nennt
   den Mandanten, dem die Identität gehört.
 - Alle mandantenbezogenen Tabellen tragen `tenant_id`.
+- Das Erscheinungsbild einer Organisation (Logo, Vorgaben und ihre Festlegung) steht in `tenants`.
+  Das Logo-Bild wird nur gelesen, wenn es ausgeliefert wird: Die Mandantenzeile wird mit jeder
+  Anfrage geladen.
 - Icons eigener Wahl liegen als Binärdaten in `apps`, damit ein Datenbank-Dump das vollständige
   Backup ist.
 
