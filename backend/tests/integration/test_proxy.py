@@ -654,6 +654,12 @@ class TestTheRoutesTheProxyGets:
             assert (await client.get("/api/v1/admin/proxy")).json()["enabled"] is False
             refused = await publish(client, "wiki")
             assert (refused.status_code, refused.json()["error"]["code"]) == (409, "proxy_disabled")
+        # The proxy asks all the same (its configuration does not know): "no routes" is the answer,
+        # not an error that fills its log every five seconds. Still only from inside.
+        async with plain.client() as client:
+            answer = await client.get("/internal/proxy/traefik", headers=INTERNAL)
+            assert (answer.status_code, answer.json()) == (200, {})
+            assert (await client.get("/internal/proxy/traefik")).status_code == 404
         await http.aclose()
 
 
