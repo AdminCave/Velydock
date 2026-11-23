@@ -1,6 +1,43 @@
 {
   "components": {
     "schemas": {
+      "ActiveTenant": {
+        "additionalProperties": false,
+        "description": "The organization the session works in, with what its interface needs to show it.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "title": "ActiveTenant",
+        "type": "object"
+      },
       "ActiveTenantUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -29,6 +66,16 @@
         ],
         "title": "AdminCapabilities",
         "type": "object"
+      },
+      "AppBar": {
+        "description": "Where the bar with an open app's name and actions sits.",
+        "enum": [
+          "top",
+          "bottom",
+          "hidden"
+        ],
+        "title": "AppBar",
+        "type": "string"
       },
       "AppCreate": {
         "additionalProperties": false,
@@ -604,7 +651,30 @@
       },
       "EffectiveSettings": {
         "additionalProperties": false,
+        "description": "What applies to this user in the active organization, and what the organization fixed.",
         "properties": {
+          "accent_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "accent_locked": {
+            "title": "Accent Locked",
+            "type": "boolean"
+          },
+          "app_bar": {
+            "$ref": "#/components/schemas/AppBar"
+          },
+          "app_bar_locked": {
+            "title": "App Bar Locked",
+            "type": "boolean"
+          },
           "language": {
             "enum": [
               "de",
@@ -622,13 +692,22 @@
           },
           "theme": {
             "$ref": "#/components/schemas/Theme"
+          },
+          "theme_locked": {
+            "title": "Theme Locked",
+            "type": "boolean"
           }
         },
         "required": [
           "theme",
           "nav_position",
+          "accent_color",
+          "app_bar",
           "language",
-          "nav_position_locked"
+          "theme_locked",
+          "nav_position_locked",
+          "accent_locked",
+          "app_bar_locked"
         ],
         "title": "EffectiveSettings",
         "type": "object"
@@ -973,6 +1052,22 @@
         "title": "LaunchOut",
         "type": "object"
       },
+      "LogoIn": {
+        "additionalProperties": false,
+        "description": "An uploaded image as a ``data:`` URL (the same formats and size as app icons).",
+        "properties": {
+          "data_url": {
+            "maxLength": 524288,
+            "title": "Data Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_url"
+        ],
+        "title": "LogoIn",
+        "type": "object"
+      },
       "LogoutOut": {
         "additionalProperties": false,
         "properties": {
@@ -998,7 +1093,7 @@
           "active_tenant": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TenantRef"
+                "$ref": "#/components/schemas/ActiveTenant"
               },
               {
                 "type": "null"
@@ -1175,6 +1270,27 @@
       "OwnSettings": {
         "additionalProperties": false,
         "properties": {
+          "accent_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "app_bar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppBar"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "language": {
             "anyOf": [
               {
@@ -1295,6 +1411,28 @@
       "SettingsUpdate": {
         "additionalProperties": false,
         "properties": {
+          "accent_color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "app_bar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppBar"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "language": {
             "anyOf": [
               {
@@ -1765,6 +1903,35 @@
       "TenantSettingsOut": {
         "additionalProperties": false,
         "properties": {
+          "accent_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "accent_locked": {
+            "title": "Accent Locked",
+            "type": "boolean"
+          },
+          "app_bar_locked": {
+            "title": "App Bar Locked",
+            "type": "boolean"
+          },
+          "default_app_bar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppBar"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "default_nav_position": {
             "anyOf": [
               {
@@ -1775,10 +1942,31 @@
               }
             ]
           },
+          "default_theme": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Theme"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url"
           },
           "name": {
             "title": "Name",
@@ -1791,25 +1979,101 @@
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "theme_locked": {
+            "title": "Theme Locked",
+            "type": "boolean"
           }
         },
         "required": [
           "id",
           "slug",
           "name",
+          "default_theme",
+          "theme_locked",
+          "accent_color",
+          "accent_locked",
           "default_nav_position",
-          "nav_position_locked"
+          "nav_position_locked",
+          "default_app_bar",
+          "app_bar_locked",
+          "logo_url"
         ],
         "title": "TenantSettingsOut",
         "type": "object"
       },
       "TenantSettingsUpdate": {
         "additionalProperties": false,
+        "description": "Only what is sent changes. A default sent as null is removed; ``logo: null`` removes the logo.",
         "properties": {
+          "accent_color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "accent_locked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Locked"
+          },
+          "app_bar_locked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Bar Locked"
+          },
+          "default_app_bar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppBar"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "default_nav_position": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/NavPosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_theme": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Theme"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LogoIn"
               },
               {
                 "type": "null"
@@ -1826,6 +2090,17 @@
               }
             ],
             "title": "Nav Position Locked"
+          },
+          "theme_locked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Theme Locked"
           }
         },
         "title": "TenantSettingsUpdate",

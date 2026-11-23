@@ -20,6 +20,7 @@ from velydock.idp.base import KEEP, IdentityProvider, IdpError
 from velydock.models import App, Membership, Role, Tenant, UserSettings
 from velydock.policy import Permission, permissions_for
 from velydock.schemas import (
+    ActiveTenant,
     ActiveTenantUpdate,
     LaunchOut,
     MembershipOut,
@@ -112,7 +113,16 @@ async def _me(db: AsyncSession, principal: Principal, settings: Settings) -> MeO
             display_name=user.display_name,
             is_system_admin=user.is_system_admin,
         ),
-        active_tenant=TenantRef.model_validate(principal.tenant) if principal.tenant else None,
+        active_tenant=(
+            ActiveTenant(
+                id=principal.tenant.id,
+                slug=principal.tenant.slug,
+                name=principal.tenant.name,
+                logo_url=settings_service.logo_url(principal.tenant),
+            )
+            if principal.tenant
+            else None
+        ),
         role=principal.role,
         permissions=sorted(p.value for p in principal.permissions),
         memberships=await _memberships(db, principal),
@@ -269,11 +279,19 @@ async def app_icon(
     return Response(
         content=app.icon_data,
         media_type=app.icon_mime or "application/octet-stream",
-        headers={
-            # Uploaded SVGs are only ever used as images; should one be opened directly, this
-            # policy keeps any script in it from running.
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=86400",
-        },
+        headers=apps_service.IMAGE_HEADERS,
     )
+
+
+@router.get("/tenant/logo", include_in_schema=False)
+async def tenant_logo(
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> Response:
+    """The logo of the organization the session works in. There is no way to name another one."""
+    if principal.tenant is None:
+        raise not_found("Logo")
+    logo = await settings_service.tenant_logo(db, principal.tenant)
+    if logo is None:
+        raise not_found("Logo")
+    return Response(content=logo[0], media_type=logo[1], headers=apps_service.IMAGE_HEADERS)

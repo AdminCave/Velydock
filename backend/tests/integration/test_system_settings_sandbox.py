@@ -194,10 +194,21 @@ class TestSettings:
             assert me["settings"] == {
                 "theme": "system",
                 "nav_position": "left",
+                "accent_color": None,
+                "app_bar": "top",
                 "language": "de",
+                "theme_locked": False,
                 "nav_position_locked": False,
+                "accent_locked": False,
+                "app_bar_locked": False,
             }
-            assert me["own_settings"] == {"theme": None, "nav_position": None, "language": None}
+            assert me["own_settings"] == {
+                "theme": None,
+                "nav_position": None,
+                "accent_color": None,
+                "app_bar": None,
+                "language": None,
+            }
             saved = await client.patch(
                 "/api/v1/me/settings", json={"theme": "dark", "nav_position": "bottom", "language": "en"}
             )
@@ -205,12 +216,11 @@ class TestSettings:
         # A fresh session (new browser, later day) sees the stored values.
         async with await world.login(mia) as client:
             me = (await client.get("/api/v1/me")).json()
-            assert me["settings"] == {
-                "theme": "dark",
-                "nav_position": "bottom",
-                "language": "en",
-                "nav_position_locked": False,
-            }
+            assert (me["settings"]["theme"], me["settings"]["nav_position"], me["settings"]["language"]) == (
+                "dark",
+                "bottom",
+                "en",
+            )
             reset = await client.patch("/api/v1/me/settings", json={"nav_position": None})
             assert reset.json()["settings"]["nav_position"] == "left"
             assert reset.json()["settings"]["theme"] == "dark"

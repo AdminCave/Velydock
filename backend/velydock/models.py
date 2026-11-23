@@ -59,6 +59,14 @@ class Theme(StrEnum):
     DARK = "dark"
 
 
+class AppBar(StrEnum):
+    """Where the bar with an open app's name and actions sits."""
+
+    TOP = "top"
+    BOTTOM = "bottom"
+    HIDDEN = "hidden"
+
+
 class EmbedStatus(StrEnum):
     UNKNOWN = "unknown"
     OK = "ok"
@@ -88,8 +96,20 @@ class Tenant(Base):
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     # Mirror of this tenant in Keycloak (an Organization in the shared realm).
     idp_org_id: Mapped[str | None] = mapped_column(String(64))
+    # Appearance. Each setting has the organization's default (NULL: none, the next level
+    # decides) and a lock: locked, the default holds for everybody; unlocked, members may choose.
     default_nav_position: Mapped[str | None] = mapped_column(String(10))
     nav_position_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    default_theme: Mapped[str | None] = mapped_column(String(10))
+    theme_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    accent_color: Mapped[str | None] = mapped_column(String(7))
+    accent_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    default_app_bar: Mapped[str | None] = mapped_column(String(10))
+    app_bar_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # The organization's logo. The image itself is only read when it is served: a tenant row is
+    # loaded with every request, and must not drag a quarter of a megabyte along each time.
+    logo_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    logo_mime: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -263,6 +283,8 @@ class UserSettings(Base):
     )
     theme: Mapped[str | None] = mapped_column(String(10))
     nav_position: Mapped[str | None] = mapped_column(String(10))
+    accent_color: Mapped[str | None] = mapped_column(String(7))
+    app_bar: Mapped[str | None] = mapped_column(String(10))
     language: Mapped[str | None] = mapped_column(String(5))
     last_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL")

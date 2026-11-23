@@ -42,7 +42,7 @@ _MAGIC: list[tuple[bytes, str]] = [
 ]
 
 
-def _detect_image(data: bytes, claimed: str) -> str:
+def _detect_image(data: bytes, claimed: str, what: str = "icon") -> str:
     for magic, mime in _MAGIC:
         if data.startswith(magic):
             return mime
@@ -52,20 +52,37 @@ def _detect_image(data: bytes, claimed: str) -> str:
         head = data[:2000].decode("utf-8", errors="ignore").lstrip("﻿ \t\r\n").lower()
         if head.startswith("<svg") or (head.startswith("<?xml") and "<svg" in head):
             return "image/svg+xml"
-    raise invalid("The icon must be a PNG, JPEG, GIF, WebP or SVG image.", "icon_invalid")
+    raise invalid(f"The {what} must be a PNG, JPEG, GIF, WebP or SVG image.", f"{what}_invalid")
 
 
-def decode_icon(data_url: str) -> tuple[bytes, str]:
+def decode_image(data_url: str, what: str = "icon") -> tuple[bytes, str]:
+    """An uploaded image (an app icon, an organization's logo) from its ``data:`` URL.
+
+    ``what`` names it in the error ("icon_invalid", "logo_too_large", …).
+    """
     if not data_url.startswith("data:") or ";base64," not in data_url:
-        raise invalid("The icon must be a base64 data URL.", "icon_invalid")
+        raise invalid(f"The {what} must be a base64 data URL.", f"{what}_invalid")
     header, _, payload = data_url.partition(";base64,")
     try:
         data = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise invalid("The icon is not valid base64.", "icon_invalid") from exc
+        raise invalid(f"The {what} is not valid base64.", f"{what}_invalid") from exc
     if not data or len(data) > MAX_ICON_BYTES:
-        raise invalid(f"The icon must be at most {MAX_ICON_BYTES // 1024} KB.", "icon_too_large")
-    return data, _detect_image(data, header[5:].lower())
+        raise invalid(f"The {what} must be at most {MAX_ICON_BYTES // 1024} KB.", f"{what}_too_large")
+    return data, _detect_image(data, header[5:].lower(), what)
+
+
+def decode_icon(data_url: str) -> tuple[bytes, str]:
+    return decode_image(data_url, "icon")
+
+
+# Uploaded SVGs are only ever used as images; should one be opened directly, this policy keeps
+# any script in it from running.
+IMAGE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, max-age=86400",
+}
 
 
 # A host name in its ASCII form. Underscores are tolerated: internal names often have them.
@@ -105,7 +122,9 @@ def validate_url(url: str | None, app_type: AppType, settings: Settings) -> str 
 def _icon_url(app: App) -> str | None:
     if app.icon_data is None:
         return None
-    return f"/api/v1/apps/{app.id}/icon?v={int(app.updated_at.timestamp())}"
+    # In milliseconds: an icon replaced twice within one second must not stay hidden behind
+    # the cached first one.
+    return f"/api/v1/apps/{app.id}/icon?v={int(app.updated_at.timestamp() * 1000)}"
 
 
 async def _grants(

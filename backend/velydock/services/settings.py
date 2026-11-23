@@ -18,6 +18,7 @@ from velydock.db import system_scope
 from velydock.errors import ApiError, invalid
 from velydock.idp.base import IdentityProvider, IdpError, SmtpConfig
 from velydock.models import (
+    AppBar,
     Membership,
     NavPosition,
     Role,
@@ -38,6 +39,7 @@ from velydock.schemas import (
     TenantSettingsUpdate,
 )
 from velydock.services import audit
+from velydock.services.apps import decode_image
 
 log = logging.getLogger(__name__)
 
@@ -188,19 +190,70 @@ async def _withdraw_pending_enrolments(db: AsyncSession, idp: IdentityProvider) 
             log.exception("could not withdraw the pending second-factor enrolment of %s", idp_id)
 
 
+def logo_url(tenant: Tenant) -> str | None:
+    """Where the interface loads the logo of the active organization, or None without one.
+
+    The version changes with every change to the organization, so a new logo is never hidden
+    behind a cached old one - in milliseconds: two uploads within one second are still two.
+    """
+    if tenant.logo_mime is None:
+        return None
+    return f"/api/v1/tenant/logo?v={int(tenant.updated_at.timestamp() * 1000)}"
+
+
 def tenant_settings(tenant: Tenant) -> TenantSettingsOut:
-    return TenantSettingsOut.model_validate(tenant)
+    return TenantSettingsOut(
+        id=tenant.id,
+        slug=tenant.slug,
+        name=tenant.name,
+        default_theme=tenant.default_theme,
+        theme_locked=tenant.theme_locked,
+        accent_color=tenant.accent_color,
+        accent_locked=tenant.accent_locked,
+        default_nav_position=tenant.default_nav_position,
+        nav_position_locked=tenant.nav_position_locked,
+        default_app_bar=tenant.default_app_bar,
+        app_bar_locked=tenant.app_bar_locked,
+        logo_url=logo_url(tenant),
+    )
+
+
+# Appearance settings of an organization: a default that may be empty, and its lock.
+_TENANT_DEFAULTS = ("default_theme", "accent_color", "default_nav_position", "default_app_bar")
+_TENANT_LOCKS = ("theme_locked", "accent_locked", "nav_position_locked", "app_bar_locked")
 
 
 async def update_tenant_settings(
     db: AsyncSession, principal: Principal, data: TenantSettingsUpdate
 ) -> TenantSettingsOut:
     tenant = principal.require_tenant()
-    if data.nav_position_provided:
-        tenant.default_nav_position = data.default_nav_position.value if data.default_nav_position else None
-    if data.nav_position_locked is not None:
-        tenant.nav_position_locked = data.nav_position_locked
+    sent = data.model_fields_set
+    changed: dict[str, Any] = {}
+    for name in _TENANT_DEFAULTS:
+        if name in sent:
+            value = getattr(data, name)
+            value = getattr(value, "value", value)  # an enumeration or a plain string
+            if value != getattr(tenant, name):
+                setattr(tenant, name, value)
+                changed[name] = value
+    for name in _TENANT_LOCKS:
+        value = getattr(data, name)
+        if value is not None and value != getattr(tenant, name):
+            setattr(tenant, name, value)
+            changed[name] = value
+    if "logo" in sent:
+        if data.logo is None:
+            if tenant.logo_mime is not None:
+                tenant.logo_data, tenant.logo_mime = None, None
+                changed["logo"] = "removed"
+        else:
+            tenant.logo_data, tenant.logo_mime = decode_image(data.logo.data_url, "logo")
+            # The image itself does not belong into the log, only that it changed.
+            changed["logo"] = "changed"
+    if not changed:
+        return tenant_settings(tenant)
     await db.flush()
+    await db.refresh(tenant, ["updated_at"])
     await audit.record(
         db,
         principal,
@@ -208,31 +261,77 @@ async def update_tenant_settings(
         target_type="tenant",
         target_id=tenant.id,
         target_label=tenant.name,
-        details=data.model_dump(exclude_unset=True, mode="json"),
+        details=changed,
     )
     return tenant_settings(tenant)
+
+
+async def tenant_logo(db: AsyncSession, tenant: Tenant) -> tuple[bytes, str] | None:
+    row = (
+        await db.execute(select(Tenant.logo_data, Tenant.logo_mime).where(Tenant.id == tenant.id))
+    ).one_or_none()
+    if row is None or row[0] is None:
+        return None
+    return bytes(row[0]), row[1] or "application/octet-stream"
 
 
 async def own_settings(db: AsyncSession, principal: Principal) -> UserSettings | None:
     return await db.get(UserSettings, principal.user.id)
 
 
+def _resolve(own: Any, tenant_default: Any, locked: bool, fallback: Any) -> Any:
+    """One appearance setting: the user's choice, unless the organization fixed its own.
+
+    Locked, the organization's default holds for everybody (and without one, what comes after
+    it). Unlocked, the user's choice wins; without one the organization's default applies, and
+    without that the system's.
+    """
+    base = tenant_default if tenant_default is not None else fallback
+    return base if locked or own is None else own
+
+
 def effective(system: dict[str, Any], tenant: Tenant | None, own: UserSettings | None) -> EffectiveSettings:
-    locked = bool(tenant and tenant.nav_position_locked)
-    base_position = (tenant.default_nav_position if tenant else None) or system["default_nav_position"]
-    position = base_position if locked or not (own and own.nav_position) else own.nav_position
+    def lock(name: str) -> bool:
+        return bool(tenant and getattr(tenant, name))
+
+    def default(name: str) -> Any:
+        return getattr(tenant, name) if tenant else None
+
+    def chosen(name: str) -> Any:
+        return (getattr(own, name) or None) if own else None
+
     return EffectiveSettings(
-        theme=(own.theme if own and own.theme else system["default_theme"]),
-        nav_position=position,
+        theme=_resolve(
+            chosen("theme"), default("default_theme"), lock("theme_locked"), system["default_theme"]
+        ),
+        nav_position=_resolve(
+            chosen("nav_position"),
+            default("default_nav_position"),
+            lock("nav_position_locked"),
+            system["default_nav_position"],
+        ),
+        accent_color=_resolve(chosen("accent_color"), default("accent_color"), lock("accent_locked"), None),
+        app_bar=_resolve(
+            chosen("app_bar"), default("default_app_bar"), lock("app_bar_locked"), AppBar.TOP.value
+        ),
         language=(own.language if own and own.language else system["default_language"]),
-        nav_position_locked=locked,
+        theme_locked=lock("theme_locked"),
+        nav_position_locked=lock("nav_position_locked"),
+        accent_locked=lock("accent_locked"),
+        app_bar_locked=lock("app_bar_locked"),
     )
 
 
 def own_view(own: UserSettings | None) -> OwnSettings:
     if own is None:
         return OwnSettings()
-    return OwnSettings(theme=own.theme, nav_position=own.nav_position, language=own.language)
+    return OwnSettings(
+        theme=own.theme,
+        nav_position=own.nav_position,
+        accent_color=own.accent_color,
+        app_bar=own.app_bar,
+        language=own.language,
+    )
 
 
 async def update_own(db: AsyncSession, principal: Principal, data: SettingsUpdate) -> UserSettings:
@@ -246,6 +345,10 @@ async def update_own(db: AsyncSession, principal: Principal, data: SettingsUpdat
         own.theme = data.theme.value if data.theme else None
     if "nav_position" in fields:
         own.nav_position = data.nav_position.value if data.nav_position else None
+    if "accent_color" in fields:
+        own.accent_color = data.accent_color
+    if "app_bar" in fields:
+        own.app_bar = data.app_bar.value if data.app_bar else None
     if "language" in fields:
         own.language = data.language
     await db.flush()

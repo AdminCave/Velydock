@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from velydock.models import AppType, EmbedStatus, NavPosition, Role, Theme
+from velydock.models import AppBar, AppType, EmbedStatus, NavPosition, Role, Theme
 
 # Three characters at least: Keycloak's user profile refuses shorter names.
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$")
@@ -139,21 +139,43 @@ class TenantRef(Model):
     name: str
 
 
+class ActiveTenant(TenantRef):
+    """The organization the session works in, with what its interface needs to show it."""
+
+    logo_url: str | None = None
+
+
 class MembershipOut(Model):
     tenant: TenantRef
     role: Role | None
 
 
+# An accent colour as "#rrggbb". The interface derives the shades it needs from it and keeps
+# text readable in both themes, so any colour is acceptable here.
+AccentColor = Annotated[
+    str, StringConstraints(strip_whitespace=True, pattern=r"^#[0-9a-fA-F]{6}$"), AfterValidator(str.lower)
+]
+
+
 class EffectiveSettings(Model):
+    """What applies to this user in the active organization, and what the organization fixed."""
+
     theme: Theme
     nav_position: NavPosition
+    accent_color: str | None
+    app_bar: AppBar
     language: Language
+    theme_locked: bool
     nav_position_locked: bool
+    accent_locked: bool
+    app_bar_locked: bool
 
 
 class OwnSettings(Model):
     theme: Theme | None = None
     nav_position: NavPosition | None = None
+    accent_color: str | None = None
+    app_bar: AppBar | None = None
     language: Language | None = None
 
 
@@ -169,7 +191,7 @@ class MeUser(Model):
 
 class MeOut(Model):
     user: MeUser
-    active_tenant: TenantRef | None
+    active_tenant: ActiveTenant | None
     role: Role | None
     permissions: list[str]
     memberships: list[MembershipOut]
@@ -186,6 +208,8 @@ class MeOut(Model):
 class SettingsUpdate(Model):
     theme: Theme | None = None
     nav_position: NavPosition | None = None
+    accent_color: AccentColor | None = None
+    app_bar: AppBar | None = None
     language: Language | None = None
 
 
@@ -530,17 +554,35 @@ class TenantSettingsOut(Model):
     id: uuid.UUID
     slug: str
     name: str
+    default_theme: Theme | None
+    theme_locked: bool
+    accent_color: str | None
+    accent_locked: bool
     default_nav_position: NavPosition | None
     nav_position_locked: bool
+    default_app_bar: AppBar | None
+    app_bar_locked: bool
+    logo_url: str | None
+
+
+class LogoIn(Model):
+    """An uploaded image as a ``data:`` URL (the same formats and size as app icons)."""
+
+    data_url: str = Field(max_length=MAX_ICON_BYTES * 2)
 
 
 class TenantSettingsUpdate(Model):
+    """Only what is sent changes. A default sent as null is removed; ``logo: null`` removes the logo."""
+
+    default_theme: Theme | None = None
+    theme_locked: bool | None = None
+    accent_color: AccentColor | None = None
+    accent_locked: bool | None = None
     default_nav_position: NavPosition | None = None
     nav_position_locked: bool | None = None
-
-    @property
-    def nav_position_provided(self) -> bool:
-        return "default_nav_position" in self.model_fields_set
+    default_app_bar: AppBar | None = None
+    app_bar_locked: bool | None = None
+    logo: LogoIn | None = None
 
 
 class SmtpSettings(Model):
