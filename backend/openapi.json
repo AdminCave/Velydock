@@ -154,6 +154,16 @@
             "title": "Name",
             "type": "string"
           },
+          "publication": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicationIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "type": {
             "$ref": "#/components/schemas/AppType"
           },
@@ -306,6 +316,16 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "publication": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sort_order": {
             "title": "Sort Order",
@@ -512,6 +532,16 @@
               }
             ],
             "title": "Name"
+          },
+          "publication": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicationIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "type": {
             "anyOf": [
@@ -1367,6 +1397,226 @@
         "title": "ProfileUpdate",
         "type": "object"
       },
+      "ProxyInfo": {
+        "additionalProperties": false,
+        "description": "What an organization's administrator needs to publish an app.",
+        "properties": {
+          "defaults": {
+            "additionalProperties": true,
+            "title": "Defaults",
+            "type": "object"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "path_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Base"
+          },
+          "subdomain_scheme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdomain Scheme"
+          },
+          "subdomain_suffix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdomain Suffix"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyTemplateOut"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ProxyInfo",
+        "type": "object"
+      },
+      "ProxyTargetIn": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Note",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ProxyTargetIn",
+        "type": "object"
+      },
+      "ProxyTargetOut": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "value",
+          "note"
+        ],
+        "title": "ProxyTargetOut",
+        "type": "object"
+      },
+      "ProxyTemplateIn": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProxyTemplateIn",
+        "type": "object"
+      },
+      "ProxyTemplateOut": {
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "options",
+          "builtin"
+        ],
+        "title": "ProxyTemplateOut",
+        "type": "object"
+      },
+      "ProxyTemplateUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          }
+        },
+        "title": "ProxyTemplateUpdate",
+        "type": "object"
+      },
       "PublicInfo": {
         "additionalProperties": false,
         "properties": {
@@ -1397,6 +1647,121 @@
           "version"
         ],
         "title": "PublicInfo",
+        "type": "object"
+      },
+      "PublicationAccess": {
+        "enum": [
+          "protected",
+          "public"
+        ],
+        "title": "PublicationAccess",
+        "type": "string"
+      },
+      "PublicationIn": {
+        "additionalProperties": false,
+        "description": "Publish the app through the bundled reverse proxy: where from, and under which address.",
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/PublicationAccess",
+            "default": "protected"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PublicationMode",
+            "default": "path"
+          },
+          "name": {
+            "maxLength": 40,
+            "minLength": 2,
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "target_url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Target Url",
+            "type": "string"
+          },
+          "template": {
+            "default": "builtin:standard",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target_url"
+        ],
+        "title": "PublicationIn",
+        "type": "object"
+      },
+      "PublicationMode": {
+        "description": "How a published app is addressed below the apps host.",
+        "enum": [
+          "path",
+          "subdomain"
+        ],
+        "title": "PublicationMode",
+        "type": "string"
+      },
+      "PublicationOut": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/PublicationAccess"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PublicationMode"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "public_url": {
+            "title": "Public Url",
+            "type": "string"
+          },
+          "target_url": {
+            "title": "Target Url",
+            "type": "string"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "target_url",
+          "access",
+          "template",
+          "options",
+          "public_url"
+        ],
+        "title": "PublicationOut",
         "type": "object"
       },
       "Role": {
@@ -3226,6 +3591,28 @@
         ]
       }
     },
+    "/api/v1/admin/proxy": {
+      "get": {
+        "description": "What this organization can publish through the proxy: addresses, released targets, templates.",
+        "operationId": "proxy_info_api_v1_admin_proxy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Proxy Info",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/tenant": {
       "get": {
         "operationId": "get_tenant_settings_api_v1_admin_tenant_get",
@@ -3882,6 +4269,157 @@
         ]
       }
     },
+    "/api/v1/system/proxy-templates": {
+      "get": {
+        "operationId": "list_proxy_templates_api_v1_system_proxy_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProxyTemplateOut"
+                  },
+                  "title": "Response List Proxy Templates Api V1 System Proxy Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Proxy Templates",
+        "tags": [
+          "system"
+        ]
+      },
+      "post": {
+        "operationId": "create_proxy_template_api_v1_system_proxy_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyTemplateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyTemplateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Proxy Template",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/proxy-templates/{template_id}": {
+      "delete": {
+        "operationId": "delete_proxy_template_api_v1_system_proxy_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Proxy Template",
+        "tags": [
+          "system"
+        ]
+      },
+      "patch": {
+        "operationId": "update_proxy_template_api_v1_system_proxy_templates__template_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyTemplateUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyTemplateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Proxy Template",
+        "tags": [
+          "system"
+        ]
+      }
+    },
     "/api/v1/system/settings": {
       "get": {
         "operationId": "get_system_settings_api_v1_system_settings_get",
@@ -4154,6 +4692,151 @@
           }
         },
         "summary": "Add Member",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/tenants/{tenant_id}/proxy-targets": {
+      "get": {
+        "description": "The internal addresses an organization may publish apps from.",
+        "operationId": "list_proxy_targets_api_v1_system_tenants__tenant_id__proxy_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProxyTargetOut"
+                  },
+                  "title": "Response List Proxy Targets Api V1 System Tenants  Tenant Id  Proxy Targets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Proxy Targets",
+        "tags": [
+          "system"
+        ]
+      },
+      "post": {
+        "operationId": "add_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyTargetIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyTargetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Proxy Target",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/tenants/{tenant_id}/proxy-targets/{target_id}": {
+      "delete": {
+        "operationId": "remove_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets__target_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Proxy Target",
         "tags": [
           "system"
         ]

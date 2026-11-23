@@ -7,6 +7,7 @@ import binascii
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import delete, func, or_, select
@@ -18,6 +19,7 @@ from velydock.errors import invalid, not_found
 from velydock.models import (
     App,
     AppGroupGrant,
+    AppPublication,
     AppType,
     AppUserGrant,
     EmbedStatus,
@@ -25,9 +27,18 @@ from velydock.models import (
     GroupMember,
     Membership,
 )
-from velydock.schemas import MAX_ICON_BYTES, AppCreate, AppOut, AppUpdate, IconIn, LaunchOut, WorkspaceApp
+from velydock.schemas import (
+    MAX_ICON_BYTES,
+    AppCreate,
+    AppOut,
+    AppUpdate,
+    IconIn,
+    LaunchOut,
+    PublicationOut,
+    WorkspaceApp,
+)
 from velydock.security.tokens import sign
-from velydock.services import audit
+from velydock.services import audit, proxy
 from velydock.services.embedcheck import EmbedResult, check_embeddable
 
 SANDBOX_TOKEN_PURPOSE = "custom-app"  # noqa: S105 - a key-derivation label, not a secret
@@ -152,7 +163,12 @@ async def _grants(
     return groups, users
 
 
-def _out(app: App, group_ids: list[uuid.UUID], user_ids: list[uuid.UUID]) -> AppOut:
+def _out(
+    app: App,
+    group_ids: list[uuid.UUID],
+    user_ids: list[uuid.UUID],
+    publication: PublicationOut | None = None,
+) -> AppOut:
     return AppOut(
         id=app.id,
         name=app.name,
@@ -176,6 +192,7 @@ def _out(app: App, group_ids: list[uuid.UUID], user_ids: list[uuid.UUID]) -> App
         custom_allow_network=app.custom_allow_network,
         created_at=app.created_at,
         updated_at=app.updated_at,
+        publication=publication,
     )
 
 
@@ -263,7 +280,7 @@ async def run_embed_check(url: str, settings: Settings) -> EmbedResult:
     )
 
 
-async def list_apps(db: AsyncSession, principal: Principal) -> list[AppOut]:
+async def list_apps(db: AsyncSession, principal: Principal, settings: Settings) -> list[AppOut]:
     tenant = principal.require_tenant()
     apps = list(
         (
@@ -273,19 +290,27 @@ async def list_apps(db: AsyncSession, principal: Principal) -> list[AppOut]:
         ).scalars()
     )
     groups, users = await _grants(db, tenant.id, [a.id for a in apps])
-    return [_out(a, groups[a.id], users[a.id]) for a in apps]
+    published = await proxy.publications_of(db, settings, tenant.id, [a.id for a in apps])
+    return [_out(a, groups[a.id], users[a.id], published.get(a.id)) for a in apps]
 
 
-async def get_app(db: AsyncSession, principal: Principal, app_id: uuid.UUID) -> AppOut:
+async def get_app(db: AsyncSession, principal: Principal, settings: Settings, app_id: uuid.UUID) -> AppOut:
     tenant = principal.require_tenant()
     app = await _load(db, tenant.id, app_id)
     groups, users = await _grants(db, tenant.id, [app.id])
-    return _out(app, groups[app.id], users[app.id])
+    published = await proxy.publications_of(db, settings, tenant.id, [app.id])
+    return _out(app, groups[app.id], users[app.id], published.get(app.id))
 
 
 async def create_app(db: AsyncSession, principal: Principal, settings: Settings, data: AppCreate) -> AppOut:
     tenant = principal.require_tenant()
-    url = validate_url(data.url, data.type, settings)
+    if data.publication is not None:
+        # The address of a published app is the public one the proxy serves; it is set below,
+        # once the publication is accepted.
+        proxy.require_enabled(settings)
+        url = None
+    else:
+        url = validate_url(data.url, data.type, settings)
     if data.type == AppType.CUSTOM and not data.custom_html.strip():
         raise invalid("A custom app needs HTML content.", "content_required")
     group_ids, user_ids = await _validated_grants(db, tenant.id, data.group_ids, data.user_ids)
@@ -314,6 +339,12 @@ async def create_app(db: AsyncSession, principal: Principal, settings: Settings,
         _apply_embed_result(app, await run_embed_check(url, settings))
     db.add(app)
     await db.flush()
+    details: dict[str, Any] = {"type": app.type}
+    if data.publication is not None:
+        publication = await proxy.publish(
+            db, settings, app, data.publication, by_system_admin=principal.user.is_system_admin
+        )
+        details["publication"] = _publication_details(publication)
     await _set_grants(db, app, group_ids, user_ids)
     await audit.record(
         db,
@@ -322,10 +353,11 @@ async def create_app(db: AsyncSession, principal: Principal, settings: Settings,
         target_type="app",
         target_id=app.id,
         target_label=app.name,
-        details={"type": app.type},
+        details=details,
     )
+    await db.flush()
     await db.refresh(app)
-    return _out(app, group_ids, user_ids)
+    return await get_app(db, principal, settings, app.id)
 
 
 async def update_app(
@@ -335,9 +367,23 @@ async def update_app(
     app = await _load(db, tenant.id, app_id)
     fields = data.model_fields_set
     new_type = data.type if data.type is not None else AppType(app.type)
-    new_url = data.url if "url" in fields else app.url
-    url = validate_url(new_url, new_type, settings)
-    url_changed = url != app.url or new_type.value != app.type
+    existing = await db.get(AppPublication, app.id)
+    # Published after this change? Then the address is the proxy's, not the one in the request.
+    if "publication" in fields:
+        published = data.publication is not None
+    else:
+        published = existing is not None and new_type in (AppType.EMBEDDED, AppType.EXTERNAL)
+    if published:
+        url = app.url
+        url_changed = False
+    else:
+        if existing is not None and "url" not in fields and new_type != AppType.CUSTOM:
+            # The public address stops working with the publication; keeping it would leave an
+            # app that leads nowhere.
+            raise invalid("Enter the address the app has from now on.", "url_required")
+        new_url = data.url if "url" in fields else app.url
+        url = validate_url(new_url, new_type, settings)
+        url_changed = url != app.url or new_type.value != app.type
 
     if data.name is not None:
         app.name = data.name
@@ -350,10 +396,24 @@ async def update_app(
     app.type = new_type.value
     app.url = url
 
+    publication_change: Any = None
+    if published and data.publication is not None:
+        publication = await proxy.publish(
+            db, settings, app, data.publication, by_system_admin=principal.user.is_system_admin
+        )
+        publication_change = _publication_details(publication)
+    elif not published and existing is not None:
+        await proxy.unpublish(db, app)
+        publication_change = "removed"
+
     if new_type == AppType.EMBEDDED:
         if data.frame_permissions is not None:
             app.frame_permissions = list(data.frame_permissions)
-        if url and (url_changed or app.embed_checked_at is None):
+        if published:
+            # The check would be sent to Velydock's own sign-in; what the app answers behind
+            # the proxy is not known from here.
+            _apply_embed_result(app, None)
+        elif url and (url_changed or app.embed_checked_at is None):
             _apply_embed_result(app, await run_embed_check(url, settings))
     else:
         app.frame_permissions = []
@@ -401,10 +461,24 @@ async def update_app(
         target_type="app",
         target_id=app.id,
         target_label=app.name,
-        details={"fields": sorted(fields)},
+        details={
+            "fields": sorted(fields),
+            **({"publication": publication_change} if publication_change is not None else {}),
+        },
     )
     await db.refresh(app)
-    return await get_app(db, principal, app.id)
+    return await get_app(db, principal, settings, app.id)
+
+
+def _publication_details(publication: AppPublication) -> dict[str, Any]:
+    """What the log keeps about a publication: enough to see what was opened to whom."""
+    return {
+        "name": publication.name,
+        "mode": publication.mode,
+        "access": publication.access,
+        "target": publication.target_url,
+        "template": publication.template,
+    }
 
 
 async def recheck_app(
@@ -414,9 +488,11 @@ async def recheck_app(
     app = await _load(db, tenant.id, app_id)
     if app.type != AppType.EMBEDDED.value or not app.url:
         raise invalid("Only embedded apps can be checked.", "not_embedded")
+    if await db.get(AppPublication, app.id) is not None:
+        raise invalid("A published app cannot be checked from here.", "not_embedded")
     _apply_embed_result(app, await run_embed_check(app.url, settings))
     await db.flush()
-    return await get_app(db, principal, app.id)
+    return await get_app(db, principal, settings, app.id)
 
 
 async def delete_app(db: AsyncSession, principal: Principal, app_id: uuid.UUID) -> None:
@@ -428,7 +504,9 @@ async def delete_app(db: AsyncSession, principal: Principal, app_id: uuid.UUID) 
     await audit.record(db, principal, "app.delete", target_type="app", target_id=app_id, target_label=name)
 
 
-async def reorder_apps(db: AsyncSession, principal: Principal, app_ids: list[uuid.UUID]) -> list[AppOut]:
+async def reorder_apps(
+    db: AsyncSession, principal: Principal, settings: Settings, app_ids: list[uuid.UUID]
+) -> list[AppOut]:
     tenant = principal.require_tenant()
     apps = {a.id: a for a in (await db.execute(select(App).where(App.tenant_id == tenant.id))).scalars()}
     if set(app_ids) != set(apps) or len(app_ids) != len(apps):
@@ -437,7 +515,7 @@ async def reorder_apps(db: AsyncSession, principal: Principal, app_ids: list[uui
         apps[app_id].sort_order = position * 10
     await db.flush()
     await audit.record(db, principal, "app.reorder", target_type="app", details={"count": len(app_ids)})
-    return await list_apps(db, principal)
+    return await list_apps(db, principal, settings)
 
 
 # -- workspace -----------------------------------------------------------------------------------

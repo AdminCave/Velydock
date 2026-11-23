@@ -141,6 +141,33 @@ async def resolve_session(db: AsyncSession, settings: Settings, cookie_value: st
     return session
 
 
+async def session_by_hash(db: AsyncSession, settings: Settings, id_hash: str) -> AuthSession | None:
+    """The live session with this id, for callers that hold the id and not the cookie (the
+    proxy's sign-in check). Same rules as ``resolve_session``; activity is recorded separately."""
+    if not id_hash or len(id_hash) > 64:
+        return None
+    session = await db.get(AuthSession, id_hash)
+    if session is None:
+        return None
+    current = now()
+    if current >= session.expires_at:
+        return None
+    if current >= session.last_seen_at + timedelta(minutes=settings.session_idle_minutes):
+        return None
+    return session
+
+
+async def touch_by_hash(db: AsyncSession, id_hash: str) -> None:
+    """Using a published app counts as activity of the session - written at most once a minute."""
+    current = now()
+    await db.execute(
+        update(AuthSession)
+        .where(AuthSession.id_hash == id_hash, AuthSession.last_seen_at < current - _TOUCH_INTERVAL)
+        .values(last_seen_at=current)
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def delete_session(db: AsyncSession, id_hash: str) -> None:
     await db.execute(delete(AuthSession).where(AuthSession.id_hash == id_hash))
 

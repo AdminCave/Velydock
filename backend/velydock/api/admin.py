@@ -31,6 +31,7 @@ from velydock.schemas import (
     GroupOut,
     GroupUpdate,
     PasswordReset,
+    ProxyInfo,
     TenantSettingsOut,
     TenantSettingsUpdate,
     UserCreate,
@@ -43,6 +44,7 @@ from velydock.schemas import (
 from velydock.services import apps as apps_service
 from velydock.services import audit as audit_service
 from velydock.services import groups as groups_service
+from velydock.services import proxy as proxy_service
 from velydock.services import settings as settings_service
 from velydock.services import users as users_service
 
@@ -214,8 +216,9 @@ async def delete_group(
 async def list_apps(
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
     db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
 ) -> list[AppOut]:
-    return await apps_service.list_apps(db, principal)
+    return await apps_service.list_apps(db, principal, settings)
 
 
 @router.post("/apps", response_model=AppOut, status_code=201)
@@ -243,8 +246,9 @@ async def reorder_apps(
     data: AppOrder,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
     db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
 ) -> list[AppOut]:
-    return await apps_service.reorder_apps(db, principal, data.app_ids)
+    return await apps_service.reorder_apps(db, principal, settings, data.app_ids)
 
 
 @router.get("/apps/{app_id}", response_model=AppOut)
@@ -252,8 +256,9 @@ async def get_app(
     app_id: uuid.UUID,
     principal: Principal = Depends(require(Permission.APPS_MANAGE)),
     db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
 ) -> AppOut:
-    return await apps_service.get_app(db, principal, app_id)
+    return await apps_service.get_app(db, principal, settings, app_id)
 
 
 @router.patch("/apps/{app_id}", response_model=AppOut)
@@ -285,6 +290,16 @@ async def delete_app(
 ) -> Response:
     await apps_service.delete_app(db, principal, app_id)
     return Response(status_code=204)
+
+
+@router.get("/proxy", response_model=ProxyInfo)
+async def proxy_info(
+    principal: Principal = Depends(require(Permission.APPS_MANAGE)),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> ProxyInfo:
+    """What this organization can publish through the proxy: addresses, released targets, templates."""
+    return await proxy_service.info(db, settings, principal.require_tenant().id)
 
 
 # -- tenant settings and audit -------------------------------------------------------------------

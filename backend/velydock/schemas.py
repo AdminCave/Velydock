@@ -18,7 +18,16 @@ from pydantic import (
     model_validator,
 )
 
-from velydock.models import AppBar, AppType, EmbedStatus, NavPosition, Role, Theme
+from velydock.models import (
+    AppBar,
+    AppType,
+    EmbedStatus,
+    NavPosition,
+    PublicationAccess,
+    PublicationMode,
+    Role,
+    Theme,
+)
 
 # Three characters at least: Keycloak's user profile refuses shorter names.
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$")
@@ -397,6 +406,33 @@ class IconIn(Model):
     data_url: str | None = Field(default=None, max_length=MAX_ICON_BYTES * 2)
 
 
+class PublicationIn(Model):
+    """Publish the app through the bundled reverse proxy: where from, and under which address."""
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=2, max_length=40)]
+    mode: PublicationMode = PublicationMode.PATH
+    target_url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    access: PublicationAccess = PublicationAccess.PROTECTED
+    template: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)] = (
+        "builtin:standard"
+    )
+    # What differs from the template; see services/proxy.py for the keys.
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublicationOut(Model):
+    name: str
+    mode: PublicationMode
+    target_url: str
+    access: PublicationAccess
+    template: str
+    options: dict[str, Any]
+    public_url: str
+    # Why the proxy does not serve it at the moment, or None: "target_not_allowed" (the release
+    # was withdrawn), "template_missing".
+    problem: str | None = None
+
+
 class AppBase(Model):
     name: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80), AfterValidator(_one_space)
@@ -422,6 +458,7 @@ class AppBase(Model):
 
 class AppCreate(AppBase):
     icon: IconIn | None = None
+    publication: PublicationIn | None = None
 
 
 class AppUpdate(Model):
@@ -446,6 +483,8 @@ class AppUpdate(Model):
     custom_js: str | None = Field(default=None, max_length=MAX_JS)
     custom_allow_network: bool | None = None
     icon: IconIn | None = None
+    # Sent as null, the app is no longer published; a new address must then come along.
+    publication: PublicationIn | None = None
 
 
 class AppOut(Model):
@@ -471,6 +510,7 @@ class AppOut(Model):
     custom_allow_network: bool
     created_at: datetime
     updated_at: datetime
+    publication: PublicationOut | None = None
 
 
 class AppOrder(Model):
@@ -633,3 +673,60 @@ class AuditPage(Model):
     total: int
     page: int
     page_size: int
+
+
+# -- publishing through the reverse proxy ---------------------------------------------------------
+
+
+class ProxyTemplateOut(Model):
+    id: str
+    name: str
+    description: str
+    options: dict[str, Any]
+    builtin: bool
+
+
+class ProxyTemplateIn(Model):
+    name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80), AfterValidator(_one_space)
+    ]
+    description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProxyTemplateUpdate(Model):
+    name: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=80),
+            AfterValidator(_one_space),
+        ]
+        | None
+    ) = None
+    description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] | None = None
+    options: dict[str, Any] | None = None
+
+
+class ProxyTargetIn(Model):
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    note: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)] = ""
+
+
+class ProxyTargetOut(Model):
+    id: uuid.UUID
+    value: str
+    note: str
+
+
+class ProxyInfo(Model):
+    """What an organization's administrator needs to publish an app."""
+
+    enabled: bool
+    # "https://apps.example.com/" and ".apps.example.com": the name goes after the first and
+    # before the second.
+    path_base: str | None = None
+    subdomain_suffix: str | None = None
+    subdomain_scheme: str | None = None
+    targets: list[str] = Field(default_factory=list)
+    templates: list[ProxyTemplateOut] = Field(default_factory=list)
+    defaults: dict[str, Any] = Field(default_factory=dict)

@@ -67,6 +67,18 @@ class AppBar(StrEnum):
     HIDDEN = "hidden"
 
 
+class PublicationMode(StrEnum):
+    """How a published app is addressed below the apps host."""
+
+    PATH = "path"  # https://apps.example.com/<name>/
+    SUBDOMAIN = "subdomain"  # https://<name>.apps.example.com/
+
+
+class PublicationAccess(StrEnum):
+    PROTECTED = "protected"  # only signed-in users who are granted the app
+    PUBLIC = "public"  # anybody who knows the address
+
+
 class EmbedStatus(StrEnum):
     UNKNOWN = "unknown"
     OK = "ok"
@@ -245,6 +257,71 @@ class App(Base):
     updated_at: Mapped[datetime] = _updated()
 
     __table_args__ = (Index("ix_apps_tenant", "tenant_id", "sort_order"),)
+
+
+class AppPublication(Base):
+    """An app that the bundled reverse proxy serves from an internal address.
+
+    The public address follows from ``mode`` and ``name``; ``name`` is unique across all
+    organizations because the addresses are.
+    """
+
+    __tablename__ = "app_publications"
+
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apps.id", ondelete="CASCADE"), primary_key=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)
+    # Where the proxy sends the requests: an address the system administrator released.
+    target_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    access: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default=PublicationAccess.PROTECTED.value
+    )
+    # A built-in template ("builtin:standard") or the id of one the system administrator made.
+    template: Mapped[str] = mapped_column(String(60), nullable=False, server_default="builtin:standard")
+    # What this publication sets differently from its template.
+    options: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+    __table_args__ = (Index("ix_app_publications_tenant", "tenant_id"),)
+
+
+class ProxyTarget(Base):
+    """An address range or host an organization may publish apps from. Set by system administrators."""
+
+    __tablename__ = "proxy_targets"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    # A network ("10.20.0.0/16"), an address ("10.20.0.7") or a host name ("nas.intern"),
+    # optionally with a port (":8080", "[fd00::7]:8080").
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[str] = mapped_column(String(200), nullable=False, server_default="")
+    created_at: Mapped[datetime] = _created()
+
+    __table_args__ = (Index("uq_proxy_targets", "tenant_id", "value", unique=True),)
+
+
+class ProxyTemplate(Base):
+    """Proxy settings under a name, made by system administrators for all organizations."""
+
+    __tablename__ = "proxy_templates"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(300), nullable=False, server_default="")
+    options: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+    __table_args__ = (Index("uq_proxy_templates_name_lower", func.lower(name), unique=True),)
 
 
 class AppGroupGrant(Base):

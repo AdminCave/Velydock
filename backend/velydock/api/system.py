@@ -15,6 +15,11 @@ from velydock.idp.base import IdentityProvider
 from velydock.schemas import (
     AuditPage,
     MemberAdd,
+    ProxyTargetIn,
+    ProxyTargetOut,
+    ProxyTemplateIn,
+    ProxyTemplateOut,
+    ProxyTemplateUpdate,
     SystemSettingsOut,
     SystemSettingsUpdate,
     SystemUserOut,
@@ -26,6 +31,7 @@ from velydock.schemas import (
     TenantUpdate,
 )
 from velydock.services import audit as audit_service
+from velydock.services import proxy as proxy_service
 from velydock.services import settings as settings_service
 from velydock.services import tenants as tenants_service
 from velydock.services import users as users_service
@@ -141,3 +147,75 @@ async def system_audit(
     """Entries that belong to no tenant: tenant lifecycle, system settings, administrator rights."""
     async with system_scope(db):
         return await audit_service.list_entries(db, None, page=page, page_size=page_size)
+
+
+# -- publishing through the reverse proxy ----------------------------------------------------------
+
+
+@router.get("/tenants/{tenant_id}/proxy-targets", response_model=list[ProxyTargetOut])
+async def list_proxy_targets(
+    tenant_id: uuid.UUID,
+    _: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> list[ProxyTargetOut]:
+    """The internal addresses an organization may publish apps from."""
+    return await proxy_service.list_targets(db, tenant_id)
+
+
+@router.post("/tenants/{tenant_id}/proxy-targets", response_model=ProxyTargetOut, status_code=201)
+async def add_proxy_target(
+    tenant_id: uuid.UUID,
+    data: ProxyTargetIn,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> ProxyTargetOut:
+    return await proxy_service.add_target(db, settings, principal, tenant_id, data)
+
+
+@router.delete("/tenants/{tenant_id}/proxy-targets/{target_id}", status_code=204)
+async def remove_proxy_target(
+    tenant_id: uuid.UUID,
+    target_id: uuid.UUID,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> Response:
+    await proxy_service.remove_target(db, principal, tenant_id, target_id)
+    return Response(status_code=204)
+
+
+@router.get("/proxy-templates", response_model=list[ProxyTemplateOut])
+async def list_proxy_templates(
+    _: Principal = Depends(require_system_admin), db: AsyncSession = Depends(get_db, scope="function")
+) -> list[ProxyTemplateOut]:
+    async with system_scope(db):
+        return await proxy_service.list_templates(db)
+
+
+@router.post("/proxy-templates", response_model=ProxyTemplateOut, status_code=201)
+async def create_proxy_template(
+    data: ProxyTemplateIn,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> ProxyTemplateOut:
+    return await proxy_service.create_template(db, principal, data)
+
+
+@router.patch("/proxy-templates/{template_id}", response_model=ProxyTemplateOut)
+async def update_proxy_template(
+    template_id: uuid.UUID,
+    data: ProxyTemplateUpdate,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> ProxyTemplateOut:
+    return await proxy_service.update_template(db, principal, template_id, data)
+
+
+@router.delete("/proxy-templates/{template_id}", status_code=204)
+async def delete_proxy_template(
+    template_id: uuid.UUID,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> Response:
+    await proxy_service.delete_template(db, principal, template_id)
+    return Response(status_code=204)

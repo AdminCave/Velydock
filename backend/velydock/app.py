@@ -22,7 +22,7 @@ from sqlalchemy import text
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from velydock import __version__
-from velydock.api import admin, auth, me, system
+from velydock.api import admin, auth, me, proxy, system
 from velydock.config import Settings, get_settings
 from velydock.db import dispose_engine, engine_initialized, get_engine, init_engine
 from velydock.errors import install_error_handlers
@@ -121,6 +121,7 @@ def create_main_app(
     app.include_router(me.router)
     app.include_router(admin.router)
     app.include_router(system.router)
+    app.include_router(proxy.router)
 
     @app.api_route(
         "/api/{path:path}",
