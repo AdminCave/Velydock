@@ -160,6 +160,12 @@ describe('dictionaries', () => {
       'embed.detail.',
       'accent.color.',
       'appBar.',
+      'proxy.builtin.',
+      'proxy.option.',
+      'proxy.problem.',
+      'proxy.mode.',
+      'proxy.published.',
+      'audit.publication.',
     ];
     const dead = de.filter(
       (key) => !dynamic.some((prefix) => key.startsWith(prefix)) && !code.includes(`'${key}'`),

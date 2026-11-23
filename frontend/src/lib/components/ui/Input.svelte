@@ -38,6 +38,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     autocomplete?: HTMLInputElement['autocomplete'];
     autocapitalize?: 'off' | 'none' | 'sentences' | 'words' | 'characters';
     ariaLabel?: string;
+    testid?: string;
     oninput?: (e: Event) => void;
     onkeydown?: (e: KeyboardEvent) => void;
   }
@@ -67,6 +68,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     autocomplete,
     autocapitalize,
     ariaLabel,
+    testid,
     oninput,
     onkeydown,
   }: Props = $props();
@@ -111,6 +113,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       aria-label={ariaLabel}
       aria-invalid={bad || undefined}
       aria-describedby={field?.describedBy}
+      data-testid={testid}
       {oninput}
       {onkeydown}></textarea>
   {:else}
@@ -133,6 +136,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       aria-label={ariaLabel}
       aria-invalid={bad || undefined}
       aria-describedby={field?.describedBy}
+      data-testid={testid}
       {oninput}
       {onkeydown}
     />

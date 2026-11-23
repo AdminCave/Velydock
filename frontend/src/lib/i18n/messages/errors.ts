@@ -131,6 +131,56 @@ export const errors = {
     'Das Symbol darf höchstens 256 KB groß sein.',
     'The icon must be at most 256 KB.',
   ],
+  // ── Publishing through the proxy ─────────────────────────────────────
+  'error.proxy_disabled': [
+    'Veröffentlichen über den Proxy ist auf dieser Installation nicht eingerichtet.',
+    'Publishing through the proxy is not set up on this installation.',
+  ],
+  'error.proxy_target_invalid': [
+    'Diese Adresse ist keine, an die der Proxy weiterleiten kann.',
+    'This is no address the proxy can forward to.',
+  ],
+  'error.proxy_target_not_allowed': [
+    'Diese interne Adresse ist für deine Organisation nicht freigegeben. Freigeben kann sie der Systemadministrator.',
+    'This internal address is not released for your organization. The system administrator can release it.',
+  ],
+  'error.proxy_target_reserved': [
+    'Dieser Name gehört zur Installation selbst und lässt sich nicht freigeben.',
+    'This name belongs to the installation itself and cannot be released.',
+  ],
+  'error.proxy_target_exists': [
+    'Diese Adresse ist für die Organisation schon freigegeben.',
+    'This address is released for the organization already.',
+  ],
+  'error.proxy_template_unknown': [
+    'Diese Vorlage gibt es nicht (mehr). Wähl eine andere.',
+    'This template does not exist (any more). Choose another one.',
+  ],
+  'error.proxy_options_invalid': [
+    'Eine der Proxy-Einstellungen wurde nicht angenommen.',
+    'One of the proxy settings was not accepted.',
+  ],
+  'error.publication_type': [
+    'Veröffentlichen lassen sich nur eingebettete Apps und Apps im neuen Tab.',
+    'Only embedded apps and apps in a new tab can be published.',
+  ],
+  'error.publication_name_invalid': [
+    'Der Name in der Adresse besteht aus Kleinbuchstaben, Ziffern und Bindestrichen (2 bis 40 Zeichen) und darf kein reserviertes Wort sein.',
+    'The name in the address consists of lower-case letters, digits and hyphens (2 to 40 characters) and must not be a reserved word.',
+  ],
+  'error.publication_name_taken': [
+    'Dieser Name ist schon vergeben – Namen sind über alle Organisationen eindeutig. Nimm einen anderen.',
+    'This name is taken already – names are unique across all organizations. Take another one.',
+  ],
+  'error.publication_mode_not_allowed': [
+    'Deine Organisation veröffentlicht Apps nur unter einer Subdomain. Wähl „Subdomain“.',
+    'Your organization publishes apps under a sub-domain only. Choose “Sub-domain”.',
+  ],
+  'error.template_in_use': [
+    'Diese Vorlage wird von veröffentlichten Apps verwendet. Eine Vorlage in Verwendung lässt sich nicht löschen: Stell die Apps erst auf eine andere um.',
+    'This template is used by published apps. A template in use cannot be deleted: change the apps to another one first.',
+  ],
+  'error.name_taken': ['Diesen Namen gibt es schon.', 'This name exists already.'],
   'error.logo_invalid': [
     'Das Logo muss ein PNG-, JPEG-, GIF-, WebP- oder SVG-Bild sein.',
     'The logo must be a PNG, JPEG, GIF, WebP or SVG image.',

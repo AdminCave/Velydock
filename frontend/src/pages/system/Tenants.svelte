@@ -14,11 +14,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Power from '@lucide/svelte/icons/power';
   import PowerOff from '@lucide/svelte/icons/power-off';
   import Trash from '@lucide/svelte/icons/trash';
+  import Waypoints from '@lucide/svelte/icons/waypoints';
   import { api } from '$lib/api/client';
   import type { Tenant } from '$lib/api/types';
   import Button from '$lib/components/ui/Button.svelte';
   import { confirmDialog } from '$lib/components/ui/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import IconButton from '$lib/components/ui/IconButton.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import MenuItem from '$lib/components/ui/MenuItem.svelte';
   import MenuSeparator from '$lib/components/ui/MenuSeparator.svelte';
@@ -32,6 +34,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
   import TenantDeleteModal from '../../modals/TenantDeleteModal.svelte';
   import TenantModal from '../../modals/TenantModal.svelte';
+  import TenantProxyModal from '../../modals/TenantProxyModal.svelte';
 
   let tenants = $state<Tenant[] | null>(null);
   let failed = $state(false);
@@ -39,6 +42,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
   let editing = $state<Tenant | null>(null);
   let deleting = $state<Tenant | null>(null);
   let entering = $state(false);
+  // The organization whose proxy releases are open, and whether apps can be published on
+  // this installation at all (null: not known, which is treated as "yes").
+  let releasing = $state<Tenant | null>(null);
+  let publishing = $state<boolean | null>(null);
 
   async function load() {
     try {
@@ -50,7 +57,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
     }
   }
 
-  onMount(() => void load());
+  onMount(() => {
+    void load();
+    // Whether publishing through the proxy is set up on this installation at all.
+    api
+      .get('/api/v1/system/proxy')
+      .then((info) => (publishing = info.enabled))
+      .catch(() => {
+        /* not known then: the releases are offered, and the server has the last word */
+      });
+  });
 
   // After a write: read the table again, and the signed-in user too, because the
   // organization switcher lists the same organizations (and deleting the organization one
@@ -174,6 +190,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
                     {$t('tenants.action.enter')}
                   </Button>
                 {/if}
+                <IconButton
+                  icon={Waypoints}
+                  size="sm"
+                  label={$t('proxyTargets.open', { name: tenant.name })}
+                  data-testid="tenant-proxy"
+                  onclick={() => (releasing = tenant)}
+                />
                 <Menu
                   label={$t('tenants.actions', { name: tenant.name })}
                   triggerClass="row-menu"
@@ -182,6 +205,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
                   {#snippet trigger()}<Ellipsis size={18} />{/snippet}
                   <MenuItem icon={Pencil} onSelect={() => openRename(tenant)}>
                     {$t('tenants.action.rename')}
+                  </MenuItem>
+                  <!-- The same as the button next to the menu, here in words among the
+                       other things that can be done with an organization. -->
+                  <MenuItem
+                    icon={Waypoints}
+                    testid="tenant-proxy-item"
+                    onSelect={() => (releasing = tenant)}
+                  >
+                    {$t('proxyTargets.action')}
                   </MenuItem>
                   {#if tenant.active}
                     <!-- An organization that owns a system administrator's account can be
@@ -240,6 +272,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </section>
 
 <TenantModal open={modalOpen} tenant={editing} onClose={() => (modalOpen = false)} {onSaved} />
+<TenantProxyModal
+  tenant={releasing}
+  enabled={publishing}
+  onClose={() => (releasing = null)}
+  onChanged={() => void load()}
+/>
 <TenantDeleteModal
   tenant={deleting}
   onClose={() => (deleting = null)}

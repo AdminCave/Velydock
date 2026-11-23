@@ -26,6 +26,11 @@ export const ADMIN_NAV: readonly NavEntry[] = [
 export const SYSTEM_NAV: readonly NavEntry[] = [
   { path: '/system/tenants', label: 'nav.system.tenants', permission: 'system:admin' },
   { path: '/system/users', label: 'nav.system.users', permission: 'system:admin' },
+  {
+    path: '/system/proxy-templates',
+    label: 'nav.system.proxyTemplates',
+    permission: 'system:admin',
+  },
   { path: '/system/settings', label: 'nav.system.settings', permission: 'system:admin' },
   { path: '/system/audit', label: 'nav.system.audit', permission: 'system:admin' },
 ];

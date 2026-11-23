@@ -159,6 +159,157 @@ describe('audit log texts', () => {
     ).toBe('Two-factor for administrators: on');
   });
 
+  describe('about publishing through the proxy', () => {
+    const en = (key: string, vars?: Record<string, string | number | null | undefined>) =>
+      translate('en', key, vars);
+    const publication = {
+      name: 'wiki',
+      mode: 'path',
+      access: 'protected',
+      target: 'http://10.20.0.7:8080',
+      template: 'builtin:embeddable',
+    };
+
+    it('knows the actions the backend records for it', () => {
+      // The list is what the test above goes through: every action in both languages.
+      expect(AUDIT_ACTIONS).toEqual(
+        expect.arrayContaining([
+          'proxy.target.add',
+          'proxy.target.remove',
+          'proxy.template.create',
+          'proxy.template.update',
+          'proxy.template.delete',
+        ]),
+      );
+    });
+
+    it('says what was released for an organization, and what was withdrawn', () => {
+      expect(auditActionLabel('proxy.target.add', de)).toBe('Proxy-Freigabe erteilt');
+      expect(auditActionLabel('proxy.target.remove', de)).toBe('Proxy-Freigabe zurückgezogen');
+      expect(
+        auditDetail({ action: 'proxy.target.add', details: { value: '10.20.0.0/16' } }, de),
+      ).toBe('Freigabe: 10.20.0.0/16');
+      expect(
+        auditDetail({ action: 'proxy.target.remove', details: { value: 'nas.intern' } }, en),
+      ).toBe('Release: nas.intern');
+      expect(auditDetail({ action: 'proxy.target.add', details: {} }, de)).toBe('');
+    });
+
+    it('names what was changed about a template', () => {
+      expect(auditActionLabel('proxy.template.create', de)).toBe('Proxy-Vorlage angelegt');
+      expect(auditActionLabel('proxy.template.delete', en)).toBe('Proxy template deleted');
+      expect(
+        auditDetail(
+          { action: 'proxy.template.update', details: { fields: ['description', 'options'] } },
+          de,
+        ),
+      ).toBe('Geändert: Beschreibung, Einstellungen');
+      expect(auditDetail({ action: 'proxy.template.create', details: {} }, de)).toBe('');
+    });
+
+    it('says whether path addresses were allowed or switched off for an organization', () => {
+      expect(
+        auditDetail({ action: 'tenant.update', details: { proxy_path_allowed: false } }, de),
+      ).toBe('Pfad-Adressen abgeschaltet');
+      expect(
+        auditDetail(
+          { action: 'tenant.update', details: { name: 'Neu', proxy_path_allowed: true } },
+          de,
+        ),
+      ).toBe('neuer Name: Neu · Pfad-Adressen erlaubt');
+      expect(
+        auditDetail({ action: 'tenant.update', details: { proxy_path_allowed: true } }, en),
+      ).toBe('Path addresses allowed');
+    });
+
+    it('says under which address an app was published, for whom, and where it leads', () => {
+      expect(
+        auditDetail({ action: 'app.create', details: { type: 'embedded', publication } }, de),
+      ).toBe(
+        'Typ: Eingebettet · Veröffentlicht als wiki (Pfad, geschützt) → http://10.20.0.7:8080 · Vorlage: In Velydock einbettbar',
+      );
+      expect(
+        auditDetail(
+          {
+            action: 'app.update',
+            details: {
+              fields: ['name', 'publication'],
+              publication: { ...publication, mode: 'subdomain', access: 'public' },
+            },
+          },
+          en,
+        ),
+      ).toBe(
+        'Changed: Name, Publication · Published as wiki (sub-domain, public) → http://10.20.0.7:8080 · Template: Embeddable in Velydock',
+      );
+    });
+
+    it('says that a publication was ended', () => {
+      expect(
+        auditDetail(
+          {
+            action: 'app.update',
+            details: { fields: ['publication', 'url'], publication: 'removed' },
+          },
+          de,
+        ),
+      ).toBe('Geändert: Veröffentlichung, Adresse (URL) · Veröffentlichung beendet');
+    });
+
+    it('names a template of the system administrator as the entry keeps it', () => {
+      const own = { ...publication, template: '7f3c-1', template_name: 'Nur aus dem Büro' };
+      expect(
+        auditDetail({ action: 'app.create', details: { type: 'embedded', publication: own } }, de),
+      ).toBe(
+        'Typ: Eingebettet · Veröffentlicht als wiki (Pfad, geschützt) → http://10.20.0.7:8080 · Vorlage: Nur aus dem Büro',
+      );
+      // A built-in template is named here, whatever else the entry holds.
+      expect(
+        auditDetail(
+          {
+            action: 'app.update',
+            details: { fields: [], publication: { ...publication, template_name: 'Embeddable' } },
+          },
+          de,
+        ),
+      ).toContain('Vorlage: In Velydock einbettbar');
+      // One this version has no name for is shown by its id rather than called an own one.
+      expect(
+        auditDetail(
+          {
+            action: 'app.update',
+            details: { fields: [], publication: { ...publication, template: 'builtin:brand-new' } },
+          },
+          de,
+        ),
+      ).toContain('Vorlage: builtin:brand-new');
+    });
+
+    it('calls an own template what it is where an older entry kept its id only', () => {
+      expect(
+        auditDetail(
+          {
+            action: 'app.update',
+            details: {
+              fields: ['publication'],
+              publication: { ...publication, template: '7f3c-1' },
+            },
+          },
+          de,
+        ),
+      ).toContain('Vorlage: eigene Vorlage');
+    });
+
+    it('leaves an app change without a publication as it was', () => {
+      expect(auditDetail({ action: 'app.create', details: { type: 'external' } }, de)).toBe(
+        'Typ: Neuer Tab',
+      );
+      expect(
+        auditDetail({ action: 'app.update', details: { fields: ['name'], publication: 7 } }, de),
+      ).toBe('Geändert: Name');
+    });
+  });
+
   it('stay silent when there is nothing to add', () => {
     expect(auditDetail({ action: 'user.delete', details: {} }, de)).toBe('');
     expect(auditDetail({ action: 'unknown.action', details: { a: 1 } }, de)).toBe('');

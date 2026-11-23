@@ -68,6 +68,8 @@ src/
     accent.ts           one accent colour → the accent tokens of a theme, kept readable
     imageFile.ts        an image picked from the device (app icon, logo) as a data URL
     audit.ts            audit entries as readable text
+    proxy.ts            publishing through the proxy: names, addresses and options as the
+                        API checks them (pure); proxyText.ts names templates and settings
     embedDetail.ts      what the embedding check found, as text (codes of the API)
     appIcons.ts         the curated Lucide icons for apps
     stores/             session (me, session watch), workspace (apps, frames), toasts, media
@@ -80,6 +82,8 @@ src/
                         AdminHelper)
       layout/           Shell, Dock, SubNav
       app/              AppStage (app view, kept-alive frames), AppFrame, AppIcon
+      proxy/            ProxyOptionsEditor (the proxy settings of a publication or template),
+                        MiddlewaresField (own Traefik middlewares as JSON)
       brand/            Mark (the product mark, currentColor)
   pages/                Login, Dashboard, Profile, Settings, NotFound, admin/*, system/*
   modals/               create/edit dialogs
@@ -179,7 +183,12 @@ The rules of the API are mirrored where the message has to say what is wrong (na
 people in `personNameProblem()`, the name of the installation in `instanceNameProblem()`);
 what the server refuses about a field (`details.fields` of a 422) is shown at that field
 through `refusedFields()`. An input that has reached its `maxlength` says so (`field-limit`),
-because the browser cuts what is typed or pasted without a word.
+because the browser cuts what is typed or pasted without a word. After a save that was
+refused, the first field marked invalid gets the focus and is brought into view as a whole,
+the control with the message under it (`focusFirstInvalid()`): how far focusing alone
+scrolls is the browser's choice, and Safari stops at the first line of a tall field. Where
+more than a `FormField` belongs together (a setting with its note, a field with the
+server's message under it), the block is marked `data-field`.
 
 **Keyboard focus after something went away** (`lib/utils/focus.ts`). When the element that
 had the focus is removed, the browser leaves the focus on `<body>`. `restoreFocus()` puts it
@@ -317,6 +326,44 @@ switch of the organization, a lock that is set or lifted, a saved setting.
   and "App neu laden" and "In neuem Tab öffnen" are in the user menu of the dock while a
   framed app is on screen. Reload is a counter per app in the workspace store
   (`reloadFrame()`), so both places create the frame anew the same way.
+
+**Publishing apps through the proxy** (`lib/proxy.ts`, `AppModal.svelte`,
+`TenantProxyModal.svelte`, `pages/system/ProxyTemplates.svelte`). The rules for names,
+internal addresses, releases and options are the API's (`backend/velydock/services/proxy.py`);
+`lib/proxy.ts` mirrors them so that a form can say at once, at the right field, what is wrong.
+The server stays the authority, and what it refuses is shown at the field it is about.
+
+- _What can be published_ comes from `GET /api/v1/admin/proxy`, which the app dialog asks
+  each time it opens (releases and templates may have changed meanwhile). Without the answer,
+  or with `enabled: false`, the dialog is the one it was before; an app that is published
+  already still shows its publication, so that it can be seen and ended.
+- _The address of a published app_ is the public one and is the proxy's to set: the form
+  neither compares nor sends `url` while the app is published. Ending the publication sends
+  `publication: null` together with the address the app has from then on.
+- _A publication is sent as a whole, and only when something about it was changed_, so that a
+  rename does not make the server check the internal address against the releases again.
+- _Options_ (`ProxyOptionsEditor.svelte`). `options` holds only what deviates from the
+  template. Each control shows what applies and says what the template gives; a value set
+  back to that is no deviation any more and is not sent. What has no effect for the
+  publication is neither shown nor sent (removing the name from the path by sub-domain, the
+  certificate check for an `http://` target, sign-in by header for a public app). "Zertifikat
+  des Ziels nicht prüfen" is the manual's wording: the switch is on when the option
+  `verify_upstream_tls` is `false`.
+- _Own middlewares_ (`MiddlewaresField.svelte`) are a system administrator's: in a template,
+  and on a single published app, where they add to those of its template. The field checks
+  the JSON, the names and that each name holds exactly one middleware; which middlewares and
+  fields exist is the server's knowledge, and its message is shown under the field as it
+  came. In the app dialog the field is there for the account of a system administrator
+  (`me.user.is_system_admin`, which is what the server asks). From such an account the
+  publication carries what the field holds, also when something else about it was changed:
+  for a system administrator the server takes the options as they are sent, so a key left
+  out takes the middlewares away, which is how an emptied field removes them. From
+  everybody else the key is never sent, and the server keeps what is stored; they get a
+  notice that names the middlewares.
+- _The system pages_ ask `GET /api/v1/system/proxy` whether publishing is set up (and the
+  templates page for the defaults), which needs no organization. Only if that request fails
+  do they offer their controls without knowing, with the defaults mirrored in
+  `lib/proxy.ts`.
 
 **Translations.** Every key is one line with both languages:
 `'action.save': ['Speichern', 'Save']`. Unit tests check that every key used in the code
@@ -456,3 +503,44 @@ The link for setting the password by e-mail in "Benutzer anlegen" is only enable
 `GET /api/v1/admin/capabilities` answers `email_invitations: true`. An empty list shows no
 pagination. A user dialog in which nothing can be changed has "Schließen" instead of
 "Abbrechen" and "Speichern".
+
+### Publishing through the proxy
+
+| Hook                                                                       | What                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app-publish-toggle`                                                       | switch "Über den Proxy veröffentlichen" in the app dialog (`role="switch"`, `aria-checked`); only for embedded apps and apps in a new tab, and only once `GET /api/v1/admin/proxy` said `enabled`                                                                                                                                                         |
+| `app-publish-target`                                                       | text field "Interne Adresse"                                                                                                                                                                                                                                                                                                                              |
+| `app-publish-targets`                                                      | what was released for the organization, one `<li>` per value; with nothing released it holds the notice "Noch nichts freigegeben", there are no further fields and "App anlegen"/"Speichern" is disabled                                                                                                                                                  |
+| `app-publish-mode`                                                         | radio group "Adresse", `data-value`; inputs `value="path"`, `value="subdomain"` (only the latter where path addresses are not allowed)                                                                                                                                                                                                                    |
+| `app-publish-mode-refused`                                                 | note when the stored publication has a path address that is no longer allowed                                                                                                                                                                                                                                                                             |
+| `app-publish-name`                                                         | text field "Name in der Adresse"; follows the name of the app until it is edited by hand                                                                                                                                                                                                                                                                  |
+| `app-publish-preview`                                                      | `<output>` with the public address as it will be                                                                                                                                                                                                                                                                                                          |
+| `app-publish-access`                                                       | radio group "Zugriff", `data-value`; inputs `value="protected"`, `value="public"`                                                                                                                                                                                                                                                                         |
+| `app-publish-public`                                                       | the warning shown while "Öffentlich" is chosen                                                                                                                                                                                                                                                                                                            |
+| `app-publish-template`                                                     | `<select>` "Vorlage"; the option values are the template ids                                                                                                                                                                                                                                                                                              |
+| `app-publish-options`                                                      | `<details>` "Einstellungen anpassen", closed unless the publication deviates from its template; click its `<summary>`                                                                                                                                                                                                                                     |
+| `app-publish-option-<key>`                                                 | one control per option. Switches (`role="switch"`): `strip_prefix`, `allow_embedding`, `verify_upstream_tls` (on = do **not** verify), `identity_headers`, `pass_host_header`, `rate_limit`; text areas ("Name: Wert" per line): `request_headers`, `response_headers`; text fields, only while the limit is on: `rate_limit-average`, `rate_limit-burst` |
+| `app-publish-middlewares`                                                  | text area "Eigene Traefik-Middlewares" (JSON) among the settings, for system administrators only; the server's message for middlewares it does not accept is `app-publish-middlewares-refused`                                                                                                                                                            |
+| `app-publish-custom`                                                       | for everybody else: notice that a system administrator added own middlewares to this publication, with their names                                                                                                                                                                                                                                        |
+| `app-publish-ended`                                                        | note above the address field once the switch of a published app was turned off                                                                                                                                                                                                                                                                            |
+| `app-publish-unavailable`                                                  | notice in the dialog of a published app where publishing is no longer set up                                                                                                                                                                                                                                                                              |
+| `app-published`                                                            | on `/admin/apps`, in the row of a published app: the block with its name, address and the mark "Veröffentlicht · geschützt/öffentlich"; `data-url` is the public address                                                                                                                                                                                  |
+| `app-publication-problem`                                                  | inside it, when the proxy does not serve the app: `data-problem` is the code of the API, the text says what is wrong and who can fix it                                                                                                                                                                                                                   |
+| `tenant-proxy`                                                             | on `/system/tenants`, button in each row: opens the dialog "Proxy-Freigaben für …" (also in the row menu: `tenant-proxy-item`)                                                                                                                                                                                                                            |
+| `proxy-target`                                                             | each release in that dialog, `data-value`                                                                                                                                                                                                                                                                                                                 |
+| `proxy-target-value`, `proxy-target-note`, `proxy-target-add`              | the form for a new release (Enter in a field releases as well)                                                                                                                                                                                                                                                                                            |
+| `proxy-target-remove`                                                      | button of a release; asks ("Freigabe zurückziehen") before it withdraws                                                                                                                                                                                                                                                                                   |
+| `proxy-targets-empty`                                                      | "Noch nichts freigegeben."                                                                                                                                                                                                                                                                                                                                |
+| `proxy-path-allowed`                                                       | switch "Pfad-Adressen erlauben"; stored at once. Switching it off asks first ("Pfad-Adressen abschalten", confirm "Abschalten")                                                                                                                                                                                                                           |
+| `proxy-disabled`                                                           | notice instead of the controls (releases dialog) or above the list (templates page) when publishing is not set up                                                                                                                                                                                                                                         |
+| `proxy-template`                                                           | each row on `/system/proxy-templates`, `data-id`, `data-builtin="true\|false"`                                                                                                                                                                                                                                                                            |
+| `proxy-template-new`, `proxy-template-edit`, `proxy-template-delete`       | "Vorlage anlegen"; edit and delete of an own template (built-in rows have no buttons). Deleting asks ("Vorlage löschen")                                                                                                                                                                                                                                  |
+| `proxy-template-name`, `proxy-template-description`, `proxy-template-save` | the dialog of a template                                                                                                                                                                                                                                                                                                                                  |
+| `proxy-template-option-<key>`                                              | the same controls as `app-publish-option-<key>`, all of them                                                                                                                                                                                                                                                                                              |
+| `proxy-template-custom`                                                    | text area "Eigene Traefik-Middlewares" (JSON)                                                                                                                                                                                                                                                                                                             |
+| `proxy-template-refused`                                                   | the server's message for middlewares it does not accept, under that field                                                                                                                                                                                                                                                                                 |
+| `proxy-template-in-use`                                                    | notice on the page (`role="alert"`) after a template could not be deleted because published apps use it                                                                                                                                                                                                                                                   |
+
+What the server refuses about a publication stands at the field it is about (the field is
+`aria-invalid`, the message is in its `.ui-field`), for the kind of address, the settings and
+the switch as a `role="alert"` next to them; never in a toast.

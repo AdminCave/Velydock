@@ -191,6 +191,26 @@ export interface paths {
     patch: operations['update_group_api_v1_admin_groups__group_id__patch'];
     trace?: never;
   };
+  '/api/v1/admin/proxy': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Proxy Info
+     * @description What this organization can publish through the proxy: addresses, released targets, templates.
+     */
+    get: operations['proxy_info_api_v1_admin_proxy_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/tenant': {
     parameters: {
       query?: never;
@@ -394,6 +414,62 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/system/proxy': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Proxy Info
+     * @description Whether publishing through the proxy is set up, its addresses, templates and defaults.
+     */
+    get: operations['proxy_info_api_v1_system_proxy_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/system/proxy-templates': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Proxy Templates */
+    get: operations['list_proxy_templates_api_v1_system_proxy_templates_get'];
+    put?: never;
+    /** Create Proxy Template */
+    post: operations['create_proxy_template_api_v1_system_proxy_templates_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/system/proxy-templates/{template_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Delete Proxy Template */
+    delete: operations['delete_proxy_template_api_v1_system_proxy_templates__template_id__delete'];
+    options?: never;
+    head?: never;
+    /** Update Proxy Template */
+    patch: operations['update_proxy_template_api_v1_system_proxy_templates__template_id__patch'];
+    trace?: never;
+  };
   '/api/v1/system/settings': {
     parameters: {
       query?: never;
@@ -479,6 +555,44 @@ export interface paths {
     /** Add Member */
     post: operations['add_member_api_v1_system_tenants__tenant_id__members_post'];
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/system/tenants/{tenant_id}/proxy-targets': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Proxy Targets
+     * @description The internal addresses an organization may publish apps from.
+     */
+    get: operations['list_proxy_targets_api_v1_system_tenants__tenant_id__proxy_targets_get'];
+    put?: never;
+    /** Add Proxy Target */
+    post: operations['add_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/system/tenants/{tenant_id}/proxy-targets/{target_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Remove Proxy Target */
+    delete: operations['remove_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets__target_id__delete'];
     options?: never;
     head?: never;
     patch?: never;
@@ -638,6 +752,7 @@ export interface components {
       icon?: components['schemas']['IconIn'] | null;
       /** Name */
       name: string;
+      publication?: components['schemas']['PublicationIn'] | null;
       type: components['schemas']['AppType'];
       /** Url */
       url?: string | null;
@@ -693,6 +808,7 @@ export interface components {
       id: string;
       /** Name */
       name: string;
+      publication?: components['schemas']['PublicationOut'] | null;
       /** Sort Order */
       sort_order: number;
       type: components['schemas']['AppType'];
@@ -743,6 +859,7 @@ export interface components {
       icon?: components['schemas']['IconIn'] | null;
       /** Name */
       name?: string | null;
+      publication?: components['schemas']['PublicationIn'] | null;
       type?: components['schemas']['AppType'] | null;
       /** Url */
       url?: string | null;
@@ -1041,6 +1158,95 @@ export interface components {
       /** Last Name */
       last_name: string;
     };
+    /**
+     * ProxyInfo
+     * @description What an organization's administrator needs to publish an app.
+     */
+    ProxyInfo: {
+      /** Defaults */
+      defaults?: {
+        [key: string]: unknown;
+      };
+      /** Enabled */
+      enabled: boolean;
+      /**
+       * Path Allowed
+       * @default true
+       */
+      path_allowed: boolean;
+      /** Path Base */
+      path_base?: string | null;
+      /** Subdomain Scheme */
+      subdomain_scheme?: string | null;
+      /** Subdomain Suffix */
+      subdomain_suffix?: string | null;
+      /** Targets */
+      targets?: string[];
+      /** Templates */
+      templates?: components['schemas']['ProxyTemplateOut'][];
+    };
+    /** ProxyTargetIn */
+    ProxyTargetIn: {
+      /**
+       * Note
+       * @default
+       */
+      note: string;
+      /** Value */
+      value: string;
+    };
+    /** ProxyTargetOut */
+    ProxyTargetOut: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Note */
+      note: string;
+      /** Value */
+      value: string;
+    };
+    /** ProxyTemplateIn */
+    ProxyTemplateIn: {
+      /**
+       * Description
+       * @default
+       */
+      description: string;
+      /** Name */
+      name: string;
+      /** Options */
+      options?: {
+        [key: string]: unknown;
+      };
+    };
+    /** ProxyTemplateOut */
+    ProxyTemplateOut: {
+      /** Builtin */
+      builtin: boolean;
+      /** Description */
+      description: string;
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Options */
+      options: {
+        [key: string]: unknown;
+      };
+    };
+    /** ProxyTemplateUpdate */
+    ProxyTemplateUpdate: {
+      /** Description */
+      description?: string | null;
+      /** Name */
+      name?: string | null;
+      /** Options */
+      options?: {
+        [key: string]: unknown;
+      } | null;
+    };
     /** PublicInfo */
     PublicInfo: {
       /**
@@ -1053,6 +1259,59 @@ export interface components {
       instance_name: string;
       /** Version */
       version: string;
+    };
+    /**
+     * PublicationAccess
+     * @enum {string}
+     */
+    PublicationAccess: 'protected' | 'public';
+    /**
+     * PublicationIn
+     * @description Publish the app through the bundled reverse proxy: where from, and under which address.
+     */
+    PublicationIn: {
+      /** @default protected */
+      access: components['schemas']['PublicationAccess'];
+      /** @default path */
+      mode: components['schemas']['PublicationMode'];
+      /** Name */
+      name: string;
+      /** Options */
+      options?: {
+        [key: string]: unknown;
+      };
+      /** Target Url */
+      target_url: string;
+      /**
+       * Template
+       * @default builtin:standard
+       */
+      template: string;
+    };
+    /**
+     * PublicationMode
+     * @description How a published app is addressed below the apps host.
+     * @enum {string}
+     */
+    PublicationMode: 'path' | 'subdomain';
+    /** PublicationOut */
+    PublicationOut: {
+      access: components['schemas']['PublicationAccess'];
+      mode: components['schemas']['PublicationMode'];
+      /** Name */
+      name: string;
+      /** Options */
+      options: {
+        [key: string]: unknown;
+      };
+      /** Problem */
+      problem?: string | null;
+      /** Public Url */
+      public_url: string;
+      /** Target Url */
+      target_url: string;
+      /** Template */
+      template: string;
     };
     /**
      * Role
@@ -1223,6 +1482,11 @@ export interface components {
        * @default false
        */
       protected: boolean;
+      /**
+       * Proxy Path Allowed
+       * @default true
+       */
+      proxy_path_allowed: boolean;
       /** Slug */
       slug: string;
     };
@@ -1291,6 +1555,8 @@ export interface components {
       active?: boolean | null;
       /** Name */
       name?: string | null;
+      /** Proxy Path Allowed */
+      proxy_path_allowed?: boolean | null;
     };
     /**
      * Theme
@@ -1924,6 +2190,26 @@ export interface operations {
       };
     };
   };
+  proxy_info_api_v1_admin_proxy_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyInfo'];
+        };
+      };
+    };
+  };
   get_tenant_settings_api_v1_admin_tenant_get: {
     parameters: {
       query?: never;
@@ -2374,6 +2660,143 @@ export interface operations {
       };
     };
   };
+  proxy_info_api_v1_system_proxy_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyInfo'];
+        };
+      };
+    };
+  };
+  list_proxy_templates_api_v1_system_proxy_templates_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyTemplateOut'][];
+        };
+      };
+    };
+  };
+  create_proxy_template_api_v1_system_proxy_templates_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProxyTemplateIn'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyTemplateOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  delete_proxy_template_api_v1_system_proxy_templates__template_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        template_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_proxy_template_api_v1_system_proxy_templates__template_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        template_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProxyTemplateUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyTemplateOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   get_system_settings_api_v1_system_settings_get: {
     parameters: {
       query?: never;
@@ -2571,6 +2994,102 @@ export interface operations {
         content: {
           'application/json': components['schemas']['SystemUserOut'];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_proxy_targets_api_v1_system_tenants__tenant_id__proxy_targets_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        tenant_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyTargetOut'][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  add_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        tenant_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProxyTargetIn'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProxyTargetOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  remove_proxy_target_api_v1_system_tenants__tenant_id__proxy_targets__target_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        tenant_id: string;
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Validation Error */
       422: {

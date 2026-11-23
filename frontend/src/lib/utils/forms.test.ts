@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '$lib/api/client';
-import { focusOnNewErrors, formChanged, refusedFields } from './forms';
+import { focusFirstInvalid, focusOnNewErrors, formChanged, refusedFields } from './forms';
 import { rovingIndex } from './roving';
 
 describe('formChanged', () => {
@@ -89,6 +89,64 @@ describe('refusedFields', () => {
       refusedFields(new ApiError(409, 'conflict', 'conflict', {}), { first_name: () => 'x' }),
     ).toEqual({});
     expect(refusedFields(new Error('offline'), { first_name: () => 'x' })).toEqual({});
+  });
+});
+
+describe('focusFirstInvalid', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  // jsdom has no layout and no scrollIntoView: what is asked to come into view is recorded.
+  function recordReveals(): Element[] {
+    const revealed: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element, options?: unknown) {
+      expect(options).toEqual({ block: 'nearest' });
+      revealed.push(this);
+    };
+    return revealed;
+  }
+
+  it('brings the whole field into view, the control with the message under it', async () => {
+    document.body.innerHTML =
+      '<form id="f"><div class="ui-field"><textarea aria-invalid="true"></textarea><span class="msg error">kaputt</span></div></form>';
+    const revealed = recordReveals();
+    await focusFirstInvalid('f');
+    expect(document.activeElement).toBe(document.querySelector('textarea'));
+    expect(revealed).toEqual([document.querySelector('.ui-field')]);
+  });
+
+  it('takes what is marked as belonging together, also around a FormField, else the control itself', async () => {
+    document.body.innerHTML =
+      '<form id="f"><div data-field><input aria-invalid="true" /><p role="alert">zu groß</p></div></form>';
+    let revealed = recordReveals();
+    await focusFirstInvalid('f');
+    expect(revealed).toEqual([document.querySelector('[data-field]')]);
+
+    // More than the field: what the server said stands under it.
+    document.body.innerHTML =
+      '<form id="f"><div data-field><div class="ui-field"><textarea aria-invalid="true"></textarea></div><p>server</p></div></form>';
+    revealed = recordReveals();
+    await focusFirstInvalid('f');
+    expect(revealed).toEqual([document.querySelector('[data-field]')]);
+
+    document.body.innerHTML = '<form id="f"><input aria-invalid="true" /></form>';
+    revealed = recordReveals();
+    await focusFirstInvalid('f');
+    expect(revealed).toEqual([document.querySelector('input')]);
+  });
+
+  it('does nothing without an invalid control, and does not need scrollIntoView to exist', async () => {
+    document.body.innerHTML = '<form id="f"><input /></form>';
+    const revealed = recordReveals();
+    await focusFirstInvalid('f');
+    expect(revealed).toEqual([]);
+    expect(document.activeElement).toBe(document.body);
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    document.body.innerHTML = '<form id="f"><input aria-invalid="true" /></form>';
+    await focusFirstInvalid('f');
+    expect(document.activeElement).toBe(document.querySelector('input'));
   });
 });
 

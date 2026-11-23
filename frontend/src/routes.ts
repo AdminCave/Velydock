@@ -15,6 +15,7 @@ import AdminGroups from './pages/admin/Groups.svelte';
 import AdminSettings from './pages/admin/TenantSettings.svelte';
 import AdminUsers from './pages/admin/Users.svelte';
 import SystemAudit from './pages/system/Audit.svelte';
+import SystemProxyTemplates from './pages/system/ProxyTemplates.svelte';
 import SystemSettings from './pages/system/Settings.svelte';
 import SystemTenants from './pages/system/Tenants.svelte';
 import SystemUsers from './pages/system/Users.svelte';
@@ -91,6 +92,13 @@ export const routes: RouteDef<PageComponent>[] = [
     component: SystemUsers,
     permission: 'system:admin',
     title: 'nav.system.users',
+  },
+  {
+    pattern: '/system/proxy-templates',
+    kind: 'page',
+    component: SystemProxyTemplates,
+    permission: 'system:admin',
+    title: 'nav.system.proxyTemplates',
   },
   {
     pattern: '/system/settings',

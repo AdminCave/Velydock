@@ -50,6 +50,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Plus from '@lucide/svelte/icons/plus';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Trash from '@lucide/svelte/icons/trash';
+  import TriangleAlert from '@lucide/svelte/icons/triangle-exclamation-point';
   import { tenantApi } from '$lib/api/client';
   import type { Group } from '$lib/api/types';
   import AppIcon from '$lib/components/app/AppIcon.svelte';
@@ -62,9 +63,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Pill from '$lib/components/ui/Pill.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import { embedDetail } from '$lib/embedDetail';
-  import { t } from '$lib/i18n';
+  import { hasMessage, t } from '$lib/i18n';
   import { hasPermission } from '$lib/nav';
-  import { permissions } from '$lib/stores/session';
+  import { me, permissions } from '$lib/stores/session';
   import { showError, showToast } from '$lib/stores/toasts';
   import { loadApps } from '$lib/stores/workspace';
   import { restoreFocus, rowIndex, rowMenuAt } from '$lib/utils/focus';
@@ -75,6 +76,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   const canReadGroups = $derived(hasPermission($permissions, 'groups:read'));
   const canReadUsers = $derived(hasPermission($permissions, 'users:read'));
+  // Own middlewares on a single published app are a system administrator's to set (the
+  // server asks the account, not a permission).
+  const systemAdmin = $derived($me?.user.is_system_admin === true);
 
   let apps = $state<AdminApp[] | null>(null);
   let groups = $state<Group[]>([]);
@@ -108,6 +112,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
         .catch(showError);
     }
   });
+
+  // Why the proxy does not serve a published app: one sentence that says what is wrong
+  // and who can put it right. A reason this version does not know is shown by its code.
+  function problemText(code: string): string {
+    const key = `proxy.problem.${code}`;
+    return hasMessage(key) ? $t(key) : $t('proxy.problem.unknown', { code });
+  }
 
   function openCreate() {
     editing = null;
@@ -283,9 +294,42 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <span class="app-glyph">
                   <AppIcon name={app.icon_name} url={app.icon_url} size={20} />
                 </span>
-                <span class="app-text">
+                <!-- For a published app this block is the hook of the browser tests: name,
+                     public address and the mark, with the address as `data-url`. -->
+                <span
+                  class="app-text"
+                  data-testid={app.publication ? 'app-published' : undefined}
+                  data-url={app.publication?.public_url}
+                >
                   <span class="primary">{app.name}</span>
                   {#if app.url}<span class="secondary">{app.url}</span>{/if}
+                  {#if app.publication}
+                    {@const publication = app.publication}
+                    <!-- Published through the proxy: the address above is the public one. -->
+                    <span class="published">
+                      <Pill
+                        tone="accent"
+                        title={$t('proxy.published.title', {
+                          url: publication.public_url,
+                          target: publication.target_url,
+                        })}
+                      >
+                        {$t(`proxy.published.${publication.access}`)}
+                      </Pill>
+                      {#if publication.problem}
+                        <!-- The proxy does not serve it at the moment: what is wrong, and
+                             who can put it right. -->
+                        <span
+                          class="problem"
+                          data-testid="app-publication-problem"
+                          data-problem={publication.problem}
+                        >
+                          <TriangleAlert size={14} />
+                          {problemText(publication.problem)}
+                        </span>
+                      {/if}
+                    </span>
+                  {/if}
                 </span>
               </span>
             </td>
@@ -299,7 +343,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
               {/if}
             </td>
             <td>
-              {#if app.type !== 'embedded'}
+              {#if app.type !== 'embedded' || app.publication}
+                <!-- Behind the proxy the check cannot be made: it would be sent to
+                     Velydock's own sign-in. -->
                 <span class="subtle">–</span>
               {:else if app.embed_status === 'ok'}
                 <Pill tone="ok" title={embedDetail(app.embed_detail, $t)}>
@@ -325,7 +371,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <MenuItem icon={Pencil} onSelect={() => openEdit(app)}>
                   {$t('action.edit')}
                 </MenuItem>
-                {#if app.type === 'embedded'}
+                {#if app.type === 'embedded' && !app.publication}
                   <MenuItem icon={RefreshCw} onSelect={() => void recheck(app)}>
                     {$t('apps.recheck')}
                   </MenuItem>
@@ -373,6 +419,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   app={editing}
   {groups}
   {canReadUsers}
+  {systemAdmin}
   onClose={() => (modalOpen = false)}
   {onSaved}
 />
@@ -410,5 +457,27 @@ SPDX-License-Identifier: GPL-3.0-or-later
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .published {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    margin-top: var(--space-1);
+  }
+  .problem {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+    max-width: 44ch;
+    color: var(--text);
+    font-size: var(--text-xs);
+    line-height: var(--lh-normal);
+  }
+  /* The warning tone is for the sign; a sentence in it would be hard to read on white. */
+  .problem :global(svg) {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--warning);
   }
 </style>

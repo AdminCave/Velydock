@@ -60,6 +60,8 @@ export const common = {
   'field.custom_css': ['CSS', 'CSS'],
   'field.custom_js': ['JavaScript', 'JavaScript'],
   'field.custom_allow_network': ['Netzwerkzugriff', 'Network access'],
+  'field.publication': ['Veröffentlichung', 'Publication'],
+  'field.options': ['Einstellungen', 'Settings'],
   'field.slug': ['Kurzname', 'Short name'],
   'field.confirm_slug': ['Kurzname', 'Short name'],
   'field.instance_name': ['Name der Installation', 'Instance name'],

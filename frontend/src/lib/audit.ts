@@ -4,6 +4,7 @@
 
 import type { AuditEntry } from '$lib/api/types';
 import { hasMessage, type Translate } from '$lib/i18n';
+import { builtinKey } from '$lib/proxy';
 
 // Turns an audit entry into readable text: what happened, and the details that matter.
 
@@ -29,6 +30,11 @@ export const AUDIT_ACTIONS = [
   'tenant.delete',
   'tenant.settings',
   'system.settings',
+  'proxy.target.add',
+  'proxy.target.remove',
+  'proxy.template.create',
+  'proxy.template.update',
+  'proxy.template.delete',
 ] as const;
 
 export function auditActionLabel(action: string, t: Translate): string {
@@ -81,6 +87,44 @@ function settingChanges(d: Record<string, unknown>, t: Translate): string[] {
   return parts;
 }
 
+/**
+ * The template of a publication as the log can name it. A built-in one is named here, by
+ * its id. For one of the system administrator's own the entry keeps the name it had
+ * (`template_name`); entries from before that are only known to be such a template.
+ */
+function templateName(publication: Record<string, unknown>, t: Translate): string {
+  const id = String(publication.template);
+  const builtin = builtinKey(id);
+  if (builtin !== null) {
+    const key = `proxy.builtin.${builtin}.name`;
+    return hasMessage(key) ? t(key) : id;
+  }
+  const kept = publication.template_name;
+  return typeof kept === 'string' && kept ? kept : t('audit.publication.ownTemplate');
+}
+
+/**
+ * What an app change says about its publication through the proxy: under which name and
+ * kind of address, for whom, where it leads and with which template – or that it ended.
+ */
+function publicationParts(value: unknown, t: Translate): string[] {
+  if (value === 'removed') return [t('audit.detail.publicationEnded')];
+  if (typeof value !== 'object' || value === null) return [];
+  const p = value as Record<string, unknown>;
+  const parts = [
+    t('audit.detail.publication', {
+      name: String(p.name ?? ''),
+      mode: label('audit.publication', p.mode, t),
+      access: label('audit.publication', p.access, t),
+      target: String(p.target ?? ''),
+    }),
+  ];
+  if (typeof p.template === 'string' && p.template) {
+    parts.push(t('audit.detail.publicationTemplate', { template: templateName(p, t) }));
+  }
+  return parts;
+}
+
 /** The noteworthy details of an entry as one short line; empty if there is nothing to add. */
 export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Translate): string {
   const d = entry.details ?? {};
@@ -120,8 +164,20 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
       break;
     case 'app.create':
       if (d.type) parts.push(t('audit.detail.type', { type: label('app.type', d.type, t) }));
+      parts.push(...publicationParts(d.publication, t));
       break;
     case 'app.update': {
+      const names = fieldNames(d.fields, t);
+      if (names) parts.push(t('audit.detail.fields', { fields: names }));
+      parts.push(...publicationParts(d.publication, t));
+      break;
+    }
+    case 'proxy.target.add':
+    case 'proxy.target.remove':
+      // The organization is the entry's target; what was released for it is the detail.
+      if (typeof d.value === 'string') parts.push(t('audit.detail.release', { value: d.value }));
+      break;
+    case 'proxy.template.update': {
       const names = fieldNames(d.fields, t);
       if (names) parts.push(t('audit.detail.fields', { fields: names }));
       break;
@@ -136,6 +192,8 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
       if (typeof d.name === 'string') parts.push(t('audit.detail.renamedTo', { name: d.name }));
       if (d.active === true) parts.push(t('audit.detail.activated'));
       if (d.active === false) parts.push(t('audit.detail.deactivated'));
+      if (d.proxy_path_allowed === true) parts.push(t('audit.detail.pathAllowed'));
+      if (d.proxy_path_allowed === false) parts.push(t('audit.detail.pathForbidden'));
       break;
     case 'tenant.delete':
       if (typeof d.slug === 'string') parts.push(t('audit.detail.slug', { slug: d.slug }));

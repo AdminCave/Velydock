@@ -72,6 +72,7 @@ const organization = (ref: typeof ACME): Tenant => ({
   ...ref,
   active: true,
   protected: false,
+  proxy_path_allowed: true,
   default_nav_position: null,
   nav_position_locked: false,
   member_count: 3,

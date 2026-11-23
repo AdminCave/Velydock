@@ -45,6 +45,11 @@ export type AppUpdate = S['AppUpdate'];
 export type IconIn = S['IconIn'];
 export type EmbedCheck = S['EmbedCheckOut'];
 
+export type ProxyInfo = S['ProxyInfo'];
+export type ProxyTemplate = S['ProxyTemplateOut'];
+export type ProxyTarget = S['ProxyTargetOut'];
+export type Publication = S['PublicationOut'];
+
 export type TenantSettings = S['TenantSettingsOut'];
 export type TenantSettingsUpdate = S['TenantSettingsUpdate'];
 export type AuditEntry = S['AuditEntry'];

@@ -538,6 +538,7 @@ describe('SubNav', () => {
       'Protokoll',
       'Organisationen',
       'Alle Benutzer',
+      'Proxy-Vorlagen',
       'Systemeinstellungen',
       'Systemprotokoll',
     ]);
@@ -552,6 +553,7 @@ describe('SubNav', () => {
     expect(labels()).toEqual([
       'Organisationen',
       'Alle Benutzer',
+      'Proxy-Vorlagen',
       'Systemeinstellungen',
       'Systemprotokoll',
     ]);

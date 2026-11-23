@@ -79,6 +79,7 @@ export const shell = {
   'nav.system.caption': ['System', 'System'],
   'nav.system.tenants': ['Organisationen', 'Organizations'],
   'nav.system.users': ['Alle Benutzer', 'All users'],
+  'nav.system.proxyTemplates': ['Proxy-Vorlagen', 'Proxy templates'],
   'nav.system.settings': ['Systemeinstellungen', 'System settings'],
   'nav.system.audit': ['Systemprotokoll', 'System audit log'],
 } satisfies Messages;

@@ -6,8 +6,21 @@ import { tick } from 'svelte';
 import { fieldErrors } from '$lib/api/errors';
 
 /**
- * After a failed validation: move the focus to the first control marked invalid, which
- * also scrolls it into view. Without this a message further up in a long dialog would go
+ * Bring something into view inside whatever scrolls it (a dialog's body), moving as little
+ * as possible. Focusing a control scrolls to it as well, but how far is the browser's
+ * choice: Safari stops as soon as the first line of a tall field shows at the edge, with
+ * the message under it still out of sight.
+ */
+export function reveal(element: Element | null | undefined): void {
+  // Not every environment has it (jsdom).
+  element?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
+ * After a failed validation: move the focus to the first control marked invalid and bring
+ * its field into view, the control together with the message under it: what is marked
+ * `data-field` around it (where more than the field belongs together), else its
+ * `FormField`. Without this a message further up or down in a long dialog would go
  * unnoticed.
  */
 export async function focusFirstInvalid(formId: string): Promise<void> {
@@ -15,7 +28,9 @@ export async function focusFirstInvalid(formId: string): Promise<void> {
   const control = document
     .getElementById(formId)
     ?.querySelector<HTMLElement>('[aria-invalid="true"]');
-  control?.focus();
+  if (!control) return;
+  control.focus();
+  reveal(control.closest('[data-field]') ?? control.closest('.ui-field') ?? control);
 }
 
 /**

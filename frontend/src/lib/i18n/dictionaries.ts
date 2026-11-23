@@ -10,6 +10,7 @@ import { workspace } from './messages/workspace';
 import { account } from './messages/account';
 import { admin } from './messages/admin';
 import { system } from './messages/system';
+import { proxy } from './messages/proxy';
 
 export type Language = 'de' | 'en';
 
@@ -17,7 +18,17 @@ export type Language = 'de' | 'en';
 export type Messages = Record<string, readonly [de: string, en: string]>;
 export type Translations = Record<Language, Record<string, string>>;
 
-const sources: Messages[] = [common, errors, shell, workspace, account, admin, system, icons];
+const sources: Messages[] = [
+  common,
+  errors,
+  shell,
+  workspace,
+  account,
+  admin,
+  system,
+  icons,
+  proxy,
+];
 
 function build(index: 0 | 1): Record<string, string> {
   const out: Record<string, string> = {};
