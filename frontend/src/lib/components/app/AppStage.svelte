@@ -57,12 +57,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   // Kept-alive frames go on running while they are hidden, and a frame can focus itself:
   // the keys typed into Velydock or into the app on screen would then arrive in a hidden
-  // app. The guard takes the focus back each time (lib/frameFocus.ts). A frame that keeps
-  // doing it is unloaded, and the user is told which app that was and why.
+  // app. The guard takes the focus back (lib/frameFocus.ts) and has a frame unloaded that
+  // took it while it was not on screen; the user is told which app that was and why.
   const framesAlive = $derived($frames.length > 0);
   $effect(() => {
     if (!framesAlive) return;
-    return untrack(() => startFrameFocusGuard({ onRepeated: closeForFocus }));
+    return untrack(() => startFrameFocusGuard({ onUnload: closeForFocus }));
   });
 
   function closeForFocus(frame: HTMLIFrameElement) {

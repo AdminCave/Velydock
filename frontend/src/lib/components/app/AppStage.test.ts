@@ -184,20 +184,16 @@ describe('an app that takes the keyboard focus although it is not its turn', () 
     return control;
   }
 
-  it('gets the focus taken back while hidden, and is unloaded when it does not stop', async () => {
+  it('is unloaded the first time it takes the focus while hidden, and the user is told', async () => {
     const view = await setup('wiki');
     await view.rerender({ appId: 'a' }); // the user goes on to another app; Wiki stays alive
     await waitFor(() => expect(visible()).toEqual(['a']));
     const field = elsewhere('<input data-here />');
     const wiki = frameOf('wiki');
-    for (let n = 1; n < STEAL_LIMIT; n++) {
-      await takesFocus(wiki);
-      expect(document.activeElement).toBe(field); // what is typed arrives where it was meant
-    }
     expect(mounted()).toEqual(['wiki', 'a']);
-    expect(get(toasts)).toEqual([]);
     await takesFocus(wiki);
-    // No accident any more: the app is closed, and the user is told which one and why.
+    // The app is closed, and the user is told which one and why. What is typed arrives
+    // where it was meant.
     await waitFor(() => expect(mounted()).toEqual(['a']));
     expect(document.activeElement).toBe(field);
     expect(get(toasts).map((toast) => toast.message)).toEqual([

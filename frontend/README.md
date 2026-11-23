@@ -227,11 +227,16 @@ get wrong:
   `<iframe>`: focused as an element it stays `document.activeElement` when another frame takes
   the focus afterwards, and the page could not see that any more.
 
-A frame that takes the focus from the app on screen is unloaded at once: that take is only
-found by looking, so a key may already have gone the wrong way (it did in 8 of 12 runs with
-real typing in Chromium while three takes were allowed, and in none of 12 since). A frame that
-takes it from Velydock itself gets it taken back before a key arrives and is unloaded the third
-time within a minute. Unloading is `dropFrame()`; a toast
+A frame that takes the focus while it is not on screen is unloaded at once, whether it took
+it from the app on screen or from a page of Velydock: noticing comes after the fact, so a key
+may already have gone the wrong way, and every further take would be another such moment
+(with three takes allowed a key arrived in 8 of 12 runs with real typing in Chromium, and once
+in WebKit in a run of the browser suite on a busy machine; in none since). The order matters:
+first the focus goes back to where the user was, then the frame is unloaded. A frame that is
+removed while it holds the focus takes the focus of the whole page with it, and Chromium and
+WebKit ignore `focus()` right afterwards - everything typed next would be lost. Only the app
+on screen that pulls the focus out of a dialog of Velydock is given three takes within a
+minute. Unloading is `dropFrame()`; a toast
 that stays names the app and says why, and opening the app again loads it fresh. An open
 menu decides a moment after the window's `blur` whether the focus really left it, so the
 taking back does not close it.

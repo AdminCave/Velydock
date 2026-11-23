@@ -288,16 +288,18 @@ Was die anderen Browser gezeigt haben:
 |---|---|
 | WebKit schickt bei Anfragen aus dem abgeschotteten Frame einer eigenen App das Session-Cookie mit; Chromium und Firefox tun das nicht. Blinde Lesezugriffe der App wurden dadurch im Namen des Benutzers ausgeführt (die Antwort konnte sie nicht lesen). | Behoben: Anfragen, die der Browser als fremd kennzeichnet, weist der Server auch beim Lesen ab. `test_auth_flow.py::TestCsrf`, `04-custom-app-isolation` |
 | In Chromium bekam eine App im Hintergrund, die einer anderen App den Tastaturfokus wegnahm, in 8 von 12 Läufen einen Tastendruck mit, solange drei Versuche erlaubt waren. | Behoben: Sie wird beim ersten Mal sofort beendet; danach 0 Tastendrücke in 12 von 12 Läufen. `frameFocus.test.ts` |
+| Am 23.11.2026 bekam in WebKit eine App im Hintergrund einen Tastendruck mit, der auf einer **Velydock-Seite** getippt wurde – in einem Lauf der Suite, während die Maschine stark ausgelastet war. Dort waren noch drei Versuche erlaubt, weil frühere Messungen auf ruhiger Maschine keinen Tastendruck gezeigt hatten. | Behoben: Auch hier wird die App beim ersten Mal beendet. Danach je 20 automatisierte Läufe unter Last in WebKit und Chromium: kein Tastendruck kam an; in einem WebKit-Lauf ging einer verloren. Der Test lässt genau das zu – höchstens einen betroffenen Tastendruck –, weil sich der Augenblick zwischen Griff und Bemerken nicht schließen lässt ([sicherheit.md](sicherheit.md#eigene-apps)). `frameFocus.test.ts`, `04-custom-app-isolation` |
 | Firefox lässt eine nicht angezeigte App den Tastaturfokus gar nicht nehmen und wirft bei `window.open` in einer Sandbox eine Ausnahme, statt `null` zu liefern. | Kein Fehler; zwei Tests unterscheiden jetzt nach Browser. |
 | Im Firefox, den Playwright mitbringt (Version 157), nimmt ein Feld in einem Frame keinen Klick als Fokus an, sobald vorher etwas auf der Seite angeklickt wurde – auch auf einer Testseite ohne Velydock und ohne Playwrights Steuerung. Der installierte Firefox 153 ESR zeigt das nicht. | Kein Fehler von Velydock. Eingaben in App-Feldern lassen sich in diesem Firefox nicht testen; sie sind im installierten Firefox von Hand geprüft. Ein offizieller Firefox 157 war nicht zur Hand. |
 
-Ergebnis der Prüfung mit echten Eingaben (eine App im Hintergrund versucht mitzulesen):
+Ergebnis der Prüfung mit echten Eingaben (eine App im Hintergrund versucht mitzulesen), mit der
+Regel vom 23.11.2026 wiederholt in Chromium und WebKit:
 
 | Browser | getippt auf einer Velydock-Seite | getippt in einer anderen App |
 |---|---|---|
-| Chromium 156 | alles kommt an, App hört nichts, wird nach dem dritten Versuch beendet | App hört nichts und wird sofort beendet; die Eingabe bricht ab, ein Klick setzt sie fort |
-| WebKit 27 | wie Chromium | App hört nichts und wird sofort beendet; die Eingabe kommt vollständig an |
-| Firefox 153 ESR | alles kommt an; die App kommt gar nicht an den Fokus | ebenso |
+| Chromium 156 | alles kommt an, App hört nichts und wird beim ersten Griff beendet (8 von 8 Läufen) | App hört nichts und wird sofort beendet; die Eingabe bricht ab, ein Klick setzt sie fort |
+| WebKit 27 | wie Chromium (12 von 12 Läufen) | App hört nichts und wird sofort beendet; die Eingabe kommt vollständig an |
+| Firefox 153 ESR (22.11.) | alles kommt an; die App kommt gar nicht an den Fokus | ebenso |
 
 Nicht geprüft: Safari selbst (macOS, iOS), Edge, Firefox auf Windows oder macOS.
 

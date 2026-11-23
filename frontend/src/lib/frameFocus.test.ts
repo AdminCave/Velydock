@@ -10,6 +10,7 @@ import {
   WATCH_INTERVAL_MS,
   focusFrame,
   mayHoldFocus,
+  onScreen,
   startFrameFocusGuard,
 } from './frameFocus';
 
@@ -19,7 +20,7 @@ import {
 // document before) the window gets a `blur`.
 
 let stop: () => void = () => {};
-let onRepeated: ReturnType<typeof vi.fn<(frame: HTMLIFrameElement) => void>>;
+let onUnload: ReturnType<typeof vi.fn<(frame: HTMLIFrameElement) => void>>;
 let field: HTMLInputElement;
 let hidden: HTMLIFrameElement; // an app that was opened earlier, kept alive off screen
 let shown: HTMLIFrameElement; // the app on screen
@@ -62,9 +63,10 @@ beforeEach(() => {
   // Focusing a frame through its window puts the focus into it.
   toShown = vi.fn(() => shown.focus());
   Object.defineProperty(shown, 'contentWindow', { value: { focus: toShown } });
-  onRepeated = vi.fn<(frame: HTMLIFrameElement) => void>();
+  // What the page does when told (AppStage.svelte): the frame goes.
+  onUnload = vi.fn<(frame: HTMLIFrameElement) => void>((frame) => frame.remove());
   field.focus();
-  stop = startFrameFocusGuard({ onRepeated });
+  stop = startFrameFocusGuard({ onUnload });
   vi.advanceTimersByTime(0);
 });
 
@@ -84,18 +86,54 @@ describe('mayHoldFocus', () => {
     (document.querySelector('.stage') as HTMLElement).hidden = false;
     document.body.insertAdjacentHTML('beforeend', '<div role="dialog" aria-modal="true"></div>');
     expect(mayHoldFocus(shown)).toBe(false);
+    // Under a dialog it is still the app on screen - which decides how a take is answered.
+    expect(onScreen(shown)).toBe(true);
+    expect(onScreen(hidden)).toBe(false);
+    shown.remove();
+    expect(onScreen(shown)).toBe(false);
   });
 });
 
 describe('the focus guard', () => {
-  it('takes the focus back from a hidden frame and returns it to where the user was', () => {
+  it('takes the focus back from a hidden frame the first time, and has the frame unloaded', () => {
+    // Noticing comes after the fact: a key can arrive in the frame before this page gets
+    // to do anything, and every further take would be another such moment (one key did
+    // arrive, in a run of the browser suite on a busy machine, while three were allowed).
     takesFromPage(hidden);
     // Not from inside the event: the browser is still handing the focus to the frame
     // then, and focus() would only change what this document calls its active element.
     expect(active()).toBe(hidden);
+    expect(onUnload).not.toHaveBeenCalled();
     vi.advanceTimersByTime(0);
     expect(active()).toBe(field);
-    expect(onRepeated).not.toHaveBeenCalled();
+    expect(onUnload).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledWith(hidden);
+    vi.advanceTimersByTime(5000);
+    expect(onUnload).toHaveBeenCalledTimes(1);
+  });
+
+  it('has the focus back where the user was before the frame is unloaded', () => {
+    // A frame that is removed while it holds the focus takes the focus of the whole page
+    // with it: Chromium and WebKit ignore focus() right afterwards, and what the user
+    // types next is lost (seen in both, 28 to 43 of 48 keys).
+    const order: string[] = [];
+    field.addEventListener('focus', () => order.push('focus is back'));
+    onUnload.mockImplementation((frame) => {
+      order.push(
+        `unloaded while ${document.activeElement === field ? 'the field' : 'something else'} has the focus`,
+      );
+      frame.remove();
+    });
+    takesFromPage(hidden);
+    vi.advanceTimersByTime(0);
+    expect(order).toEqual(['focus is back', 'unloaded while the field has the focus']);
+  });
+
+  it('does nothing when the window loses the focus to something that is no app', () => {
+    window.dispatchEvent(new Event('blur')); // the user switches to another window
+    vi.advanceTimersByTime(IDLE_INTERVAL_MS);
+    expect(onUnload).not.toHaveBeenCalled();
+    expect(active()).toBe(field);
   });
 
   it('returns it to the element the user moved on to', () => {
@@ -120,7 +158,7 @@ describe('the focus guard', () => {
     vi.advanceTimersByTime(2 * 60_000);
     expect(active()).toBe(shown);
     expect(toShown).not.toHaveBeenCalled();
-    expect(onRepeated).not.toHaveBeenCalled();
+    expect(onUnload).not.toHaveBeenCalled();
   });
 
   it('finds a hidden frame that took the focus from the app on screen, which no event reports', () => {
@@ -139,20 +177,21 @@ describe('the focus guard', () => {
     // 8 of 12 runs with real typing while three takes were allowed). No second chance.
     userClicksInto(shown);
     takesFromFrame(hidden);
-    expect(onRepeated).not.toHaveBeenCalled();
+    expect(onUnload).not.toHaveBeenCalled();
     vi.advanceTimersByTime(WATCH_INTERVAL_MS);
-    expect(onRepeated).toHaveBeenCalledTimes(1);
-    expect(onRepeated).toHaveBeenCalledWith(hidden);
+    expect(onUnload).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledWith(hidden);
     expect(active()).toBe(shown);
     // The app on screen is not blamed for anything, and keeps its focus.
     vi.advanceTimersByTime(5000);
-    expect(onRepeated).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledTimes(1);
   });
 
   it('still looks now and then while no frame holds the focus, should an event be missed', () => {
     hidden.focus(); // no blur reaches the page
     vi.advanceTimersByTime(IDLE_INTERVAL_MS);
     expect(active()).toBe(field);
+    expect(onUnload).toHaveBeenCalledWith(hidden);
   });
 
   it('gives the focus to a frame through its window, never to the <iframe> element', () => {
@@ -172,50 +211,33 @@ describe('the focus guard', () => {
     expect(asElement).toHaveBeenCalledTimes(1);
   });
 
-  it(`has a frame unloaded that takes the focus ${STEAL_LIMIT} times within a minute`, () => {
-    expect(STEAL_LIMIT).toBe(3);
-    for (let n = 1; n < STEAL_LIMIT; n++) {
-      takesFromPage(hidden);
-      vi.advanceTimersByTime(150);
-      expect(active()).toBe(field);
-    }
-    expect(onRepeated).not.toHaveBeenCalled();
-    takesFromPage(hidden);
-    vi.advanceTimersByTime(0);
-    expect(active()).toBe(field); // taken back this time as well
-    expect(onRepeated).toHaveBeenCalledTimes(1);
-    expect(onRepeated).toHaveBeenCalledWith(hidden);
-    // A fresh start after that: the app may be opened again.
-    takesFromPage(hidden);
-    vi.advanceTimersByTime(0);
-    expect(onRepeated).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not hold an occasional grab of the focus against a frame for ever', () => {
-    expect(STEAL_WINDOW_MS).toBe(60_000);
-    for (let n = 0; n < 2 * STEAL_LIMIT; n++) {
-      takesFromPage(hidden);
-      vi.advanceTimersByTime(STEAL_WINDOW_MS / (STEAL_LIMIT - 1) + 1000);
-      expect(active()).toBe(field);
-    }
-    expect(onRepeated).not.toHaveBeenCalled();
-  });
-
-  it('counts each frame for itself', () => {
+  it('unloads each frame for what it did itself', () => {
     const slot = shown.closest('.slot') as HTMLElement;
     slot.hidden = true; // both apps are off screen now
     takesFromPage(hidden);
     vi.advanceTimersByTime(0);
+    expect(onUnload.mock.calls.map(([frame]) => frame.title)).toEqual(['Linkliste']);
+    expect(shown.isConnected).toBe(true);
     takesFromPage(shown);
     vi.advanceTimersByTime(0);
-    takesFromPage(hidden);
-    vi.advanceTimersByTime(0);
-    takesFromPage(shown);
-    vi.advanceTimersByTime(0);
-    expect(onRepeated).not.toHaveBeenCalled();
-    takesFromPage(shown);
-    vi.advanceTimersByTime(0);
-    expect(onRepeated.mock.calls.map(([frame]) => frame.title)).toEqual(['Webmail']);
+    expect(onUnload.mock.calls.map(([frame]) => frame.title)).toEqual(['Linkliste', 'Webmail']);
+    expect(active()).toBe(field);
+  });
+
+  it('does not hold an occasional grab out of a dialog against the app on screen for ever', () => {
+    expect(STEAL_WINDOW_MS).toBe(60_000);
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div role="dialog" aria-modal="true" tabindex="-1"><button id="no">Abbrechen</button></div>',
+    );
+    const no = document.getElementById('no') as HTMLButtonElement;
+    no.focus();
+    for (let n = 0; n < 2 * STEAL_LIMIT; n++) {
+      takesFromPage(shown);
+      vi.advanceTimersByTime(STEAL_WINDOW_MS / (STEAL_LIMIT - 1) + 1000);
+      expect(active()).toBe(no);
+    }
+    expect(onUnload).not.toHaveBeenCalled();
   });
 
   it('does not let the app on screen pull the focus out of a dialog', () => {
@@ -225,13 +247,31 @@ describe('the focus guard', () => {
     );
     const no = document.getElementById('no') as HTMLButtonElement;
     no.focus();
+    expect(STEAL_LIMIT).toBe(3);
     for (let n = 1; n <= STEAL_LIMIT; n++) {
+      // It is the app the user is looking at, and it may have a reason: it gets the focus
+      // taken back, and is only unloaded when it does not stop.
+      expect(onUnload).not.toHaveBeenCalled();
       takesFromPage(shown);
       vi.advanceTimersByTime(0);
       // Enter must reach the button of the dialog, not the app under it.
       expect(active()).toBe(no);
     }
-    expect(onRepeated).toHaveBeenCalledWith(shown);
+    expect(onUnload).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledWith(shown);
+  });
+
+  it('unloads a frame that is not on screen at once also while a dialog is open', () => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div role="dialog" aria-modal="true" tabindex="-1"><button id="no">Abbrechen</button></div>',
+    );
+    const no = document.getElementById('no') as HTMLButtonElement;
+    no.focus();
+    takesFromPage(hidden);
+    vi.advanceTimersByTime(0);
+    expect(onUnload).toHaveBeenCalledWith(hidden);
+    expect(active()).toBe(no);
   });
 
   it('returns the focus into the dialog even if the user was not on one of its controls', () => {
@@ -250,15 +290,14 @@ describe('the focus guard', () => {
     (document.querySelector('.stage') as HTMLElement).hidden = true;
     vi.advanceTimersByTime(WATCH_INTERVAL_MS);
     expect(active()).toBe(document.getElementById('main')); // out of the hidden app
-    // That was no grab. From now on the frame is counted like any other.
-    for (let n = 1; n < STEAL_LIMIT; n++) {
-      takesFromPage(shown);
-      vi.advanceTimersByTime(0);
-    }
-    expect(onRepeated).not.toHaveBeenCalled();
+    // That was no grab: the frame stays.
+    expect(onUnload).not.toHaveBeenCalled();
+    expect(shown.isConnected).toBe(true);
+    // From now on it is a frame off screen like any other.
     takesFromPage(shown);
     vi.advanceTimersByTime(0);
-    expect(onRepeated).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledWith(shown);
   });
 
   it('leaves other frames alone: only app frames are its business', () => {

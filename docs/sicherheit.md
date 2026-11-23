@@ -149,19 +149,30 @@ die Anmeldedaten zugreifen kann:
    nicht zu sehen sind. Eine solche App darf den Tastaturfokus nicht halten – sonst könnte sie
    mitlesen, was jemand auf einer Velydock-Seite oder in einer anderen App tippt. Das gilt für
    eigene wie für eingebettete Apps. Firefox lässt eine nicht angezeigte App den Fokus gar nicht
-   erst nehmen; Chromium und WebKit (Safari) lassen es zu, dort greift Velydock ein:
-   - Nimmt sie ihn einer **Velydock-Seite** weg, meldet der Browser das, und Velydock holt ihn
-     zurück, bevor eine Taste ankommt. Nach dem dritten Versuch innerhalb einer Minute wird die
-     App beendet.
+   erst nehmen; Chromium und WebKit (Safari) lassen es zu, dort greift Velydock ein: Es holt
+   den Fokus zurück und beendet die App – beim ersten Mal, einen zweiten Versuch gibt es nicht.
+   - Nimmt sie ihn einer **Velydock-Seite** weg, meldet der Browser das, und Velydock handelt
+     unmittelbar danach.
    - Nimmt sie ihn einer **anderen App** weg, meldet der Browser das nicht. Velydock schaut
-     deshalb alle 10 ms nach und beendet die App beim ersten Mal sofort. Die Eingabe in der
-     sichtbaren App bricht dabei ab; ein Klick in das Feld setzt sie fort.
+     deshalb alle 10 ms nach. Die Eingabe in der sichtbaren App bricht dabei ab; ein Klick in
+     das Feld setzt sie fort.
 
-   Gemessen mit echten Tastatureingaben in echten Browserfenstern (nicht automatisiert, siehe
-   [tests.md](tests.md)): In allen Läufen kam bei der App im Hintergrund kein Tastendruck an.
-   Ausgeschlossen ist ein einzelner Tastendruck im zweiten Fall nicht – er müsste in die
-   Hundertstelsekunde bis zum Bemerken fallen. (Solange drei Versuche erlaubt waren, geschah
-   das in 8 von 12 Läufen; deshalb gibt es dort keinen zweiten.)
+   Verhindern lässt sich der Griff nach dem Fokus in diesen Browsern nicht, nur bemerken – und
+   das Bemerken kommt einen Augenblick danach. Ein Tastendruck, der genau in diesen Augenblick
+   fällt, kann bei der App ankommen oder verloren gehen. Mehr als diesen einen Augenblick
+   bekommt eine App nicht: Danach gibt es sie nicht mehr, bis jemand sie neu öffnet.
+
+   Gemessen am 23.11.2026 ([tests.md](tests.md#andere-browser)): Mit echten Tastatureingaben in
+   echten Fenstern kam in keinem Lauf ein Tastendruck bei der App an (Chromium 8 von 8, WebKit
+   12 von 12), ebenso in je 20 automatisierten Läufen auf einer stark ausgelasteten Maschine; in
+   einem davon ging ein Tastendruck verloren, ohne mitgelesen zu werden. Solange erst der dritte
+   Versuch zum Beenden führte, kam in 8 von 12 Läufen ein Tastendruck an, wenn die App den
+   Fokus einer anderen App wegnahm, und einmal in einem Lauf der Browser-Tests unter Last, als
+   sie ihn einer Velydock-Seite wegnahm – deshalb die Regel ohne zweiten Versuch.
+
+   Eine Ausnahme gilt für die App, die gerade **zu sehen** ist: Holt sie sich den Fokus aus
+   einem Dialog von Velydock zurück, nimmt Velydock ihn ihr wieder weg und beendet sie erst
+   beim dritten Mal innerhalb einer Minute.
 
 Im Browser geprüft: kein Zugriff auf Cookies, `localStorage`, das Elternfenster oder die
 Velydock-API; keine Anfrage, kein Fenster und keine Umleitung zu einer fremden Adresse ohne

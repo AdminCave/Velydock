@@ -9,17 +9,22 @@
 // window. The browser then sends every key to the hidden app, and the field the user
 // clicked - in Velydock, or in the app that is on screen - stays empty: a hidden app can
 // read a password that is typed somewhere else. Neither `inert`, nor another way of
-// hiding, nor a permissions policy prevents this. What works is to notice it and to take
-// the focus back; a frame that does it again and again is unloaded - and one that takes it
-// from another app is unloaded at once, because that cannot be noticed in time (see below).
+// hiding, nor a permissions policy prevents this. What works is to notice it, to take the
+// focus back - and to unload a frame that is not on screen the first time it does it.
 //
-// Measured with real typing in real windows: Firefox does not let a frame that is not
-// rendered take the focus at all. Chromium and WebKit do. Taken from Velydock itself, the
-// focus is back before a key arrives (0 keys in every run). Taken from the app on screen,
-// one key reached the hidden app in 8 of 12 runs in Chromium while three takes were allowed.
+// Why at once: noticing comes after the fact. Between the moment a frame takes the focus
+// and the next thing this page gets to do, a key can arrive in the frame, and nothing can
+// be done about that key. Each further take would be another such moment. Measured:
+// Firefox does not let a frame that is not rendered take the focus at all; Chromium and
+// WebKit do. While frames were only unloaded the third time, a key reached a hidden app in
+// 8 of 12 runs with real typing when it took the focus from the app on screen (Chromium),
+// and in one run of the browser suite on a busy machine when it took it from a page of
+// Velydock (WebKit) - where earlier runs on a quiet machine had shown none.
 //
 // The rule: an app frame may hold the focus only while it is the one on screen and no
-// dialog of Velydock is open over it.
+// dialog of Velydock is open over it. A frame that takes it while it is not on screen is
+// unloaded; the app on screen that takes it out of a dialog gets it taken back, and is
+// unloaded if it keeps doing so.
 
 /** The frames this is about (AppFrame.svelte). */
 export const APP_FRAME = 'iframe[data-testid="app-frame"]';
@@ -32,17 +37,18 @@ export const APP_FRAME = 'iframe[data-testid="app-frame"]';
 export const WATCH_INTERVAL_MS = 10;
 /** How often otherwise: a safety net, should the browser not announce a change. */
 export const IDLE_INTERVAL_MS = 250;
-/** A frame that takes the focus this often … */
+/** The app on screen, taking the focus out of a dialog of Velydock this often … */
 export const STEAL_LIMIT = 3;
-/** … within this time does not do it by accident. */
+/** … within this time, does not do it by accident. */
 export const STEAL_WINDOW_MS = 60_000;
 
 export interface FrameFocusGuardOptions {
   /**
-   * A frame is to be unloaded: it took the focus STEAL_LIMIT times within STEAL_WINDOW_MS
-   * from Velydock itself, or once from the app on screen.
+   * A frame is to be unloaded: it took the focus while it was not on screen, or - as the
+   * app on screen - STEAL_LIMIT times within STEAL_WINDOW_MS out of a dialog of Velydock.
+   * The focus is back where the user was when this is called.
    */
-  onRepeated: (frame: HTMLIFrameElement) => void;
+  onUnload: (frame: HTMLIFrameElement) => void;
   /** The clock (for tests). */
   now?: () => number;
 }
@@ -67,11 +73,18 @@ export function focusFrame(frame: HTMLIFrameElement): void {
   frame.contentWindow?.focus();
 }
 
+/**
+ * Whether an app frame is the one on screen. The others sit in an element with the
+ * `hidden` attribute: the slot of a frame that is not the active one, or the whole stage
+ * while a page of Velydock is on screen.
+ */
+export function onScreen(frame: HTMLIFrameElement): boolean {
+  return frame.isConnected && frame.closest('[hidden]') === null;
+}
+
 /** Whether an app frame may hold the keyboard focus right now. */
 export function mayHoldFocus(frame: HTMLIFrameElement): boolean {
-  // Hidden frames sit in an element with the `hidden` attribute: the slot of a frame that
-  // is not the active one, or the whole stage while a page of Velydock is on screen.
-  return frame.isConnected && frame.closest('[hidden]') === null && openDialog() === null;
+  return onScreen(frame) && openDialog() === null;
 }
 
 /**
@@ -86,6 +99,10 @@ export function mayHoldFocus(frame: HTMLIFrameElement): boolean {
  * is in the middle of handing the focus to the frame then: focus() would change what
  * this document calls its active element and leave the keyboard with the frame. It is
  * moved right after the event.
+ *
+ * And a frame is only unloaded after the focus is back. Removed while it holds the
+ * focus, it takes the focus of the whole page with it: Chromium and WebKit then ignore
+ * focus() for the moment, and everything the user types next is lost.
  */
 export function startFrameFocusGuard(options: FrameFocusGuardOptions): () => void {
   const now = options.now ?? Date.now;
@@ -128,7 +145,7 @@ export function startFrameFocusGuard(options: FrameFocusGuardOptions): () => voi
       return;
     }
     steals.delete(id);
-    options.onRepeated(frame);
+    options.onUnload(frame);
   }
 
   function check(): void {
@@ -142,21 +159,23 @@ export function startFrameFocusGuard(options: FrameFocusGuardOptions): () => voi
       place = active;
       return;
     }
-    // A frame that is not on screen (or lies under a dialog) has the focus. If it had it
-    // from when it was on screen, the user went elsewhere without the focus following
-    // (the browser's Back, say): that is nothing the frame did.
+    // A frame that may not hold the focus has it. If it had it from when it was the app
+    // on screen, the user went elsewhere without the focus following (the browser's Back,
+    // say): that is nothing the frame did.
     const took = holder !== active;
-    // Taken from the app on screen, where the user is typing: no event announced it, so
-    // keys may already have arrived in the wrong app, and each further take would be
-    // another chance. There is no second one: the frame goes at once.
-    const fromAnotherApp = took && holder !== null;
     holder = null;
-    if (fromAnotherApp) {
-      steals.delete(active.dataset.appId ?? '');
-      options.onRepeated(active);
-    }
+    // First back to where the user was: this is what ends the frame's hold on the keyboard.
     giveBack(active);
-    if (took && !fromAnotherApp) count(active);
+    if (!took) return;
+    if (onScreen(active)) {
+      // The app the user is looking at, under a dialog of Velydock. It may have a reason;
+      // it goes if it does not stop.
+      count(active);
+    } else {
+      // Not on screen: no reason, and no second chance (see the top of this file).
+      steals.delete(active.dataset.appId ?? '');
+      options.onUnload(active);
+    }
   }
 
   // Looking is done from a task of its own (see above), at once after an event and
