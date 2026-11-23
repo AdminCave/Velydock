@@ -1,6 +1,16 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { expect, test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { APPS_HOST, APPS_URL, AUTH_URL, DOCK_URL } from '../support/stack';
 import { apiAs, contextAs, unique, world } from '../support/world';
+
+/**
+ * One valid value for every field of the Traefik middlewares a system administrator may put into
+ * a proxy template. The backend tests check that the list is complete; here the real Traefik reads it.
+ */
+const MIDDLEWARE_SAMPLES: Record<string, unknown>[] = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../backend/tests/data/traefik_middlewares.json', import.meta.url)), 'utf8'),
+).sets;
 
 /** What the demo app (traefik/whoami) echoes of the request it received. */
 const seen = (body: string, pattern: RegExp) =>
@@ -81,6 +91,8 @@ test.describe('Apps über den eingebauten Proxy veröffentlichen', () => {
     const own = cookies.filter((cookie) => cookie.name === `__Secure-velydock-app-${name}`);
     expect(own).toHaveLength(1);
     expect(own[0]).toMatchObject({ path: `/${name}/`, httpOnly: true, secure: true, sameSite: 'Lax' });
+    // What tied the sign-in to this browser has done its work and is gone.
+    expect(cookies.filter((cookie) => cookie.name.includes('velydock-state'))).toEqual([]);
     // Nobody can tell the app to be somebody else.
     const forged = await page.request.get(app.url, { headers: { 'X-Velydock-User': 'root', 'X-Velydock-Email': 'x@evil.example' } });
     expect(seen(await forged.text(), /^X-Velydock-(User|Email)/i).sort()).toEqual(['X-Velydock-Email: mia@velydock.test', 'X-Velydock-User: mia'].sort());
@@ -161,6 +173,133 @@ test.describe('Apps über den eingebauten Proxy veröffentlichen', () => {
     // Released again, it is back without anybody touching the app.
     releaseId = (await (await root.post(`/api/v1/system/tenants/${world().tenants.acme}/proxy-targets`, { data: { value: 'demo' } })).json()).id;
     await routed(anonymous, second.url, (status) => status === 200);
+    await anonymous.dispose();
+    await root.dispose();
+    await anna.dispose();
+  });
+
+  test('ein untergeschobener Anmelde-Link meldet niemanden unter fremdem Namen an', async ({ browser, playwright }) => {
+    const name = unique('heft').toLowerCase();
+    const anna = await apiAs('anna');
+    const app = await (
+      await anna.post('/api/v1/admin/apps', {
+        data: {
+          name: `Heft ${name}`,
+          type: 'external',
+          user_ids: [world().users.mia, world().users.ben],
+          publication: { name, mode: 'subdomain', target_url: 'http://demo', template: 'builtin:header-login' },
+        },
+      })
+    ).json();
+    const anonymous = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    await routed(anonymous, app.url, (status) => status === 302 || status === 401);
+    await anonymous.dispose();
+
+    // Ben may use the app. He begins a sign-in in his own browser and keeps the link that would
+    // complete it - to send it to somebody else ("look at this").
+    const ben = await apiAs('ben');
+    const toVelydock = await ben.get(app.url, { maxRedirects: 0, headers: { 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' } });
+    expect(toVelydock.status()).toBe(302);
+    const toApp = await ben.get(toVelydock.headers()['location']!, { maxRedirects: 0 });
+    expect(toApp.status()).toBe(302);
+    const link = toApp.headers()['location']!;
+    expect(link).toContain(`${app.url}__velydock/callback?t=`);
+
+    // Mia opens it. She ends up in the app - as herself, after a sign-in of her own.
+    const victim = await contextAs(browser, 'mia');
+    const page = await victim.newPage();
+    const response = await page.goto(link);
+    expect(response!.status()).toBe(200);
+    expect(page.url()).toBe(app.url);
+    expect(seen(await page.locator('body').innerText(), /^X-Velydock-User/i)).toEqual(['X-Velydock-User: mia']);
+    await victim.close();
+
+    // Ben's own browser can still finish what it began.
+    expect((await ben.get(link, { maxRedirects: 0 })).status()).toBe(302);
+    expect(seen(await (await ben.get(app.url)).text(), /^X-Velydock-User/i)).toEqual(['X-Velydock-User: ben']);
+    await ben.dispose();
+    await anna.dispose();
+  });
+
+  test('was Velydock an Traefik-Einstellungen annimmt, versteht Traefik – was es nicht verstünde, wird abgelehnt', async ({ playwright }) => {
+    const anna = await apiAs('anna');
+    const root = await apiAs('root');
+    const anonymous = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    const publish = (publication: Record<string, unknown>) =>
+      anna.post('/api/v1/admin/apps', {
+        data: { name: unique('Probe'), type: 'external', visible_to_all: true, publication: { mode: 'subdomain', target_url: 'http://demo', access: 'public', ...publication } },
+      });
+    const templates: string[] = [];
+    try {
+      // Traefik reads the routes of all organizations as one document; a value of the wrong kind
+      // makes it refuse the document and keep what it had. This one once got through.
+      const poison = await publish({ name: unique('gift').toLowerCase(), options: { rate_limit: { average: true, burst: true } } });
+      expect(poison.status()).toBe(422);
+      expect((await poison.json()).error.code).toBe('proxy_options_invalid');
+
+      // Every field Velydock accepts in a template, in use. How each route answers shows that
+      // its middlewares are in effect: a password is asked for, a host is refused, a limit not reached.
+      const answers: ((response: APIResponse) => boolean)[] = [
+        (response) => response.status() === 401 && /^Basic/.test(response.headers()['www-authenticate'] ?? ''),
+        (response) => response.status() !== 404,
+        (response) => response.status() === 200,
+      ];
+      expect(MIDDLEWARE_SAMPLES).toHaveLength(answers.length);
+      const urls: string[] = [];
+      for (const [index, sample] of MIDDLEWARE_SAMPLES.entries()) {
+        const made = await root.post('/api/v1/system/proxy-templates', { data: { name: unique(`Probe ${index}`), options: { custom_middlewares: sample } } });
+        expect(made.status(), await made.text()).toBe(201);
+        templates.push((await made.json()).id);
+        const created = await publish({ name: unique(`probe${index}`).toLowerCase(), template: templates[index] });
+        expect(created.status(), await created.text()).toBe(201);
+        urls.push((await created.json()).url);
+      }
+      // A route published after them exists only if Traefik understood the whole document.
+      const after = await (await publish({ name: unique('danach').toLowerCase() })).json();
+      await routed(anonymous, after.url, (status) => status === 200);
+      for (const [index, url] of urls.entries()) {
+        await expect
+          .poll(async () => answers[index]!(await anonymous.get(url, { maxRedirects: 0 })), { timeout: 20_000, intervals: [1000], message: `set ${index}` })
+          .toBe(true);
+      }
+    } finally {
+      for (const app of await (await anna.get('/api/v1/admin/apps')).json()) {
+        if (app.publication && templates.includes(app.publication.template)) await anna.delete(`/api/v1/admin/apps/${app.id}`);
+      }
+      for (const id of templates) await root.delete(`/api/v1/system/proxy-templates/${id}`);
+    }
+    await anonymous.dispose();
+    await root.dispose();
+    await anna.dispose();
+  });
+
+  test('schaltet der Systemadministrator Pfad-Adressen für eine Organisation ab, bleiben ihr Subdomains', async ({ playwright }) => {
+    const anna = await apiAs('anna');
+    const root = await apiAs('root');
+    const anonymous = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    const acme = `/api/v1/system/tenants/${world().tenants.acme}`;
+    const name = unique('pfad').toLowerCase();
+    const body = (publication: Record<string, unknown>) => ({ publication: { name, target_url: 'http://demo', access: 'public', ...publication } });
+    const app = await (await anna.post('/api/v1/admin/apps', { data: { name: `Pfad ${name}`, type: 'external', ...body({}) } })).json();
+    expect(app.url).toBe(`${APPS_URL}/${name}/`);
+    await routed(anonymous, app.url, (status) => status === 200);
+    try {
+      const off = await root.patch(acme, { data: { proxy_path_allowed: false } });
+      expect(off.status()).toBe(200);
+      expect((await off.json()).proxy_path_allowed).toBe(false);
+      // What is published by path goes off the proxy, and the app says why.
+      await routed(anonymous, app.url, (status) => status === 404);
+      expect((await (await anna.get(`/api/v1/admin/apps/${app.id}`)).json()).publication.problem).toBe('mode_not_allowed');
+      expect((await (await anna.get('/api/v1/admin/proxy')).json()).path_allowed).toBe(false);
+      const refused = await anna.post('/api/v1/admin/apps', { data: { name: unique('Nein'), type: 'external', publication: { name: unique('nein').toLowerCase(), target_url: 'http://demo' } } });
+      expect((await refused.json()).error.code).toBe('publication_mode_not_allowed');
+      // Under a sub-domain it has an origin of its own, and is back.
+      const moved = await anna.patch(`/api/v1/admin/apps/${app.id}`, { data: body({ mode: 'subdomain' }) });
+      expect(moved.status()).toBe(200);
+      await routed(anonymous, (await moved.json()).url, (status) => status === 200);
+    } finally {
+      expect((await root.patch(acme, { data: { proxy_path_allowed: true } })).status()).toBe(200);
+    }
     await anonymous.dispose();
     await root.dispose();
     await anna.dispose();

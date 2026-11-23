@@ -171,6 +171,21 @@ test.describe('Die Docker-Installation', () => {
     // Let the allowance recover before anything else talks to the API.
     await new Promise((resolve) => setTimeout(resolve, 4000));
     expect((await request.get('/api/health')).status()).toBe(200);
+
+    // Where browsers on their way to a published app arrive is behind the same limit: it answers
+    // without a sign-in, and every answer costs a look into the database.
+    const detour = '/proxy/login?p=00000000-0000-4000-8000-000000000000';
+    let refused = 0;
+    for (let round = 0; round < 12 && refused === 0; round++) {
+      const statuses = await Promise.all(
+        Array.from({ length: 300 }, () => request.get(detour, { maxRedirects: 0 }).then((response) => response.status())),
+      );
+      expect(statuses.filter((status) => status !== 404 && status !== 429)).toEqual([]);
+      refused += statuses.filter((status) => status === 429).length;
+    }
+    expect(refused, 'a burst at the detour is throttled').toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    expect((await request.get('/api/health')).status()).toBe(200);
   });
 
   // Also at the end: it uses up this address's allowance for signing in.
