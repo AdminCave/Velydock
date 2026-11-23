@@ -15,6 +15,7 @@ from velydock.idp.base import IdentityProvider
 from velydock.schemas import (
     AuditPage,
     MemberAdd,
+    ProxyInfo,
     ProxyTargetIn,
     ProxyTargetOut,
     ProxyTemplateIn,
@@ -150,6 +151,16 @@ async def system_audit(
 
 
 # -- publishing through the reverse proxy ----------------------------------------------------------
+
+
+@router.get("/proxy", response_model=ProxyInfo)
+async def proxy_info(
+    _: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> ProxyInfo:
+    """Whether publishing through the proxy is set up, its addresses, templates and defaults."""
+    return await proxy_service.system_info(db, settings)
 
 
 @router.get("/tenants/{tenant_id}/proxy-targets", response_model=list[ProxyTargetOut])

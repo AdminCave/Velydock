@@ -314,6 +314,33 @@ class TestOptions:
         with pytest.raises(ApiError):
             proxy.check_options(options, by_system_admin=True)
 
+    @pytest.mark.parametrize(
+        ("options", "named"),
+        [
+            ({"strip_prefix": "yes"}, "strip_prefix"),
+            ({"rate_limit": {"average": 0, "burst": 1}}, "rate_limit"),
+            ({"nonsense": True}, "nonsense"),
+            ({"custom_middlewares": {"Bad Name": {"compress": {}}}}, "'Bad Name'"),
+            ({"custom_middlewares": {"x": {"compress": {}, "retry": {}}}}, "exactly one"),
+            ({"custom_middlewares": {"x": {"forwardAuth": {}}}}, "'forwardAuth' is not available"),
+            (
+                {"custom_middlewares": {"x": {"rateLimit": {"avarage": 1}}}},
+                "x.rateLimit has no field 'avarage'",
+            ),
+            (
+                {"custom_middlewares": {"x": {"rateLimit": {"average": "1"}}}},
+                "x.rateLimit.average must be a number",
+            ),
+            ({"custom_middlewares": {f"m{n}": {"compress": {}} for n in range(11)}}, "At most ten"),
+        ],
+    )
+    def test_a_refusal_says_which_setting_it_is_about(self, options: dict[str, Any], named: str) -> None:
+        """The interface shows the message at the settings; "not valid" would leave people guessing."""
+        with pytest.raises(ApiError) as refused:
+            proxy.check_options(options, by_system_admin=True)
+        assert refused.value.code == "proxy_options_invalid"
+        assert named in refused.value.message
+
     def test_traefik_in_its_own_words_is_for_system_administrators_and_only_some_of_it(self) -> None:
         own = {"custom_middlewares": {"office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}}
         assert proxy.check_options(own, by_system_admin=True) == own
@@ -611,8 +638,16 @@ class TestSystemAdministration:
             added = await client.post(base, json={"value": "10.20.0.7/16", "note": "Serverraum"})
             assert added.status_code == 201 and added.json()["value"] == "10.20.0.0/16"
             assert (await client.post(base, json={"value": "10.20.0.0/16"})).status_code == 409
-            for bad in ("10.20.0.0/33", "http://10.20.0.7", "velydock", "localhost", "x.localhost"):
-                assert (await client.post(base, json={"value": bad})).status_code == 422, bad
+            for bad, code in (
+                ("10.20.0.0/33", "proxy_target_invalid"),
+                ("http://10.20.0.7", "proxy_target_invalid"),
+                # Well-formed, but a name of the installation itself: said as that.
+                ("velydock", "proxy_target_reserved"),
+                ("localhost", "proxy_target_reserved"),
+                ("x.localhost", "proxy_target_reserved"),
+            ):
+                refused = await client.post(base, json={"value": bad})
+                assert (refused.status_code, refused.json()["error"]["code"]) == (422, code), bad
             assert [t["value"] for t in (await client.get(base)).json()] == ["10.20.0.0/16"]
             other = f"/api/v1/system/tenants/{uuid.uuid4()}/proxy-targets"
             assert (await client.get(other)).status_code == 404
@@ -668,6 +703,10 @@ class TestSystemAdministration:
             offered = [t["id"] for t in (await client.get("/api/v1/admin/proxy")).json()["templates"]]
             assert template in offered
             app = (await publish(client, "wiki", template=template)).json()
+            # The log keeps the name of an own template: its id says nothing once it is gone.
+            entry = (await client.get("/api/v1/admin/audit")).json()["items"][0]
+            assert entry["details"]["publication"]["template"] == template
+            assert entry["details"]["publication"]["template_name"] == "Nur aus dem Büro"
         built = (await routes(world))["http"]
         key = f"vd-{uuid.UUID(app['id']).hex}"
         assert built["middlewares"][f"{key}-c-office"] == {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}
@@ -676,11 +715,94 @@ class TestSystemAdministration:
             # A template in use may be what keeps a publication closed: it cannot simply go.
             in_use = await client.delete(f"/api/v1/system/proxy-templates/{template}")
             assert (in_use.status_code, in_use.json()["error"]["code"]) == (409, "template_in_use")
+            assert in_use.json()["error"]["details"] == {"publications": ["wiki"]}
             changed = await client.patch(
                 f"/api/v1/system/proxy-templates/{template}", json={"options": {"allow_embedding": False}}
             )
             assert changed.status_code == 200
         assert f"{key}-c-office" not in (await routes(world))["http"].get("middlewares", {})
+
+    async def test_what_the_system_pages_need_to_know_needs_no_organization(
+        self, world: World, anna: User, root: User, settings: Settings
+    ) -> None:
+        async with await world.login(anna) as client:
+            assert (await client.get("/api/v1/system/proxy")).status_code == 403
+        async with await world.login(root) as client:
+            info = (await client.get("/api/v1/system/proxy")).json()
+        assert (info["enabled"], info["path_base"], info["subdomain_suffix"]) == (
+            True,
+            "https://apps.test/",
+            ".apps.test",
+        )
+        assert "builtin:standard" in [template["id"] for template in info["templates"]]
+        assert info["defaults"]["strip_prefix"] is True and info["targets"] == []
+        # Not set up: said as that, and nothing else.
+        off = World(
+            settings=settings, idp=world.idp, mini=world.mini, app=create_app(settings, idp=world.idp)
+        )
+        async with await off.login(root) as client:
+            assert (await client.get("/api/v1/system/proxy")).json()["enabled"] is False
+
+    async def test_what_a_system_administrator_set_on_one_app_the_organization_cannot_change_or_drop(
+        self, world: World, acme: Tenant, anna: User, root: User
+    ) -> None:
+        """An address list on a single publication, say. The organization's administrator may go on
+        managing the app - the restriction stays, whatever their request says about it."""
+        await release(acme, "10.20.0.0/16")
+        office = {"office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}
+        async with await world.login(root, acme) as client:
+            made = await publish(client, "wiki", mode="subdomain", options={"custom_middlewares": office})
+            assert made.status_code == 201, made.text
+            app = made.json()
+        key = f"vd-{uuid.UUID(app['id']).hex}"
+        address = f"/api/v1/admin/apps/{app['id']}"
+
+        async def restriction() -> Any:
+            return (await routes(world))["http"].get("middlewares", {}).get(f"{key}-c-office")
+
+        assert await restriction() == office["office"]
+        async with await world.login(anna) as client:
+            # Sent back as it was received (what the dialog does), with another change.
+            same = await client.patch(
+                address,
+                json={
+                    "publication": publication(
+                        "wiki",
+                        mode="subdomain",
+                        options={"custom_middlewares": office, "allow_embedding": True},
+                    )
+                },
+            )
+            assert same.status_code == 200, same.text
+            assert same.json()["publication"]["options"] == {
+                "allow_embedding": True,
+                "custom_middlewares": office,
+            }
+            assert await restriction() == office["office"]
+            # Left out: it stays all the same.
+            left_out = await client.patch(
+                address, json={"publication": publication("wiki", mode="subdomain", access="public")}
+            )
+            assert left_out.status_code == 200, left_out.text
+            assert left_out.json()["publication"]["options"] == {"custom_middlewares": office}
+            assert await restriction() == office["office"]
+            # Changed or emptied: refused, and nothing changes.
+            for attempt in ({}, {"office": {"ipAllowList": {"sourceRange": ["0.0.0.0/0"]}}}, None):
+                refused = await client.patch(
+                    address,
+                    json={
+                        "publication": publication(
+                            "wiki", mode="subdomain", options={"custom_middlewares": attempt}
+                        )
+                    },
+                )
+                assert refused.status_code in (403, 422), attempt
+            assert await restriction() == office["office"]
+        # The system administrator lifts it.
+        async with await world.login(root, acme) as client:
+            lifted = await client.patch(address, json={"publication": publication("wiki", mode="subdomain")})
+            assert lifted.status_code == 200 and lifted.json()["publication"]["options"] == {}
+        assert await restriction() is None
 
     async def test_own_middlewares_apply_in_the_order_of_their_names_after_the_sign_in_check(
         self, world: World, acme: Tenant, anna: User, root: User
@@ -702,6 +824,34 @@ class TestSystemAdministration:
         key = f"vd-{uuid.UUID(app['id']).hex}"
         chain = (await routes(world))["http"]["routers"][key]["middlewares"]
         assert chain == [f"{key}-auth", f"{key}-c-10-office", f"{key}-c-20-password", f"{key}-c-zz"]
+        # What a system administrator gives this one app joins those of the template, in the same
+        # order, and wins where both use a name.
+        extra = {
+            "15-limit": {"inFlightReq": {"amount": 5}},
+            "zz": {"compress": {"minResponseBodyBytes": 2048}},
+        }
+        async with await world.login(root, acme) as client:
+            changed = await client.patch(
+                f"/api/v1/admin/apps/{app['id']}",
+                json={
+                    "publication": publication(
+                        "wiki",
+                        mode="subdomain",
+                        template=made.json()["id"],
+                        options={"custom_middlewares": extra},
+                    )
+                },
+            )
+            assert changed.status_code == 200, changed.text
+        built = (await routes(world))["http"]
+        assert built["routers"][key]["middlewares"] == [
+            f"{key}-auth",
+            f"{key}-c-10-office",
+            f"{key}-c-15-limit",
+            f"{key}-c-20-password",
+            f"{key}-c-zz",
+        ]
+        assert built["middlewares"][f"{key}-c-zz"] == {"compress": {"minResponseBodyBytes": 2048}}
 
 
 class TestTheRoutesTheProxyGets:

@@ -344,7 +344,7 @@ async def create_app(db: AsyncSession, principal: Principal, settings: Settings,
         publication = await proxy.publish(
             db, settings, app, data.publication, by_system_admin=principal.user.is_system_admin
         )
-        details["publication"] = _publication_details(publication)
+        details["publication"] = await _publication_details(db, publication)
     await _set_grants(db, app, group_ids, user_ids)
     await audit.record(
         db,
@@ -401,7 +401,7 @@ async def update_app(
         publication = await proxy.publish(
             db, settings, app, data.publication, by_system_admin=principal.user.is_system_admin
         )
-        publication_change = _publication_details(publication)
+        publication_change = await _publication_details(db, publication)
     elif not published and existing is not None:
         await proxy.unpublish(db, app)
         publication_change = "removed"
@@ -470,15 +470,20 @@ async def update_app(
     return await get_app(db, principal, settings, app.id)
 
 
-def _publication_details(publication: AppPublication) -> dict[str, Any]:
+async def _publication_details(db: AsyncSession, publication: AppPublication) -> dict[str, Any]:
     """What the log keeps about a publication: enough to see what was opened to whom."""
-    return {
+    details = {
         "name": publication.name,
         "mode": publication.mode,
         "access": publication.access,
         "target": publication.target_url,
         "template": publication.template,
     }
+    template = (await proxy.templates(db)).get(publication.template)
+    if template is not None and not template.get("builtin"):
+        # An own template is known by its name only as long as it exists: kept with the entry.
+        details["template_name"] = template["name"]
+    return details
 
 
 async def recheck_app(

@@ -4290,6 +4290,28 @@
         ]
       }
     },
+    "/api/v1/system/proxy": {
+      "get": {
+        "description": "Whether publishing through the proxy is set up, its addresses, templates and defaults.",
+        "operationId": "proxy_info_api_v1_system_proxy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Proxy Info",
+        "tags": [
+          "system"
+        ]
+      }
+    },
     "/api/v1/system/proxy-templates": {
       "get": {
         "operationId": "list_proxy_templates_api_v1_system_proxy_templates_get",

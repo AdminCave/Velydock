@@ -393,8 +393,14 @@ def _check_headers(value: Any, what: str) -> dict[str, str]:
 
 
 def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str, Any]:
-    """Validate what a template or a publication sets. Unknown keys are refused."""
-    bad = invalid("The proxy options are not valid.", "proxy_options_invalid")
+    """Validate what a template or a publication sets. Unknown keys are refused.
+
+    The messages name the option: the interface shows them at the settings.
+    """
+
+    def bad(message: str) -> ApiError:
+        return invalid(message, "proxy_options_invalid")
+
     checked: dict[str, Any] = {}
     for key, value in options.items():
         if key in (
@@ -405,21 +411,25 @@ def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str
             "identity_headers",
         ):
             if type(value) is not bool:
-                raise bad
+                raise bad(f"The option {key} is either true or false.")
             checked[key] = value
         elif key == "rate_limit":
             if value is None:
                 checked[key] = None
                 continue
+            limit = bad(
+                "The option rate_limit takes two whole numbers: average (1 to 10000 requests per "
+                "second) and burst (at least average, at most 100000)."
+            )
             if not isinstance(value, dict) or set(value) != {"average", "burst"}:
-                raise bad
+                raise limit
             average, burst = value["average"], value["burst"]
             # Exactly int: True is an int to Python, and "true" where the proxy expects a number
             # makes it throw away the routes of everybody (see MIDDLEWARE_FIELDS).
             if not (type(average) is int and type(burst) is int and 1 <= average <= 10_000):
-                raise bad
+                raise limit
             if not average <= burst <= 100_000:
-                raise bad
+                raise limit
             checked[key] = {"average": average, "burst": burst}
         elif key == "request_headers":
             checked[key] = _check_headers(value, "request")
@@ -430,7 +440,7 @@ def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str
                 raise ApiError(403, "forbidden", "Only system administrators may add proxy middlewares.")
             checked[key] = _check_custom(value)
         else:
-            raise bad
+            raise bad(f"There is no proxy option {key}.")
     return checked
 
 
@@ -547,23 +557,29 @@ def _check_fields(body: Any, fields: dict[str, Any], where: str) -> None:
 
 
 def _check_custom(value: Any) -> dict[str, Any]:
-    bad = invalid(
-        "Custom middlewares must be an object of name -> one Traefik middleware, for example "
-        '{"office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}. Allowed: '
-        + ", ".join(sorted(CUSTOM_MIDDLEWARES))
-        + ".",
-        "proxy_options_invalid",
-    )
-    if not isinstance(value, dict) or len(value) > 10 or len(json.dumps(value)) > 8000:
-        raise bad
+    def bad(message: str) -> ApiError:
+        return invalid(message, "proxy_options_invalid")
+
+    example = '{"office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}'
+    if not isinstance(value, dict):
+        raise bad(f"Own middlewares are an object of name -> one Traefik middleware, for example {example}.")
+    if len(value) > 10 or len(json.dumps(value)) > 8000:
+        raise bad("At most ten own middlewares, and 8000 characters in all.")
     for name, definition in value.items():
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,30}", name):
-            raise bad
+            raise bad(
+                f"The name {str(name)[:40]!r} is not possible: lower-case letters, digits and hyphens, "
+                "beginning with a letter or digit, at most 31 characters."
+            )
         if not isinstance(definition, dict) or len(definition) != 1:
-            raise bad
+            raise bad(f"{name} must hold exactly one middleware, for example {example}.")
         ((kind, body),) = definition.items()
         if kind not in MIDDLEWARE_FIELDS:
-            raise bad
+            raise bad(
+                f"{name}: the middleware {str(kind)[:40]!r} is not available. Allowed: "
+                + ", ".join(sorted(CUSTOM_MIDDLEWARES))
+                + "."
+            )
         _check_fields(body, MIDDLEWARE_FIELDS[kind], f"{name}.{kind}")
     return value
 
@@ -582,9 +598,17 @@ async def templates(db: AsyncSession) -> dict[str, dict[str, Any]]:
 
 
 def effective_options(template: dict[str, Any] | None, own: dict[str, Any]) -> dict[str, Any]:
-    """Defaults, then the template, then what the publication itself sets."""
+    """Defaults, then the template, then what the publication itself sets.
+
+    Own middlewares add up: those of the template and those a system administrator gave this
+    one publication (which win where both use a name).
+    """
     merged = {**DEFAULTS, **(template or {}).get("options", {})}
     merged.update({key: value for key, value in own.items() if key != "custom_middlewares"})
+    merged["custom_middlewares"] = {
+        **(merged.get("custom_middlewares") or {}),
+        **(own.get("custom_middlewares") or {}),
+    }
     return merged
 
 
@@ -1110,7 +1134,20 @@ async def publish(
     known = await templates(db)
     if data.template not in known:
         raise invalid("This proxy template does not exist.", "proxy_template_unknown")
-    options = check_options(data.options, by_system_admin=by_system_admin)
+    publication = await db.get(AppPublication, app.id)
+    submitted = dict(data.options)
+    if by_system_admin:
+        options = check_options(submitted, by_system_admin=True)
+    else:
+        # Own middlewares on a single publication are a system administrator's (an address
+        # list, say). The organization can neither change nor drop them: sent back unchanged or
+        # left out, they stay as they are.
+        kept = dict(publication.options or {}).get("custom_middlewares") if publication else None
+        if "custom_middlewares" in submitted and submitted["custom_middlewares"] == kept:
+            del submitted["custom_middlewares"]
+        options = check_options(submitted, by_system_admin=False)
+        if kept:
+            options["custom_middlewares"] = kept
     if data.access == PublicationAccess.PUBLIC and options.get("identity_headers"):
         raise invalid(
             "A public app has nobody signed in whom the headers could name.", "proxy_options_invalid"
@@ -1126,7 +1163,6 @@ async def publish(
         ).first()
     if taken is not None:
         raise conflict("publication_name_taken", "This address name is already in use.")
-    publication = await db.get(AppPublication, app.id)
     if publication is None:
         publication = AppPublication(app_id=app.id, tenant_id=app.tenant_id)
         db.add(publication)
@@ -1213,6 +1249,24 @@ async def info(db: AsyncSession, settings: Settings, tenant_id: uuid.UUID) -> Pr
     )
 
 
+async def system_info(db: AsyncSession, settings: Settings) -> ProxyInfo:
+    """The same for the pages of the system administration, which are about no organization:
+    whether publishing is set up, the addresses, the templates and the defaults."""
+    if not settings.apps_url:
+        return ProxyInfo(enabled=False)
+    parts = urlsplit(settings.apps_url)
+    async with system_scope(db):
+        known = await templates(db)
+    return ProxyInfo(
+        enabled=True,
+        path_base=f"{settings.apps_url}/",
+        subdomain_suffix=f".{parts.netloc}",
+        subdomain_scheme=parts.scheme,
+        templates=[ProxyTemplateOut(id=key, **template) for key, template in known.items()],
+        defaults={key: value for key, value in DEFAULTS.items() if key != "custom_middlewares"},
+    )
+
+
 # ---------------------------------------------------------------------------------------------
 # System administration: what organizations may reach, and templates
 # ---------------------------------------------------------------------------------------------
@@ -1237,7 +1291,7 @@ async def add_target(
     rule = parse_rule(value)
     if rule.host is not None and (rule.host in _own_names(settings) or rule.host.endswith(".localhost")):
         raise invalid(
-            "This name belongs to the installation itself and cannot be released.", "proxy_target_invalid"
+            "This name belongs to the installation itself and cannot be released.", "proxy_target_reserved"
         )
     async with system_scope(db):
         tenant = await db.get(Tenant, tenant_id)
@@ -1361,9 +1415,11 @@ async def delete_template(db: AsyncSession, principal: Principal, template_id: u
         if used:
             # A template may be what restricts a publication (an address list, a rate limit).
             # Taking it away would leave those publications without it.
-            raise conflict(
+            raise ApiError(
+                409,
                 "template_in_use",
                 "This template is still used by published apps: " + ", ".join(used) + ".",
+                {"publications": list(used)},
             )
         name = row.name
         await db.delete(row)
