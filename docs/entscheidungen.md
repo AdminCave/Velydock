@@ -225,7 +225,31 @@ Technisch folgt daraus:
   an Traefik gehen (ein `true` anstelle einer Zahl hatte im Versuch die Routen aller
   Organisationen eingefroren).
 
-## 16. Abweichungen vom freigegebenen Vorschlag
+## 16. Erscheinungsbild je Organisation und je Benutzer (23.11.2026)
+
+Logo, Design, Akzentfarbe, Dock-Position und App-Leiste lassen sich je Organisation und je
+Benutzer einstellen; das Logo gibt es nur je Organisation. Zwei Punkte hat der Auftraggeber
+entschieden:
+
+- **Wie tief das Design geht:** hell oder dunkel und *eine* Akzentfarbe – keine eigenen
+  Flächenfarben, kein freies CSS. Eine Farbe lässt sich so ableiten, dass Text in beiden Designs
+  lesbar bleibt (Velydock rechnet nach, mindestens 4,5:1); mit freien Farben oder eigenem CSS
+  könnte eine Organisation die Oberfläche unlesbar machen oder Teile verstecken.
+- **Wer bestimmt:** Benutzer dürfen jede Einstellung selbst wählen; die Organisation gibt
+  Vorgaben und kann jede einzeln für alle festlegen. Standardmäßig ist nichts festgelegt.
+
+Technisch folgt daraus:
+
+- Je Einstellung gilt: festgelegt → Vorgabe der Organisation; sonst eigene Wahl, sonst Vorgabe,
+  sonst Systemstandard. Die eigene Wahl bleibt beim Festlegen gespeichert und gilt wieder, wenn
+  die Organisation die Festlegung aufhebt.
+- Die Akzentfarbe ist ein Wert (`#rrggbb`), aus dem die Oberfläche ihre Töne ableitet. Sie färbt
+  Links, Markierungen, Hinweise und den Fokusrahmen, nie eine gefüllte Schaltfläche: Deren
+  Beschriftung müsste sonst mit jeder Farbe neu stimmen.
+- Die Anmeldeseite übernimmt nichts von einer Organisation: Dort ist noch nicht bekannt, wer
+  sich anmeldet.
+
+## 17. Abweichungen vom freigegebenen Vorschlag
 
 - Python 3.13 statt 3.14: identisch mit der Entwicklungs- und Testumgebung.
 - Bits UI wurde nicht benötigt; die Komponenten basieren auf denen von AdminHelper.
