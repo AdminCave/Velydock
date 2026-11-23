@@ -65,6 +65,58 @@ describe('audit log texts', () => {
     ).toBe('Standardposition: Systemstandard · Position festgelegt');
   });
 
+  it('say what an organization changed about its appearance, each setting with its new value', () => {
+    const detail = (details: Record<string, unknown>, t = de) =>
+      auditDetail({ action: 'tenant.settings', details }, t);
+    expect(detail({ accent_color: '#c2410c', theme_locked: true, logo: 'changed' })).toBe(
+      'Logo geändert · Design festgelegt · Akzentfarbe: #c2410c',
+    );
+    expect(detail({ logo: 'removed' })).toBe('Logo entfernt');
+    expect(detail({ default_theme: 'light' })).toBe('Standard-Design: Hell');
+    expect(detail({ default_theme: 'system', theme_locked: false })).toBe(
+      'Standard-Design: System · Design freigegeben',
+    );
+    expect(detail({ default_app_bar: 'hidden', app_bar_locked: true })).toBe(
+      'App-Leiste: Ausgeblendet · App-Leiste festgelegt',
+    );
+    expect(detail({ accent_locked: true })).toBe('Akzentfarbe festgelegt');
+    expect(
+      detail({ accent_locked: false, app_bar_locked: false, nav_position_locked: false }),
+    ).toBe('Akzentfarbe freigegeben · Position freigegeben · App-Leiste freigegeben');
+    // A default that was removed is sent as null.
+    expect(
+      detail({
+        default_theme: null,
+        accent_color: null,
+        default_app_bar: null,
+        default_nav_position: null,
+      }),
+    ).toBe(
+      'Standard-Design: Keine Vorgabe · Akzentfarbe: Keine Vorgabe · Standardposition: Systemstandard · App-Leiste: Keine Vorgabe',
+    );
+    // Every change of one save in one line, and in English as well.
+    expect(
+      detail(
+        {
+          default_theme: 'dark',
+          theme_locked: true,
+          accent_color: '#0f766e',
+          accent_locked: true,
+          default_nav_position: 'top',
+          nav_position_locked: true,
+          default_app_bar: 'bottom',
+          app_bar_locked: true,
+          logo: 'changed',
+        },
+        (key, vars) => translate('en', key, vars),
+      ),
+    ).toBe(
+      'Logo changed · Default theme: Dark · Theme fixed · Accent colour: #0f766e · Accent colour fixed · Default position: Top · Position fixed · App bar: Bottom · App bar fixed',
+    );
+    // A value this version does not know is shown as it came.
+    expect(detail({ default_app_bar: 'floating' })).toBe('App-Leiste: floating');
+  });
+
   it('say which way a setting was changed, not only that it was', () => {
     expect(
       auditDetail(

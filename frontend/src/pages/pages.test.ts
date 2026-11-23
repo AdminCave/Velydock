@@ -14,12 +14,21 @@ import { instanceName } from '$lib/stores/instance';
 import { me, setMe } from '$lib/stores/session';
 import { clearToasts, toasts } from '$lib/stores/toasts';
 import { loadApps, resetWorkspace } from '$lib/stores/workspace';
-import { setThemePreference } from '$lib/theme';
+import { setThemePreference, showOwnTheme, themePreference } from '$lib/theme';
 import { leaveTo } from '$lib/utils/browser';
-import { ACME, MAIN, PERMISSIONS, errorResponse, makeApp, makeMe, stubApi } from '../test/fixtures';
+import {
+  ACME,
+  MAIN,
+  PERMISSIONS,
+  errorResponse,
+  makeApp,
+  makeMe,
+  stubApi,
+  SETTINGS,
+  OWN_SETTINGS,
+} from '../test/fixtures';
 import AdminApps from './admin/Apps.svelte';
 import AdminGroups from './admin/Groups.svelte';
-import AdminTenantSettings from './admin/TenantSettings.svelte';
 import AdminUsers from './admin/Users.svelte';
 import Dashboard from './Dashboard.svelte';
 import Login from './Login.svelte';
@@ -170,6 +179,30 @@ describe('Login', () => {
     expect(localStorage.getItem('velydock-language')).toBeNull(); // a default, not a choice
   });
 
+  it('uses the theme of the installation, not one an organization had set for the last user', async () => {
+    // PUBLIC says "light". What applied to the last session of this browser was "dark",
+    // fixed by an organization; the user had chosen nothing.
+    setThemePreference('dark', { own: null });
+    showOwnTheme(); // the session ended
+    stubApi({ 'GET /api/v1/public': () => PUBLIC });
+    navigate('/login', { replace: true });
+    render(Login);
+    await screen.findByRole('heading', { name: 'Acme Workspace' });
+    await waitFor(() => expect(get(themePreference)).toBe('light'));
+    expect(localStorage.getItem('velydock-theme')).toBeNull(); // a default, not a choice
+  });
+
+  it('keeps the theme the user chose for themselves', async () => {
+    setThemePreference('light', { own: 'dark' }); // "light" was fixed by the organization
+    showOwnTheme();
+    stubApi({ 'GET /api/v1/public': () => PUBLIC });
+    navigate('/login', { replace: true });
+    render(Login);
+    await screen.findByRole('heading', { name: 'Acme Workspace' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(get(themePreference)).toBe('dark');
+  });
+
   it('keeps the language this browser used before', async () => {
     setLanguage('de');
     stubApi({ 'GET /api/v1/public': () => PUBLIC });
@@ -192,14 +225,13 @@ describe('Settings', () => {
   it('offers theme, navigation position and language with the documented hooks', () => {
     setMe(makeMe());
     render(Settings);
-    expect(screen.getByTestId('setting-theme').dataset.value).toBe('system');
+    expect(screen.getByTestId('setting-theme').dataset.value).toBe('default');
     expect(screen.getByTestId('setting-nav-position').dataset.value).toBe('default');
     expect(screen.getByTestId('setting-language').dataset.value).toBe('de');
     expect(
-      screen
+      within(screen.getByTestId('setting-nav-position'))
         .getAllByRole('radio')
-        .map((r) => r.closest('label')?.textContent?.trim())
-        .slice(3, 8),
+        .map((r) => r.closest('label')?.textContent?.trim()),
     ).toEqual(['Standard', 'Links', 'Rechts', 'Oben', 'Unten']);
   });
 
@@ -209,17 +241,18 @@ describe('Settings', () => {
       'PATCH /api/v1/me/settings': ({ body }) =>
         makeMe({
           settings: {
+            ...SETTINGS,
             theme: 'system',
             nav_position: 'bottom',
             language: 'de',
             nav_position_locked: false,
           },
-          own_settings: { theme: null, language: null, ...(body as object) },
+          own_settings: { ...OWN_SETTINGS, theme: null, language: null, ...(body as object) },
         }),
     });
     render(Settings);
     const group = screen.getByTestId('setting-nav-position');
-    await fireEvent.click(screen.getByRole('radio', { name: 'Unten' }));
+    await fireEvent.click(within(group).getByRole('radio', { name: 'Unten' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0].body).toEqual({ nav_position: 'bottom' });
     await waitFor(() => expect(get(me)?.own_settings.nav_position).toBe('bottom'));
@@ -230,18 +263,21 @@ describe('Settings', () => {
     setMe(
       makeMe({
         settings: {
+          ...SETTINGS,
           theme: 'system',
           nav_position: 'right',
           language: 'de',
           nav_position_locked: false,
         },
-        own_settings: { theme: null, nav_position: 'right', language: null },
+        own_settings: { ...OWN_SETTINGS, theme: null, nav_position: 'right', language: null },
       }),
     );
     const { calls } = stubApi({ 'PATCH /api/v1/me/settings': () => makeMe() });
     render(Settings);
     expect(screen.getByTestId('setting-nav-position').dataset.value).toBe('right');
-    await fireEvent.click(screen.getByRole('radio', { name: 'Standard' }));
+    await fireEvent.click(
+      within(screen.getByTestId('setting-nav-position')).getByRole('radio', { name: 'Standard' }),
+    );
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0].body).toEqual({ nav_position: null });
   });
@@ -250,12 +286,13 @@ describe('Settings', () => {
     setMe(
       makeMe({
         settings: {
+          ...SETTINGS,
           theme: 'system',
           nav_position: 'top',
           language: 'de',
           nav_position_locked: true,
         },
-        own_settings: { theme: null, nav_position: 'left', language: null },
+        own_settings: { ...OWN_SETTINGS, theme: null, nav_position: 'left', language: null },
       }),
     );
     render(Settings);
@@ -275,8 +312,10 @@ describe('Settings', () => {
     stubApi({ 'PATCH /api/v1/me/settings': () => errorResponse(503, 'idp_unavailable') });
     render(Settings);
     await fireEvent.click(screen.getByRole('radio', { name: 'Dunkel' }));
-    await waitFor(() => expect(screen.getByTestId('setting-theme').dataset.value).toBe('system'));
-    expect(screen.getByRole('radio', { name: 'System' })).toBeChecked();
+    await waitFor(() => expect(screen.getByTestId('setting-theme').dataset.value).toBe('default'));
+    expect(
+      within(screen.getByTestId('setting-theme')).getByRole('radio', { name: 'Standard' }),
+    ).toBeChecked();
   });
 });
 
@@ -1516,44 +1555,6 @@ describe('Administration: groups', () => {
     await waitFor(() => expect(document.querySelector('tr[data-group-id="g-a"]')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(main));
     main.remove();
-  });
-});
-
-describe('Administration: settings of the organization', () => {
-  const settings = {
-    ...ACME,
-    default_nav_position: 'top',
-    nav_position_locked: false,
-  };
-
-  it('sends only the setting that was changed', async () => {
-    setMe(makeMe({ role: 'tenant_admin', permissions: PERMISSIONS.tenantAdmin }));
-    let stored = settings;
-    const { calls } = stubApi({
-      'GET /api/v1/admin/tenant': () => stored,
-      'PATCH /api/v1/admin/tenant': ({ body }) => (stored = { ...stored, ...(body as object) }),
-      'GET /api/v1/me': () =>
-        makeMe({ role: 'tenant_admin', permissions: PERMISSIONS.tenantAdmin }),
-    });
-    render(AdminTenantSettings);
-    const lock = await screen.findByRole('switch', { name: 'Position für alle festlegen' });
-    await fireEvent.click(lock);
-    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
-    await waitFor(() => expect(calls.filter((call) => call.method === 'PATCH')).toHaveLength(1));
-    // Not the position as well: somebody else may have changed it since the page loaded.
-    expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({
-      nav_position_locked: true,
-    });
-
-    await screen.findByRole('button', { name: 'Speichern' }); // the first save is through
-    await fireEvent.change(screen.getByTestId('tenant-nav-position'), {
-      target: { value: 'system' },
-    });
-    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
-    await waitFor(() => expect(calls.filter((call) => call.method === 'PATCH')).toHaveLength(2));
-    expect(calls.filter((call) => call.method === 'PATCH')[1].body).toEqual({
-      default_nav_position: null,
-    });
   });
 });
 

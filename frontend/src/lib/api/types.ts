@@ -11,6 +11,7 @@ export type Role = S['Role'];
 export type AppType = S['AppType'];
 export type NavPosition = S['NavPosition'];
 export type ThemePreference = S['Theme'];
+export type AppBar = S['AppBar'];
 export type EmbedStatus = S['EmbedStatus'];
 export type Language = 'de' | 'en';
 

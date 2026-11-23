@@ -191,6 +191,52 @@ describe('design system', () => {
     );
   });
 
+  // Layout again, measured in a browser and pinned here.
+  it('puts the app bar below the app by layout, and never distorts the logo of an organization', () => {
+    const stage = read('src/lib/components/app/AppStage.svelte');
+    expect(stage).toMatch(/\.bar\[data-position='bottom'\] \{[^}]*order:\s*1/);
+    for (const file of [
+      'src/lib/components/layout/Dock.svelte',
+      'src/pages/admin/TenantSettings.svelte',
+    ]) {
+      const logo = /\n {2}\.logo \{([^}]*)\}/.exec(read(file))?.[1] ?? '';
+      expect(logo, file).toMatch(/height:\s*30px/);
+      expect(logo, file).toMatch(/width:\s*auto/);
+      expect(logo, file).toMatch(/max-width:\s*56px/);
+      expect(logo, file).toMatch(/object-fit:\s*contain/);
+    }
+  });
+
+  it('uses the accent as an accent: no component fills a surface with it but the unused accent button', () => {
+    const fills: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(path.join(root, dir), { withFileTypes: true })) {
+        const file = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(file);
+        else if (
+          /\.(svelte|css)$/.test(entry.name) &&
+          /background(-color)?:\s*var\(--accent(-hover)?\)/.test(read(file))
+        ) {
+          fills.push(file);
+        }
+      }
+    };
+    walk('src');
+    expect(fills).toEqual(['src/lib/components/ui/Button.svelte']);
+    // And nothing uses that variant.
+    const uses: string[] = [];
+    const find = (dir: string) => {
+      for (const entry of readdirSync(path.join(root, dir), { withFileTypes: true })) {
+        const file = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) find(file);
+        else if (entry.name.endsWith('.svelte') && /variant="accent"/.test(read(file)))
+          uses.push(file);
+      }
+    };
+    find('src');
+    expect(uses).toEqual([]);
+  });
+
   it('draws the product mark with currentColor', () => {
     expect(mark).toContain('fill="currentColor"');
     expect(mark).not.toMatch(/#[0-9a-f]{3,6}/i);

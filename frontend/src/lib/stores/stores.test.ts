@@ -7,9 +7,29 @@ import { get } from 'svelte/store';
 import { api } from '$lib/api/client';
 import { errorMessage } from '$lib/api/errors';
 import { language, setLanguage } from '$lib/i18n';
-import { setThemePreference, themePreference } from '$lib/theme';
+import { accentTokens } from '$lib/accent';
+import {
+  ACCENT_STORAGE_KEY,
+  OWN_THEME_STORAGE_KEY,
+  THEME_STORAGE_KEY,
+  accentColor,
+  applyAccent,
+  setAccentColor,
+  setThemePreference,
+  startThemeSync,
+  themePreference,
+} from '$lib/theme';
 import { leaveTo, reloadPage } from '$lib/utils/browser';
-import { ACME, MAIN, errorResponse, makeApp, makeMe, stubApi } from '../../test/fixtures';
+import {
+  ACME,
+  MAIN,
+  errorResponse,
+  makeApp,
+  makeMe,
+  stubApi,
+  SETTINGS,
+  OWN_SETTINGS,
+} from '../../test/fixtures';
 import {
   KEEPALIVE_INTERVAL_MS,
   REVALIDATE_MIN_INTERVAL_MS,
@@ -31,7 +51,16 @@ import {
   updateSettings,
 } from './session';
 import { clearToasts, showError, toasts } from './toasts';
-import { activateFrame, frames, loadApps, resetWorkspace, workspace } from './workspace';
+import {
+  activateFrame,
+  dropFrame,
+  frameReloads,
+  frames,
+  loadApps,
+  reloadFrame,
+  resetWorkspace,
+  workspace,
+} from './workspace';
 
 vi.mock('$lib/utils/browser', () => ({ leaveTo: vi.fn(), reloadPage: vi.fn() }));
 
@@ -82,6 +111,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   setLanguage('de', { persist: false });
   setThemePreference('system', { persist: false });
+  setAccentColor(null);
+  applyAccent(null, 'dark');
 });
 
 describe('session', () => {
@@ -91,6 +122,7 @@ describe('session', () => {
         makeMe({
           permissions: ['workspace:use', 'users:read'],
           settings: {
+            ...SETTINGS,
             theme: 'light',
             nav_position: 'top',
             language: 'en',
@@ -161,37 +193,44 @@ describe('session', () => {
         JSON.stringify(
           makeMe({
             settings: {
+              ...SETTINGS,
               theme: 'dark',
               nav_position: 'right',
               language: 'de',
               nav_position_locked: false,
             },
-            own_settings: { theme: 'dark', nav_position: 'right', language: null },
+            own_settings: { ...OWN_SETTINGS, theme: 'dark', nav_position: 'right', language: null },
           }),
         ),
         { status: 200 },
       ),
     );
     await saving;
-    expect(get(me)?.own_settings).toEqual({ theme: 'dark', nav_position: 'right', language: null });
+    expect(get(me)?.own_settings).toEqual({
+      ...OWN_SETTINGS,
+      theme: 'dark',
+      nav_position: 'right',
+    });
   });
 
   it('sends null to reset a setting and waits for the server to say what applies', async () => {
     setMe(
       makeMe({
         settings: {
+          ...SETTINGS,
           theme: 'system',
           nav_position: 'right',
           language: 'de',
           nav_position_locked: false,
         },
-        own_settings: { theme: null, nav_position: 'right', language: null },
+        own_settings: { ...OWN_SETTINGS, theme: null, nav_position: 'right', language: null },
       }),
     );
     const { calls } = stubApi({
       'PATCH /api/v1/me/settings': () =>
         makeMe({
           settings: {
+            ...SETTINGS,
             theme: 'system',
             nav_position: 'top',
             language: 'de',
@@ -222,6 +261,7 @@ describe('session', () => {
     setMe(
       makeMe({
         settings: {
+          ...SETTINGS,
           theme: 'system',
           nav_position: 'top',
           language: 'de',
@@ -1007,7 +1047,253 @@ describe('a session that ends while somebody works in an app', () => {
   });
 });
 
+// Accent colour and theme are what applies to the user in the active organization. They
+// come with every answer about the user and go with the session.
+describe('appearance that follows the session', () => {
+  const ORANGE = '#c2410c';
+  const TEAL = '#0f766e';
+  const root = document.documentElement;
+  const withSettings = (
+    settings: Partial<ReturnType<typeof makeMe>['settings']>,
+    own: Partial<ReturnType<typeof makeMe>['own_settings']> = {},
+    rest: Partial<ReturnType<typeof makeMe>> = {},
+  ) =>
+    makeMe({
+      settings: { ...SETTINGS, ...settings },
+      own_settings: { ...OWN_SETTINGS, ...own },
+      ...rest,
+    });
+  const gone = () => errorResponse(401, 'not_authenticated');
+  let stop: () => void;
+  beforeEach(() => {
+    stop = startThemeSync();
+  });
+  afterEach(() => stop());
+
+  it('applies the accent colour the server names, and remembers it for the next page load', async () => {
+    stubApi({ 'GET /api/v1/me': () => withSettings({ accent_color: ORANGE, theme: 'dark' }) });
+    await loadSession();
+    expect(get(accentColor)).toBe(ORANGE);
+    expect(root.dataset.accent).toBe(ORANGE);
+    expect(root.style.getPropertyValue('--accent')).toBe(accentTokens(ORANGE, 'dark')['--accent']);
+    expect(JSON.parse(localStorage.getItem(ACCENT_STORAGE_KEY) ?? 'null').color).toBe(ORANGE);
+  });
+
+  it('has the built-in accent for somebody without a colour', async () => {
+    setAccentColor(TEAL); // what the last page of this browser showed
+    stubApi({ 'GET /api/v1/me': () => makeMe() });
+    await loadSession();
+    expect(get(accentColor)).toBeNull();
+    expect(root.hasAttribute('data-accent')).toBe(false);
+    expect(root.style.getPropertyValue('--accent')).toBe('');
+    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('follows a switch of the organization at once: its accent, its theme', async () => {
+    setMe(withSettings({ accent_color: ORANGE, theme: 'dark' }));
+    expect(root.dataset.accent).toBe(ORANGE);
+    stubApi({
+      'POST /api/v1/me/active-tenant': () =>
+        withSettings({ accent_color: TEAL, theme: 'light' }, {}, { active_tenant: MAIN }),
+    });
+    await switchTenant(MAIN.id);
+    expect(root.dataset.accent).toBe(TEAL);
+    expect(root.dataset.theme).toBe('light');
+    expect(root.style.getPropertyValue('--accent')).toBe(accentTokens(TEAL, 'light')['--accent']);
+    // And into one that set nothing: the built-in accent again.
+    stubApi({ 'POST /api/v1/me/active-tenant': () => makeMe() });
+    await switchTenant(ACME.id);
+    expect(root.hasAttribute('data-accent')).toBe(false);
+  });
+
+  it('follows the next answer about the user when a lock is set or lifted meanwhile', async () => {
+    // Own choice teal; the organization has fixed orange.
+    setMe(withSettings({ accent_color: ORANGE, accent_locked: true }, { accent_color: TEAL }));
+    expect(root.dataset.accent).toBe(ORANGE);
+    stubApi({
+      'GET /api/v1/me': () => withSettings({ accent_color: TEAL }, { accent_color: TEAL }),
+    });
+    await revalidateSession({ force: true });
+    expect(root.dataset.accent).toBe(TEAL);
+  });
+
+  it('shows a chosen colour and bar at once, before the server has answered', async () => {
+    setMe(makeMe());
+    let release: (value: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    );
+    const saving = updateSettings({ accent_color: '#C2410C', app_bar: 'hidden' });
+    expect(get(me)?.settings.accent_color).toBe(ORANGE);
+    expect(get(me)?.settings.app_bar).toBe('hidden');
+    expect(root.dataset.accent).toBe(ORANGE);
+    release(
+      ok(
+        withSettings(
+          { accent_color: ORANGE, app_bar: 'hidden' },
+          { accent_color: ORANGE, app_bar: 'hidden' },
+        ),
+      ),
+    );
+    await saving;
+    expect(root.dataset.accent).toBe(ORANGE);
+  });
+
+  it('does not show a choice for a setting the organization has fixed: it is stored, not applied', async () => {
+    const locked = withSettings({
+      theme: 'light',
+      theme_locked: true,
+      accent_color: ORANGE,
+      accent_locked: true,
+      app_bar: 'bottom',
+      app_bar_locked: true,
+    });
+    setMe(locked);
+    let release: (value: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    );
+    const saving = updateSettings({ theme: 'dark', accent_color: TEAL, app_bar: 'hidden' });
+    expect(get(me)?.settings).toEqual(locked.settings);
+    expect(get(me)?.own_settings).toMatchObject({
+      theme: 'dark',
+      accent_color: TEAL,
+      app_bar: 'hidden',
+    });
+    expect(root.dataset.accent).toBe(ORANGE);
+    expect(root.dataset.theme).toBe('light');
+    release(ok(locked));
+    await saving;
+  });
+
+  it('waits for the server to say what applies after a reset', async () => {
+    setMe(
+      withSettings(
+        { accent_color: TEAL, app_bar: 'hidden' },
+        { accent_color: TEAL, app_bar: 'hidden' },
+      ),
+    );
+    let release: (value: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    );
+    const saving = updateSettings({ accent_color: null, app_bar: null });
+    expect(get(me)?.settings.accent_color).toBe(TEAL); // not guessed
+    expect(get(me)?.settings.app_bar).toBe('hidden');
+    release(ok(withSettings({ accent_color: ORANGE, app_bar: 'bottom' })));
+    await saving;
+    expect(root.dataset.accent).toBe(ORANGE); // the organization's default
+    expect(get(me)?.settings.app_bar).toBe('bottom');
+  });
+
+  it('takes the accent away with the session: the login page shows nothing of it', async () => {
+    setMe(withSettings({ accent_color: ORANGE }));
+    expect(root.dataset.accent).toBe(ORANGE);
+    stubApi({ 'GET /api/v1/admin/groups': gone });
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    expect(get(session).status).toBe('anonymous');
+    expect(get(accentColor)).toBeNull();
+    expect(root.hasAttribute('data-accent')).toBe(false);
+    expect(root.style.getPropertyValue('--accent')).toBe('');
+    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('takes it away on signing out, before the page is left', async () => {
+    setMe(withSettings({ accent_color: ORANGE }));
+    stubApi({ 'POST /api/auth/logout': () => ({ redirect_url: '/login?signed_out=1' }) });
+    await signOut();
+    expect(root.hasAttribute('data-accent')).toBe(false);
+    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps it while the page is kept after its session ended under an open app', async () => {
+    setMe(withSettings({ accent_color: ORANGE, app_bar: 'hidden' }));
+    stubApi({ 'GET /api/v1/workspace/apps': () => [makeApp({ id: 'wiki' })] });
+    await loadApps();
+    activateFrame('wiki');
+    stubApi({ 'GET /api/v1/me': gone });
+    await revalidateSession({ force: true });
+    expect(get(sessionEnded)).toBe(true);
+    // The page is still the user's: colour and bar stay as they were.
+    expect(root.dataset.accent).toBe(ORANGE);
+    expect(get(me)?.settings.app_bar).toBe('hidden');
+    endedSessionToLogin();
+    expect(root.hasAttribute('data-accent')).toBe(false);
+  });
+
+  it('remembers the theme that applies and, apart from it, the one the user chose', async () => {
+    // The organization fixed "light"; the user's own choice is "dark".
+    stubApi({
+      'GET /api/v1/me': () =>
+        withSettings({ theme: 'light', theme_locked: true }, { theme: 'dark' }),
+    });
+    await loadSession();
+    expect(root.dataset.theme).toBe('light');
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
+    expect(localStorage.getItem(OWN_THEME_STORAGE_KEY)).toBe('dark');
+    // Without the session, nothing of the organization applies: the own choice does.
+    stubApi({ 'GET /api/v1/admin/groups': gone });
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    expect(root.dataset.theme).toBe('dark');
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark');
+  });
+
+  it('falls back to the system (and the login page to the installation) for somebody who chose no theme', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} })),
+    );
+    // "light" is the default of the organization here; the user chose nothing.
+    stubApi({ 'GET /api/v1/me': () => withSettings({ theme: 'light' }) });
+    await loadSession();
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
+    expect(localStorage.getItem(OWN_THEME_STORAGE_KEY)).toBeNull();
+    stubApi({ 'GET /api/v1/admin/groups': gone });
+    await api.get('/api/v1/admin/groups').catch(() => {});
+    expect(get(themePreference)).toBe('system');
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+  });
+
+  it('leaves the page as it was painted when the first question to the server fails', async () => {
+    setAccentColor(ORANGE);
+    setThemePreference('light');
+    stubApi({ 'GET /api/v1/me': () => errorResponse(500, 'internal_error') });
+    await loadSession();
+    expect(get(session).status).toBe('error');
+    // Nothing is known about the session: a reload may well find the user signed in.
+    expect(root.dataset.accent).toBe(ORANGE);
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
+  });
+});
+
 describe('workspace', () => {
+  it('counts how often an app was asked to load anew, and mounts its frame again if it was unloaded', async () => {
+    stubApi({
+      'GET /api/v1/workspace/apps': () => [
+        makeApp({ id: 'wiki' }),
+        makeApp({ id: 'ext', type: 'external' }),
+      ],
+    });
+    await loadApps();
+    expect(get(frameReloads)).toEqual({});
+    activateFrame('wiki');
+    reloadFrame('wiki');
+    reloadFrame('wiki');
+    expect(get(frameReloads)).toEqual({ wiki: 2 });
+    dropFrame('wiki');
+    reloadFrame('wiki');
+    expect(get(frames).map((f) => f.appId)).toEqual(['wiki']);
+    // An app without a frame gets none this way either.
+    reloadFrame('ext');
+    expect(get(frames).map((f) => f.appId)).toEqual(['wiki']);
+    // Another organization starts from nothing.
+    resetWorkspace();
+    expect(get(frameReloads)).toEqual({});
+  });
+
   const apps = [
     makeApp({ id: 'wiki' }),
     makeApp({ id: 'blocked', embed_status: 'blocked' }),

@@ -131,6 +131,14 @@ export const errors = {
     'Das Symbol darf höchstens 256 KB groß sein.',
     'The icon must be at most 256 KB.',
   ],
+  'error.logo_invalid': [
+    'Das Logo muss ein PNG-, JPEG-, GIF-, WebP- oder SVG-Bild sein.',
+    'The logo must be a PNG, JPEG, GIF, WebP or SVG image.',
+  ],
+  'error.logo_too_large': [
+    'Das Logo darf höchstens 256 KB groß sein. Nimm eine kleinere Datei, zum Beispiel eine verkleinerte oder als SVG gespeicherte Fassung.',
+    'The logo must be at most 256 KB. Take a smaller file, for example a scaled-down version or one saved as SVG.',
+  ],
   'error.order_mismatch': [
     'Die App-Liste hat sich inzwischen geändert. Die Reihenfolge wurde neu geladen.',
     'The list of apps has changed in the meantime. The order was reloaded.',

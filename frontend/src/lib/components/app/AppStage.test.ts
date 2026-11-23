@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { get } from 'svelte/store';
 import { STEAL_LIMIT } from '$lib/frameFocus';
+import type { AppBar } from '$lib/api/types';
+import { setMe } from '$lib/stores/session';
 import { clearToasts, toasts } from '$lib/stores/toasts';
-import { frames, loadApps, resetWorkspace } from '$lib/stores/workspace';
-import { makeApp, stubApi } from '../../../test/fixtures';
+import { frames, loadApps, reloadFrame, resetWorkspace } from '$lib/stores/workspace';
+import { SETTINGS, makeApp, makeMe, stubApi } from '../../../test/fixtures';
 import AppStage from './AppStage.svelte';
 
 const apps = [
@@ -51,6 +53,7 @@ const visible = () =>
 
 beforeEach(() => {
   resetWorkspace();
+  setMe(makeMe());
   open = vi.fn();
   vi.stubGlobal('open', open);
 });
@@ -154,6 +157,96 @@ describe('AppStage', () => {
   });
 });
 
+describe('the bar at an open app', () => {
+  const withBar = (app_bar: AppBar) => setMe(makeMe({ settings: { ...SETTINGS, app_bar } }));
+  const stage = () => screen.getByRole('region', { name: 'Wiki' });
+
+  it('is above the app unless something else is set, with the hooks of the browser tests', async () => {
+    await setup('wiki');
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    const bar = screen.getByTestId('app-bar');
+    expect(bar.dataset.position).toBe('top');
+    expect(bar.tagName).toBe('HEADER');
+    expect(bar).toContainElement(screen.getByRole('heading', { level: 1, name: 'Wiki' }));
+    expect(bar).toContainElement(screen.getByTestId('app-reload'));
+    expect(bar).toContainElement(screen.getByTestId('app-open-external'));
+  });
+
+  it('can be below the app: placed there by the layout, the frame is not touched', async () => {
+    await setup('wiki');
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    const frame = document.querySelector('iframe[data-app-id="wiki"]');
+    withBar('bottom');
+    await waitFor(() => expect(screen.getByTestId('app-bar').dataset.position).toBe('bottom'));
+    // Still the first thing in the document (heading, then the app); a frame that is
+    // moved in the document would load anew.
+    const bar = screen.getByTestId('app-bar');
+    expect(
+      bar.compareDocumentPosition(frame as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(document.querySelector('iframe[data-app-id="wiki"]')).toBe(frame);
+    expect(screen.getByTestId('app-reload')).toBeInTheDocument();
+  });
+
+  it('can be hidden: no bar, but the app keeps its name as the heading of the page', async () => {
+    await setup('wiki');
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    const frame = document.querySelector('iframe[data-app-id="wiki"]');
+    withBar('hidden');
+    await waitFor(() => expect(screen.queryByTestId('app-bar')).toBeNull());
+    expect(screen.queryByTestId('app-reload')).toBeNull();
+    expect(screen.queryByTestId('app-open-external')).toBeNull();
+    const heading = screen.getByRole('heading', { level: 1, name: 'Wiki' });
+    expect(heading).toHaveClass('visually-hidden'); // there for assistive technology only
+    expect(stage()).toContainElement(heading);
+    expect(stage()).toContainElement(frame as HTMLElement);
+    expect(document.querySelector('iframe[data-app-id="wiki"]')).toBe(frame); // not reloaded
+    // And back: the bar returns, the frame stays what it was.
+    withBar('top');
+    await waitFor(() => expect(screen.getByTestId('app-bar').dataset.position).toBe('top'));
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(document.querySelector('iframe[data-app-id="wiki"]')).toBe(frame);
+  });
+
+  it.each(['top', 'bottom', 'hidden'] as const)(
+    'keeps the notices in the place of the app whatever the bar does (%s)',
+    async (position) => {
+      withBar(position);
+      const view = await setup('cloud');
+      // An app that must not be embedded …
+      expect(await screen.findByTestId('app-blocked-notice')).toHaveTextContent(
+        'Diese App lässt sich nicht einbetten',
+      );
+      expect(screen.getByRole('heading', { level: 1, name: 'Nextcloud' })).toBeInTheDocument();
+      await fireEvent.click(screen.getByTestId('app-open-external'));
+      expect(open).toHaveBeenCalledWith('https://cloud.example/', '_blank', 'noopener,noreferrer');
+      // … an external one …
+      await view.rerender({ appId: 'tickets' });
+      expect(await screen.findByRole('heading', { level: 2, name: /Tickets/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Tickets' })).toBeInTheDocument();
+      // … and one that does not exist.
+      await view.rerender({ appId: 'missing' });
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'Diese App gibt es hier nicht' }),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId('app-bar')).toBeNull();
+    },
+  );
+
+  it('loads the app anew when asked from outside the bar (the user menu, while it is hidden)', async () => {
+    withBar('hidden');
+    const view = await setup('wiki');
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    await view.rerender({ appId: 'a' });
+    await waitFor(() => expect(visible()).toEqual(['a']));
+    const wiki = document.querySelector('iframe[data-app-id="wiki"]');
+    const a = document.querySelector('iframe[data-app-id="a"]');
+    reloadFrame('a');
+    await waitFor(() => expect(document.querySelector('iframe[data-app-id="a"]')).not.toBe(a));
+    expect(document.querySelector('iframe[data-app-id="wiki"]')).toBe(wiki); // only that one
+  });
+});
+
 describe('an app that takes the keyboard focus although it is not its turn', () => {
   const frameOf = (appId: string) =>
     document.querySelector<HTMLIFrameElement>(
@@ -235,6 +328,22 @@ describe('an app that takes the keyboard focus although it is not its turn', () 
     expect(get(toasts)).toHaveLength(1);
     document.getElementById('elsewhere')?.remove();
     await fireEvent.click(screen.getByRole('button', { name: 'App neu laden' }));
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    expect(screen.queryByText('Diese App wurde geschlossen')).toBeNull();
+  });
+
+  it('comes back as well when it is loaded anew from the user menu, with the bar hidden', async () => {
+    setMe(makeMe({ settings: { ...SETTINGS, app_bar: 'hidden' } }));
+    await setup('wiki');
+    elsewhere(
+      '<div role="dialog" aria-modal="true" tabindex="-1"><button data-here>Abbrechen</button></div>',
+    );
+    const wiki = frameOf('wiki');
+    for (let n = 1; n <= STEAL_LIMIT; n++) await takesFocus(wiki);
+    await waitFor(() => expect(mounted()).toEqual([]));
+    expect(screen.getByText('Diese App wurde geschlossen')).toBeVisible();
+    document.getElementById('elsewhere')?.remove();
+    reloadFrame('wiki'); // "App neu laden" in the user menu (Dock.svelte)
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     expect(screen.queryByText('Diese App wurde geschlossen')).toBeNull();
   });

@@ -13,12 +13,14 @@ import { location, navigate } from '$lib/router';
 import { revalidateSession, session, sessionEnded, setMe, signOut } from '$lib/stores/session';
 import { clearToasts, toasts } from '$lib/stores/toasts';
 import { frames, resetWorkspace } from '$lib/stores/workspace';
-import { setThemePreference } from '$lib/theme';
+import { accentTokens } from '$lib/accent';
+import { ACCENT_STORAGE_KEY, applyAccent, setAccentColor, setThemePreference } from '$lib/theme';
 import { reloadPage } from '$lib/utils/browser';
 import {
   ACME,
   MAIN,
   PERMISSIONS,
+  SETTINGS,
   errorResponse,
   makeApp,
   makeMe,
@@ -135,6 +137,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   setLanguage('de', { persist: false });
   setThemePreference('system', { persist: false });
+  setAccentColor(null);
+  applyAccent(null, 'dark');
   navigate('/', { replace: true });
 });
 
@@ -485,5 +489,128 @@ describe('the keyboard focus', () => {
     await waitFor(() => expect(address()).toBe('/settings'));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(document.activeElement).toBe(link);
+  });
+});
+
+// Appearance per organization and per user, in the app as a whole: what the server says
+// applies (accent colour, logo, the bar at an open app) is on the page, follows the
+// organization, and is gone where nobody is signed in.
+describe('the appearance of the organization and the user', () => {
+  const ORANGE = '#c2410c';
+  const TEAL = '#0f766e';
+  const html = document.documentElement;
+  /** The user of root(), in an organization with a logo, with these settings. */
+  const dressed = (
+    tenant: typeof ACME,
+    logo: string | null,
+    settings: Partial<Me['settings']>,
+  ): Me => ({
+    ...root(tenant),
+    active_tenant: { ...tenant, logo_url: logo },
+    settings: { ...SETTINGS, theme: 'dark', ...settings },
+  });
+  const frameOf = (id: string) => document.querySelector(`iframe[data-app-id="${id}"]`);
+
+  it('shows accent colour, logo and bar as the server names them', async () => {
+    const server = {
+      me: dressed(ACME, '/api/v1/tenant/logo?v=1', { accent_color: ORANGE, app_bar: 'bottom' }),
+    };
+    serve(server);
+    await open('/app/wiki', server);
+    expect(html.dataset.accent).toBe(ORANGE);
+    expect(html.style.getPropertyValue('--accent')).toBe(accentTokens(ORANGE, 'dark')['--accent']);
+    expect(screen.getByTestId('dock-logo')).toHaveAttribute('alt', 'Acme GmbH');
+    expect(await screen.findByTestId('app-bar')).toHaveAttribute('data-position', 'bottom');
+  });
+
+  it('changes all of it at once when the organization is switched', async () => {
+    const server = {
+      me: dressed(ACME, '/api/v1/tenant/logo?v=1', { accent_color: ORANGE, app_bar: 'bottom' }),
+    };
+    serve(server, {
+      'POST /api/v1/me/active-tenant': () =>
+        (server.me = dressed(MAIN, null, {
+          accent_color: TEAL,
+          app_bar: 'hidden',
+          theme: 'light',
+        })),
+    });
+    await open('/', server);
+    expect(html.dataset.accent).toBe(ORANGE);
+    await fireEvent.click(screen.getByTestId('tenant-switcher'));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: /Admin Cave/ }));
+    await waitFor(() => expect(html.dataset.accent).toBe(TEAL));
+    expect(html.dataset.theme).toBe('light');
+    expect(html.style.getPropertyValue('--accent')).toBe(accentTokens(TEAL, 'light')['--accent']);
+    expect(screen.queryByTestId('dock-logo')).toBeNull(); // that organization has none
+    // Its app bar is hidden: an app has no bar there, and the actions are in the menu.
+    navigate('/app/wiki');
+    await waitFor(() => expect(frameOf('wiki')).not.toBeNull());
+    expect(screen.queryByTestId('app-bar')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Wiki' })).toBeInTheDocument();
+  });
+
+  it('reloads the app from the user menu while its bar is hidden', async () => {
+    const server = { me: dressed(ACME, null, { app_bar: 'hidden' }) };
+    serve(server);
+    await open('/app/wiki', server);
+    await waitFor(() => expect(frameOf('wiki')).not.toBeNull());
+    expect(screen.queryByTestId('app-reload')).toBeNull();
+    const before = frameOf('wiki');
+    await fireEvent.click(screen.getByTestId('user-menu'));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'App neu laden' }));
+    await waitFor(() => expect(frameOf('wiki')).not.toBe(before));
+    expect(frameOf('wiki')).not.toBeNull();
+  });
+
+  it('follows a setting the user changes: the bar moves under the open app without loading it anew', async () => {
+    const server = { me: dressed(ACME, null, {}) };
+    serve(server, {
+      'PATCH /api/v1/me/settings': ({ body }) =>
+        (server.me = {
+          ...server.me,
+          settings: { ...server.me.settings, ...(body as object) },
+        } as Me),
+    });
+    await open('/app/wiki', server);
+    await waitFor(() => expect(frameOf('wiki')).not.toBeNull());
+    const frame = frameOf('wiki');
+    expect(screen.getByTestId('app-bar')).toHaveAttribute('data-position', 'top');
+    await api.patch('/api/v1/me/settings', { body: { app_bar: 'bottom' } });
+    await revalidateSession({ force: true });
+    await waitFor(() =>
+      expect(screen.getByTestId('app-bar')).toHaveAttribute('data-position', 'bottom'),
+    );
+    expect(frameOf('wiki')).toBe(frame);
+  });
+
+  it('shows nothing of it on the login page, whatever the last page of this browser showed', async () => {
+    const server: { me: Me | null } = { me: dressed(ACME, null, { accent_color: ORANGE }) };
+    serve(server, { 'POST /api/auth/logout': () => ({ redirect_url: '/login?signed_out=1' }) });
+    // A session in this browser, which ends; the next page load starts at the login page.
+    setMe(server.me as Me);
+    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).not.toBeNull();
+    await signOut();
+    server.me = null;
+    expect(localStorage.getItem(ACCENT_STORAGE_KEY)).toBeNull();
+    navigate('/login', { replace: true });
+    render(App);
+    await screen.findByTestId('login-button');
+    expect(html.hasAttribute('data-accent')).toBe(false);
+    expect(html.style.getPropertyValue('--accent')).toBe('');
+    expect(screen.queryByTestId('dock-logo')).toBeNull();
+  });
+
+  it('takes the accent off the page when the session turns out to be gone', async () => {
+    const server: { me: Me | null } = { me: dressed(ACME, null, { accent_color: ORANGE }) };
+    serve(server, { 'GET /api/v1/admin/audit': gone });
+    await open('/admin/users', server);
+    await userRow('mia');
+    expect(html.dataset.accent).toBe(ORANGE);
+    server.me = null;
+    await api.get('/api/v1/admin/audit').catch(() => {});
+    await screen.findByTestId('login-button');
+    expect(html.hasAttribute('data-accent')).toBe(false);
+    expect(html.style.getPropertyValue('--accent')).toBe('');
   });
 });

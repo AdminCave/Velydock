@@ -7,23 +7,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <script lang="ts" module>
   import type { AdminApp, AppCreate, AppUpdate } from '$lib/api/types';
 
-  export const ICON_MAX_BYTES = 256 * 1024;
-  export const ICON_TYPES: readonly string[] = [
-    'image/png',
-    'image/jpeg',
-    'image/gif',
-    'image/webp',
-    'image/svg+xml',
-  ];
+  import { IMAGE_ACCEPT, IMAGE_MAX_BYTES, imageFileProblem, readImageFile } from '$lib/imageFile';
+
+  export const ICON_MAX_BYTES = IMAGE_MAX_BYTES;
 
   /** Why an icon file cannot be used (an API error code), or null if it is acceptable. */
   export function iconFileProblem(file: {
     type: string;
     size: number;
   }): 'icon_invalid' | 'icon_too_large' | null {
-    if (!ICON_TYPES.includes(file.type)) return 'icon_invalid';
-    if (file.size === 0 || file.size > ICON_MAX_BYTES) return 'icon_too_large';
-    return null;
+    const problem = imageFileProblem(file);
+    return problem ? `icon_${problem}` : null;
   }
 
   const APP_FIELDS = [
@@ -275,16 +269,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
       iconError = $t(`error.${problem}`);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') return;
-      iconUpload = reader.result;
-      storedIconUrl = null;
-      iconChanged = true;
-      iconError = '';
-    };
-    reader.onerror = () => (iconError = $t('error.icon_invalid'));
-    reader.readAsDataURL(file);
+    readImageFile(file)
+      .then((dataUrl) => {
+        iconUpload = dataUrl;
+        storedIconUrl = null;
+        iconChanged = true;
+        iconError = '';
+      })
+      .catch(() => (iconError = $t('error.icon_invalid')));
   }
 
   function togglePermission(permission: FramePermission, on: boolean) {
@@ -541,11 +533,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         </span>
         <div class="icon-upload">
           <label class="upload">
-            <input
-              type="file"
-              accept=".png,.jpg,.jpeg,.gif,.webp,.svg,image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
-              onchange={onIconFile}
-            />
+            <input type="file" accept={IMAGE_ACCEPT} onchange={onIconFile} />
             <Upload size={16} />
             <span>{$t('apps.icon.upload')}</span>
           </label>

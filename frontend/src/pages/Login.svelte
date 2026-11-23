@@ -16,7 +16,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { location, navigate, safeReturnPath, signInUrl } from '$lib/router';
   import { instanceName } from '$lib/stores/instance';
   import { session } from '$lib/stores/session';
-  import { hasStoredTheme, isThemePreference, setThemePreference } from '$lib/theme';
+  import { isThemePreference, showPublicTheme } from '$lib/theme';
   import { leaveTo } from '$lib/utils/browser';
 
   const params = $derived(new URLSearchParams($location.search));
@@ -41,9 +41,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
         if (!hasStoredLanguage() && isLanguage(value.default_language)) {
           setLanguage(value.default_language, { persist: false });
         }
-        if (!hasStoredTheme() && isThemePreference(value.default_theme)) {
-          setThemePreference(value.default_theme, { persist: false });
-        }
+        // The theme of the installation, unless the user chose one for themselves. What
+        // an organization had set for the last session does not count here.
+        if (isThemePreference(value.default_theme)) showPublicTheme(value.default_theme);
       })
       .catch(() => {
         /* the page works without it; the name falls back to the product name */

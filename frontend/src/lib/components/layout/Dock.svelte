@@ -13,7 +13,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import ChevronUp from '@lucide/svelte/icons/chevron-up';
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
   import LogOut from '@lucide/svelte/icons/log-out';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Settings from '@lucide/svelte/icons/settings';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
   import User from '@lucide/svelte/icons/user';
@@ -24,12 +26,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import Menu from '$lib/components/ui/Menu.svelte';
   import MenuItem from '$lib/components/ui/MenuItem.svelte';
   import MenuSeparator from '$lib/components/ui/MenuSeparator.svelte';
-  import { openInNewTab } from '$lib/frames';
+  import { openInNewTab, presentation } from '$lib/frames';
   import { t } from '$lib/i18n';
   import { adminHome, dockOrientation, isAdminArea, menuPlacement } from '$lib/nav';
   import { navigate } from '$lib/router';
   import { signOut, switchTenant } from '$lib/stores/session';
   import { showError } from '$lib/stores/toasts';
+  import { reloadFrame } from '$lib/stores/workspace';
   import { measureOverflow, scrollByPage } from '$lib/utils/overflow';
 
   interface Props {
@@ -52,6 +55,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const adminPath = $derived(adminHome(me.permissions));
   const inAdmin = $derived(isAdminArea(path));
   const tenantName = $derived(me.active_tenant?.name ?? $t('dock.tenant.none'));
+
+  // The logo of the active organization takes the place of the product mark. It follows
+  // the organization (another one, another logo, at once). An image that does not load is
+  // remembered by its address, so the mark is shown instead and a new logo is tried anew.
+  const logoUrl = $derived(me.active_tenant?.logo_url ?? null);
+  let failedLogo = $state<string | null>(null);
+  const logo = $derived(logoUrl && logoUrl !== failedLogo ? logoUrl : null);
+
+  // With the bar above an open app hidden (a personal setting, or the organization's),
+  // the actions of that bar are in the user menu, for the app that is on screen.
+  const appOnScreen = $derived(
+    me.settings.app_bar === 'hidden' && activeAppId
+      ? (apps.find((app) => app.id === activeAppId && presentation(app) === 'frame') ?? null)
+      : null,
+  );
 
   let list = $state<HTMLElement | undefined>();
   let switching = $state(false);
@@ -176,7 +194,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
     title={$t('dock.home')}
     data-testid="dock-home"
   >
-    <Mark size={30} />
+    {#if logo}
+      <img
+        class="logo"
+        src={logo}
+        alt={me.active_tenant?.name ?? ''}
+        draggable="false"
+        data-testid="dock-logo"
+        onerror={() => (failedLogo = logo)}
+      />
+    {:else}
+      <Mark size={30} />
+    {/if}
     <span class="instance" title={me.instance_name}>{me.instance_name}</span>
   </a>
 
@@ -320,6 +349,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
           {me.user.username}{me.active_tenant ? ` · ${me.active_tenant.name}` : ''}
         </span>
       </div>
+      {#if appOnScreen}
+        {@const app = appOnScreen}
+        <MenuSeparator />
+        <div class="menu-caption" role="presentation">{app.name}</div>
+        <MenuItem icon={RefreshCw} testid="menu-app-reload" onSelect={() => reloadFrame(app.id)}>
+          {$t('dock.app.reload')}
+        </MenuItem>
+        {#if app.type === 'embedded' && app.url}
+          <MenuItem
+            icon={ExternalLink}
+            testid="menu-app-open-external"
+            onSelect={() => openInNewTab(app.url ?? '')}
+          >
+            {$t('app.openInNewTab')}
+          </MenuItem>
+        {/if}
+      {/if}
       <MenuSeparator />
       <MenuItem href="/profile" icon={User} current={path === '/profile'}>
         {$t('nav.profile')}
@@ -369,6 +415,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
   .home:hover {
     background: var(--surface-hover);
     text-decoration: none;
+  }
+  /* The logo of the organization, where the product mark stands otherwise: as high as the
+     mark, never distorted. A wide image may take some more width; a tall one is narrower. */
+  .logo {
+    display: block;
+    flex: 0 0 auto;
+    width: auto;
+    height: 30px;
+    max-width: 56px;
+    object-fit: contain;
   }
   .instance {
     /* A long instance name must not take the room of the apps next to it. */
@@ -646,6 +702,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   }
   .compact .home {
     padding: var(--space-1);
+  }
+  .compact .logo {
+    max-width: 30px;
   }
   .dock.compact[data-orientation='horizontal'] :global(.dock-entry) {
     flex-direction: column;

@@ -556,6 +556,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /**
+     * ActiveTenant
+     * @description The organization the session works in, with what its interface needs to show it.
+     */
+    ActiveTenant: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Logo Url */
+      logo_url?: string | null;
+      /** Name */
+      name: string;
+      /** Slug */
+      slug: string;
+    };
     /** ActiveTenantUpdate */
     ActiveTenantUpdate: {
       /**
@@ -569,6 +586,12 @@ export interface components {
       /** Email Invitations */
       email_invitations: boolean;
     };
+    /**
+     * AppBar
+     * @description Where the bar with an open app's name and actions sits.
+     * @enum {string}
+     */
+    AppBar: 'top' | 'bottom' | 'hidden';
     /** AppCreate */
     AppCreate: {
       /**
@@ -763,8 +786,18 @@ export interface components {
       /** Total */
       total: number;
     };
-    /** EffectiveSettings */
+    /**
+     * EffectiveSettings
+     * @description What applies to this user in the active organization, and what the organization fixed.
+     */
     EffectiveSettings: {
+      /** Accent Color */
+      accent_color: string | null;
+      /** Accent Locked */
+      accent_locked: boolean;
+      app_bar: components['schemas']['AppBar'];
+      /** App Bar Locked */
+      app_bar_locked: boolean;
       /**
        * Language
        * @enum {string}
@@ -774,6 +807,8 @@ export interface components {
       /** Nav Position Locked */
       nav_position_locked: boolean;
       theme: components['schemas']['Theme'];
+      /** Theme Locked */
+      theme_locked: boolean;
     };
     /** EmbedCheckIn */
     EmbedCheckIn: {
@@ -905,6 +940,14 @@ export interface components {
       /** Url */
       url: string;
     };
+    /**
+     * LogoIn
+     * @description An uploaded image as a ``data:`` URL (the same formats and size as app icons).
+     */
+    LogoIn: {
+      /** Data Url */
+      data_url: string;
+    };
     /** LogoutOut */
     LogoutOut: {
       /**
@@ -917,7 +960,7 @@ export interface components {
     MeOut: {
       /** Account Url */
       account_url: string;
-      active_tenant: components['schemas']['TenantRef'] | null;
+      active_tenant: components['schemas']['ActiveTenant'] | null;
       /**
        * Inactive Memberships
        * @default 0
@@ -978,6 +1021,9 @@ export interface components {
     NavPosition: 'left' | 'right' | 'top' | 'bottom';
     /** OwnSettings */
     OwnSettings: {
+      /** Accent Color */
+      accent_color?: string | null;
+      app_bar?: components['schemas']['AppBar'] | null;
       /** Language */
       language?: ('de' | 'en') | null;
       nav_position?: components['schemas']['NavPosition'] | null;
@@ -1015,6 +1061,9 @@ export interface components {
     Role: 'member' | 'user_manager' | 'tenant_admin';
     /** SettingsUpdate */
     SettingsUpdate: {
+      /** Accent Color */
+      accent_color?: string | null;
+      app_bar?: components['schemas']['AppBar'] | null;
       /** Language */
       language?: ('de' | 'en') | null;
       nav_position?: components['schemas']['NavPosition'] | null;
@@ -1191,24 +1240,50 @@ export interface components {
     };
     /** TenantSettingsOut */
     TenantSettingsOut: {
+      /** Accent Color */
+      accent_color: string | null;
+      /** Accent Locked */
+      accent_locked: boolean;
+      /** App Bar Locked */
+      app_bar_locked: boolean;
+      default_app_bar: components['schemas']['AppBar'] | null;
       default_nav_position: components['schemas']['NavPosition'] | null;
+      default_theme: components['schemas']['Theme'] | null;
       /**
        * Id
        * Format: uuid
        */
       id: string;
+      /** Logo Url */
+      logo_url: string | null;
       /** Name */
       name: string;
       /** Nav Position Locked */
       nav_position_locked: boolean;
       /** Slug */
       slug: string;
+      /** Theme Locked */
+      theme_locked: boolean;
     };
-    /** TenantSettingsUpdate */
+    /**
+     * TenantSettingsUpdate
+     * @description Only what is sent changes. A default sent as null is removed; ``logo: null`` removes the logo.
+     */
     TenantSettingsUpdate: {
+      /** Accent Color */
+      accent_color?: string | null;
+      /** Accent Locked */
+      accent_locked?: boolean | null;
+      /** App Bar Locked */
+      app_bar_locked?: boolean | null;
+      default_app_bar?: components['schemas']['AppBar'] | null;
       default_nav_position?: components['schemas']['NavPosition'] | null;
+      default_theme?: components['schemas']['Theme'] | null;
+      logo?: components['schemas']['LogoIn'] | null;
       /** Nav Position Locked */
       nav_position_locked?: boolean | null;
+      /** Theme Locked */
+      theme_locked?: boolean | null;
     };
     /** TenantUpdate */
     TenantUpdate: {

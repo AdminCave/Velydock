@@ -9,11 +9,12 @@ import type { NavPosition } from '$lib/api/types';
 import { get } from 'svelte/store';
 import { location, navigate, startRouter } from '$lib/router';
 import { me, revalidateSession, session, sessionExpired, setMe } from '$lib/stores/session';
-import { loadApps, resetWorkspace } from '$lib/stores/workspace';
+import { frameReloads, frames, loadApps, resetWorkspace } from '$lib/stores/workspace';
 import {
   ACME,
   MAIN,
   PERMISSIONS,
+  SETTINGS,
   errorResponse,
   makeApp,
   makeMe,
@@ -286,6 +287,127 @@ describe('Dock', () => {
     const name = 'Stadtwerke Musterstadt Arbeitsplatz';
     renderDock({ me: makeMe({ instance_name: name }), position: 'top', edge: 'top' });
     expect(screen.getByText(name)).toHaveAttribute('title', name);
+  });
+});
+
+describe('Dock: the logo of the organization', () => {
+  const LOGO = '/api/v1/tenant/logo?v=1763900000000';
+  const withLogo = (logo_url: string | null, tenant = ACME) =>
+    makeMe({ active_tenant: { ...tenant, logo_url } });
+  const home = () => screen.getByTestId('dock-home');
+
+  it('stands where the product mark stands, as an image named after the organization', () => {
+    renderDock({ me: withLogo(LOGO) });
+    const logo = screen.getByTestId('dock-logo') as HTMLImageElement;
+    expect(logo.tagName).toBe('IMG');
+    expect(logo).toHaveAttribute('src', LOGO);
+    expect(logo).toHaveAttribute('alt', 'Acme GmbH');
+    expect(home()).toContainElement(logo);
+    expect(home().querySelector('svg')).toBeNull(); // in the place of the mark, not beside it
+    // The link is still the way to the start page, and is called that.
+    expect(home()).toHaveAttribute('href', '/');
+    expect(home()).toHaveAccessibleName('Startseite');
+  });
+
+  it('is the product mark while the organization has no logo', () => {
+    renderDock({ me: withLogo(null) });
+    expect(screen.queryByTestId('dock-logo')).toBeNull();
+    expect(home().querySelector('svg')).not.toBeNull();
+  });
+
+  it('gives way to the product mark when the image does not load', async () => {
+    renderDock({ me: withLogo(LOGO) });
+    await fireEvent.error(screen.getByTestId('dock-logo'));
+    expect(screen.queryByTestId('dock-logo')).toBeNull();
+    expect(home().querySelector('svg')).not.toBeNull();
+    expect(home()).toHaveAccessibleName('Startseite');
+  });
+
+  it('follows the organization at once: another logo, none, and a new one after a failure', async () => {
+    const view = renderDock({ me: withLogo(LOGO) });
+    const other = '/api/v1/tenant/logo?v=1763900009999';
+    await view.rerender({ me: withLogo(other, MAIN) });
+    expect(screen.getByTestId('dock-logo')).toHaveAttribute('src', other);
+    expect(screen.getByTestId('dock-logo')).toHaveAttribute('alt', 'Admin Cave');
+    await view.rerender({ me: withLogo(null, ACME) });
+    expect(screen.queryByTestId('dock-logo')).toBeNull();
+    // An image that failed is not tried again under the same address, a new one is.
+    await view.rerender({ me: withLogo(LOGO) });
+    await fireEvent.error(screen.getByTestId('dock-logo'));
+    expect(screen.queryByTestId('dock-logo')).toBeNull();
+    await view.rerender({ me: withLogo(other) });
+    expect(screen.getByTestId('dock-logo')).toHaveAttribute('src', other);
+  });
+});
+
+describe('Dock: the actions of an app whose bar is hidden', () => {
+  const custom = makeApp({ id: 'sandbox', name: 'Sandbox', type: 'custom', url: null });
+  const blocked = makeApp({ id: 'cloud', name: 'Nextcloud', embed_status: 'blocked' });
+  const all = [...apps, custom, blocked];
+  const hidden = makeMe({ settings: { ...SETTINGS, app_bar: 'hidden' } });
+  async function menu() {
+    await fireEvent.click(screen.getByTestId('user-menu'));
+    return within(await screen.findByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent?.trim());
+  }
+  let open: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    open = vi.fn();
+    vi.stubGlobal('open', open);
+    stubApi({ 'GET /api/v1/workspace/apps': () => all });
+  });
+
+  it('are in the user menu while that app is on screen: reload, and the app in a tab of its own', async () => {
+    await loadApps();
+    renderDock({ me: hidden, apps: all, activeAppId: 'wiki', path: '/app/wiki' });
+    expect(await menu()).toEqual([
+      'App neu laden',
+      'In neuem Tab öffnen',
+      'Profil',
+      'Einstellungen',
+      'Abmelden',
+    ]);
+    // Said for which app.
+    expect(screen.getByRole('menu')).toHaveTextContent('Wiki');
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'In neuem Tab öffnen' }));
+    expect(open).toHaveBeenCalledWith('https://wiki.example/', '_blank', 'noopener,noreferrer');
+
+    await fireEvent.click(screen.getByTestId('user-menu'));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'App neu laden' }));
+    // The frame of that app is created anew (AppStage keys it by this number).
+    expect(get(frameReloads)).toEqual({ wiki: 1 });
+    expect(get(frames).map((frame) => frame.appId)).toEqual(['wiki']);
+  });
+
+  it('offer no other tab for a custom app, which has no address of its own', async () => {
+    renderDock({ me: hidden, apps: all, activeAppId: 'sandbox', path: '/app/sandbox' });
+    expect(await menu()).toEqual(['App neu laden', 'Profil', 'Einstellungen', 'Abmelden']);
+  });
+
+  it('are not there while the bar is shown, where they are in the bar', async () => {
+    for (const app_bar of ['top', 'bottom'] as const) {
+      const view = renderDock({
+        me: makeMe({ settings: { ...SETTINGS, app_bar } }),
+        apps: all,
+        activeAppId: 'wiki',
+        path: '/app/wiki',
+      });
+      expect(await menu(), app_bar).toEqual(['Profil', 'Einstellungen', 'Abmelden']);
+      view.unmount();
+    }
+  });
+
+  it('are not there on a page that is no app, or for an app that has no frame', async () => {
+    const view = renderDock({ me: hidden, apps: all, activeAppId: null, path: '/settings' });
+    expect(await menu()).toEqual(['Profil', 'Einstellungen', 'Abmelden']);
+    view.unmount();
+    for (const id of ['tickets', 'cloud', 'gone']) {
+      // External, blocked from embedding, not among the user's apps: nothing to reload.
+      const other = renderDock({ me: hidden, apps: all, activeAppId: id, path: `/app/${id}` });
+      expect(await menu(), id).toEqual(['Profil', 'Einstellungen', 'Abmelden']);
+      other.unmount();
+    }
   });
 });
 

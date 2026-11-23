@@ -18,9 +18,16 @@ export interface WorkspaceState {
 
 const _workspace = writable<WorkspaceState>({ status: 'idle', apps: [] });
 const _frames = writable<KeptFrame[]>([]);
+const _reloads = writable<Record<string, number>>({});
 
 export const workspace = { subscribe: _workspace.subscribe };
 export const frames = { subscribe: _frames.subscribe };
+/**
+ * How often each app was asked to load anew. A frame is created again when its number
+ * changes. A store, because "reload" is not only in the bar above the app: with the bar
+ * hidden it is in the user menu of the dock.
+ */
+export const frameReloads = { subscribe: _reloads.subscribe };
 
 // A load that was started for another organization must not overwrite the current one.
 let generation = 0;
@@ -58,6 +65,7 @@ export function resetWorkspace(status: LoadStatus = 'idle'): void {
   generation++;
   _workspace.set({ status, apps: [] });
   _frames.set([]);
+  _reloads.set({});
 }
 
 /** Mark an app's frame as the one in use (mounting it if needed, dropping the oldest). */
@@ -65,6 +73,12 @@ export function activateFrame(appId: string): void {
   const app = get(_workspace).apps.find((a) => a.id === appId);
   if (!app || presentation(app) !== 'frame') return;
   _frames.update((list) => touchFrame(list, appId, ++tick));
+}
+
+/** Load the frame of an app anew (mounting it if it was unloaded). */
+export function reloadFrame(appId: string): void {
+  _reloads.update((counts) => ({ ...counts, [appId]: (counts[appId] ?? 0) + 1 }));
+  activateFrame(appId);
 }
 
 /**

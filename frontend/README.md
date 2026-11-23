@@ -63,7 +63,10 @@ src/
     nav.ts              navigation entries per permission, dock edge and orientation
     frames.ts           kept-alive frame list (LRU of 5), frame attributes
     frameFocus.ts       keeps the keyboard focus out of app frames that must not have it
-    theme.ts            theme preference → resolved theme, live system preference
+    theme.ts            theme preference → resolved theme, live system preference; applies
+                        theme and accent colour to <html>
+    accent.ts           one accent colour → the accent tokens of a theme, kept readable
+    imageFile.ts        an image picked from the device (app icon, logo) as a data URL
     audit.ts            audit entries as readable text
     embedDetail.ts      what the embedding check found, as text (codes of the API)
     appIcons.ts         the curated Lucide icons for apps
@@ -275,6 +278,46 @@ to `localStorage` (`velydock-theme`, `velydock-language`) so `public/theme-init.
 them before the first paint. Dark is the default; `data-theme="light"` on `<html>` selects
 the light theme; "system" follows `prefers-color-scheme` live.
 
+**Appearance per organization and per user.** An organization sets a logo and, for each of
+theme, accent colour, dock position and app bar, a default and whether it is fixed
+(`/admin/settings`); a user chooses their own on `/settings` unless the setting is fixed.
+The server decides what applies: `me.settings` is the result, `me.own_settings` the user's
+own choices, and `me.settings.*_locked` says what the organization fixed. The frontend shows
+`me.settings` and nothing else, so everything follows the next answer about the user: a
+switch of the organization, a lock that is set or lifted, a saved setting.
+
+- _Accent colour_ (`lib/accent.ts`, pure). One colour (`#rrggbb`) is chosen; the design
+  needs nine tokens from it (`--accent`, `--accent-hover`, `--accent-muted`,
+  `--accent-border`, `--link`, `--info`, `--info-bg`, `--info-border`, `--ring`: everything
+  `colors.css` builds from the blue ramp, which a test checks). The accent is the colour of
+  text (links, tags), so whatever is chosen is made readable: if it does not reach 4.5:1 on
+  every surface of the theme it becomes lighter (dark theme) or darker (light theme) in
+  OKLCH, keeping hue and chroma as far as sRGB allows, and no further than needed.
+  `applyAccent()` in `lib/theme.ts` writes the tokens for the theme on screen to `<html>` as
+  custom properties and the chosen colour as `data-accent`; `startThemeSync()` does it anew
+  whenever theme or accent changes. Without a colour the overrides are removed and the
+  style sheet's blue applies. The accent stays an accent: it is not used to fill buttons.
+- _Before the first paint._ The colour is stored with its tokens for both themes
+  (`velydock-accent`, JSON), and `public/theme-init.js` sets those for the theme it
+  resolves. It knows nothing about how they are made and sets nothing that does not look
+  like what the app stores.
+- _Where nobody is signed in_ nothing of an organization applies. The session store removes
+  the accent (and its stored copy) when the session ends, and `theme-init.js` skips it on
+  `/login`. The theme that applies may be the organization's as well, so the user's own
+  choice is stored apart (`velydock-theme-own`), and so is the default of the installation
+  as the login page last learned it (`velydock-theme-public`): the login page shows the
+  first, else the second, else follows the system.
+- _Custom apps_ get the theme with their launch and nothing else; the accent is not passed
+  into any frame.
+- _Logo._ `me.active_tenant.logo_url` replaces the product mark in the dock (`dock-logo`),
+  as high as the mark and never distorted; if the image does not load, the mark is shown.
+- _App bar_ (`me.settings.app_bar`). The bar of the app view sits above the app, below it
+  (placed by the layout: the bar stays first in the document, and no frame is moved), or is
+  not rendered. Hidden, the name of the app remains the `h1` of the page (visually hidden),
+  and "App neu laden" and "In neuem Tab öffnen" are in the user menu of the dock while a
+  framed app is on screen. Reload is a counter per app in the workspace store
+  (`reloadFrame()`), so both places create the frame anew the same way.
+
 **Translations.** Every key is one line with both languages:
 `'action.save': ['Speichern', 'Save']`. Unit tests check that every key used in the code
 exists, that none is dead, and that placeholders match. German microcopy addresses the user
@@ -300,11 +343,12 @@ matches. On top of that:
 | Hook                                  | Element                                                                                                                                                                                                                                  |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dock`                                | the dock `<nav>`. `data-nav="left\|right\|top\|bottom"` is the configured position; `data-edge` is the edge it is drawn at (on screens up to 720 px a left/right dock is drawn at the bottom); `data-orientation="vertical\|horizontal"` |
-| `dock-home`                           | link to `/` (product mark)                                                                                                                                                                                                               |
+| `dock-home`                           | link to `/` (product mark, or the logo of the organization); its name is "Startseite" either way                                                                                                                                         |
+| `dock-logo`                           | the `<img>` of the organization's logo inside `dock-home`, `alt` = name of the organization; absent without a logo or when the image does not load                                                                                       |
 | `dock-app`                            | one link per app, `data-app-id`, `data-app-type`; the accessible name is the app name; `aria-current="page"` when open                                                                                                                   |
 | `dock-admin`                          | link to the administration; only with at least one admin permission                                                                                                                                                                      |
 | `tenant-switcher`                     | menu button; only with more than one organization. Entries are `menuitem`s named by the organization; the active one has `aria-current="true"`                                                                                           |
-| `user-menu`                           | menu button; entries "Profil", "Einstellungen", "Abmelden"                                                                                                                                                                               |
+| `user-menu`                           | menu button; entries "Profil", "Einstellungen", "Abmelden". While a framed app is on screen and its bar is hidden, also "App neu laden" (`menu-app-reload`) and, for an embedded app, "In neuem Tab öffnen" (`menu-app-open-external`)   |
 | `dock-more-before`, `dock-more-after` | markers at the ends of the app list, only while there are more apps than fit in that direction; a click scrolls there. Not in the Tab order: the keyboard walks the apps, and the list scrolls with the focus                            |
 | `session-ended`                       | notice (`role="alert"`) while the page is kept after its session ended under an open app; its button "Neu anmelden" leads to the login page                                                                                              |
 | `toast`                               | each toast, `role="status"`, `data-kind="success\|error\|info"`                                                                                                                                                                          |
@@ -321,7 +365,8 @@ end that has more beyond it (a click scrolls; not in the Tab order).
 | `app-tile`           | dashboard tile (link), `data-app-id`, `data-app-type`                                             |
 | `no-tenant-page`     | the page shown to a user without organization (with a sign-out button)                            |
 | `app-frame`          | each `<iframe>`, `data-app-id`, `data-app-type="embedded\|custom"`; hidden frames stay in the DOM |
-| `app-reload`         | "Neu laden" in the app toolbar (embedded and custom)                                              |
+| `app-bar`            | the bar of the app view, `data-position="top\|bottom"`; not rendered while the bar is hidden      |
+| `app-reload`         | "Neu laden" in the app bar (embedded and custom)                                                  |
 | `app-open-external`  | "In neuem Tab öffnen": toolbar (embedded), blocked notice, or the page of an external app         |
 | `app-blocked-notice` | notice shown instead of a frame when `embed_status` is `blocked`                                  |
 | `app-slow`           | notice in the corner of a frame that has not loaded after ten seconds; can be closed              |
@@ -331,15 +376,34 @@ end that has more beyond it (a click scrolls; not in the Tab order).
 
 ### Personal settings (`/settings`)
 
-`setting-theme`, `setting-nav-position`, `setting-language` are radio groups
-(`role="radiogroup"`) with native radio inputs; `data-value` holds the current value.
+`setting-theme`, `setting-nav-position`, `setting-app-bar`, `setting-language` are radio
+groups (`role="radiogroup"`) with native radio inputs; `data-value` holds the current value.
+`default` ("Standard") means no own choice: the default of the organization applies, else
+that of the installation, and a line under the control says what that is at the moment.
+A setting the organization has fixed is disabled, shows what applies, and has a note
+(`setting-…-locked`).
 
-| Hook                   | Values (`data-value`, radio `value`)        | Radio labels (German)                                                            |
-| ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
-| `setting-theme`        | `system`, `light`, `dark`                   | System, Hell, Dunkel                                                             |
-| `setting-nav-position` | `default`, `left`, `right`, `top`, `bottom` | Standard, Links, Rechts, Oben, Unten                                             |
-| `setting-language`     | `de`, `en`                                  | Deutsch, English                                                                 |
-| `setting-nav-locked`   | –                                           | explanation shown when the organization fixed the position (radios are disabled) |
+| Hook                                                                      | Values (`data-value`, radio `value`)        | Radio labels (German)                                                            |
+| ------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `setting-theme`                                                           | `default`, `system`, `light`, `dark`        | Standard, System, Hell, Dunkel                                                   |
+| `setting-nav-position`                                                    | `default`, `left`, `right`, `top`, `bottom` | Standard, Links, Rechts, Oben, Unten                                             |
+| `setting-app-bar`                                                         | `default`, `top`, `bottom`, `hidden`        | Standard, Oben, Unten, Ausgeblendet                                              |
+| `setting-language`                                                        | `de`, `en`                                  | Deutsch, English                                                                 |
+| `setting-nav-locked`                                                      | –                                           | explanation shown when the organization fixed the position (radios are disabled) |
+| `setting-theme-locked`, `setting-accent-locked`, `setting-app-bar-locked` | –                                           | the same for theme, accent colour and app bar                                    |
+
+The accent colour is a group (`setting-accent`, `role="group"`, `data-value` = the colour
+or `default`) with:
+
+| Hook             | Element                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `accent-default` | button "Standard" (on `/admin/settings`: "Keine Vorgabe"): no colour; `aria-pressed`                  |
+| `accent-swatch`  | one button per palette colour, `data-color="#rrggbb"`, named by the colour ("Türkis"); `aria-pressed` |
+| `accent-custom`  | text field for a colour of one's own (`#rrggbb`, either case); applies as soon as it is a colour      |
+| `accent-picker`  | the native `<input type="color">`; applies on `change`                                                |
+
+`<html data-accent="#rrggbb">` names the accent colour that applies; the attribute is absent
+with the built-in one.
 
 ```ts
 await page.getByTestId('setting-nav-position').getByRole('radio', { name: 'Rechts' }).check();
@@ -348,31 +412,38 @@ await expect(page.getByTestId('dock')).toHaveAttribute('data-nav', 'right');
 
 ### Administration
 
-| Hook                  | Element                                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users-table`         | `/admin/users`; rows carry `data-user-id`, `data-username`                                                                                                                                                                                    |
-| `users-filter-role`   | `<select>`: `all`, `member`, `user_manager`, `tenant_admin`                                                                                                                                                                                   |
-| `users-filter-status` | `<select>`: `all`, `active`, `inactive`                                                                                                                                                                                                       |
-| `user-actions`        | row menu button (Bearbeiten, Passwort zurücksetzen, Sitzungen beenden, Deaktivieren/Reaktivieren, Konto löschen / Aus Organisation entfernen); the own row only offers "Bearbeiten"                                                           |
-| `temp-password`       | the one-time password, shown once after creating a user without e-mail or resetting a password; its dialog closes only through "Notiert, schließen"                                                                                           |
-| `identity-locked`     | explanation in the edit dialog when name and e-mail are read-only                                                                                                                                                                             |
-| `groups-table`        | `/admin/groups`; rows carry `data-group-id`; row menu `group-actions`; in the group dialog the checkbox of a member who outranks the administrator (`can_edit_membership: false`) is disabled                                                 |
-| `apps-table`          | `/admin/apps`; rows carry `data-app-id`; row menu `app-actions`; move buttons are named "… nach oben" / "… nach unten"                                                                                                                        |
-| `apps-moved`          | polite live region on `/admin/apps`: says where an app is after a move ("Wiki: Position 2 von 4"). A press during a running move is carried out after it                                                                                      |
-| `picker-chips`        | the chips of the chosen entries in a picker (members, groups); beyond six a button "und n weitere" shows the rest in a box that scrolls                                                                                                       |
-| `app-type`            | radio group in the app dialog: `embedded`, `external`, `custom`                                                                                                                                                                               |
-| `app-audience`        | radio group in the app dialog: `all`, `selected`                                                                                                                                                                                              |
-| `embed-check`         | result of "Einbettbarkeit prüfen"                                                                                                                                                                                                             |
-| `app-icon-preview`    | the chosen icon in the app dialog; the icon grid is a radio group, each icon named in the language of the page ("Rettungsring") and carrying its Lucide name as `data-icon` (one Tab stop; arrow keys, Home, End move, Enter or Space choose) |
-| `role-signs-out`      | notice in the user dialogs when the chosen role gives administrative rights: saving signs the person out                                                                                                                                      |
-| `field-limit`         | note under a field whose input has reached its `maxlength`                                                                                                                                                                                    |
-| `tenant-protected`    | reason in the row menu of an organization that can be neither deactivated nor deleted (`protected`); both entries are disabled                                                                                                                |
-| `revoke-self`         | reason in the own row menu on `/system/users` why the own system administrator right cannot be revoked                                                                                                                                        |
-| `tenant-nav-position` | `<select>` on `/admin/settings`: `system`, `left`, `right`, `top`, `bottom`                                                                                                                                                                   |
-| `audit-table`         | `/admin/audit` and `/system/audit`; rows carry `data-action`                                                                                                                                                                                  |
-| `tenants-table`       | `/system/tenants`; rows carry `data-tenant-id`, `data-slug`; row menu `tenant-actions`                                                                                                                                                        |
-| `system-users-table`  | `/system/users`; rows carry `data-user-id`, `data-username`; row menu `system-user-actions`                                                                                                                                                   |
-| `smtp-status`         | the "konfiguriert" indicator on `/system/settings`, `data-configured="true\|false"`                                                                                                                                                           |
+| Hook                                                                                | Element                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users-table`                                                                       | `/admin/users`; rows carry `data-user-id`, `data-username`                                                                                                                                                                                    |
+| `users-filter-role`                                                                 | `<select>`: `all`, `member`, `user_manager`, `tenant_admin`                                                                                                                                                                                   |
+| `users-filter-status`                                                               | `<select>`: `all`, `active`, `inactive`                                                                                                                                                                                                       |
+| `user-actions`                                                                      | row menu button (Bearbeiten, Passwort zurücksetzen, Sitzungen beenden, Deaktivieren/Reaktivieren, Konto löschen / Aus Organisation entfernen); the own row only offers "Bearbeiten"                                                           |
+| `temp-password`                                                                     | the one-time password, shown once after creating a user without e-mail or resetting a password; its dialog closes only through "Notiert, schließen"                                                                                           |
+| `identity-locked`                                                                   | explanation in the edit dialog when name and e-mail are read-only                                                                                                                                                                             |
+| `groups-table`                                                                      | `/admin/groups`; rows carry `data-group-id`; row menu `group-actions`; in the group dialog the checkbox of a member who outranks the administrator (`can_edit_membership: false`) is disabled                                                 |
+| `apps-table`                                                                        | `/admin/apps`; rows carry `data-app-id`; row menu `app-actions`; move buttons are named "… nach oben" / "… nach unten"                                                                                                                        |
+| `apps-moved`                                                                        | polite live region on `/admin/apps`: says where an app is after a move ("Wiki: Position 2 von 4"). A press during a running move is carried out after it                                                                                      |
+| `picker-chips`                                                                      | the chips of the chosen entries in a picker (members, groups); beyond six a button "und n weitere" shows the rest in a box that scrolls                                                                                                       |
+| `app-type`                                                                          | radio group in the app dialog: `embedded`, `external`, `custom`                                                                                                                                                                               |
+| `app-audience`                                                                      | radio group in the app dialog: `all`, `selected`                                                                                                                                                                                              |
+| `embed-check`                                                                       | result of "Einbettbarkeit prüfen"                                                                                                                                                                                                             |
+| `app-icon-preview`                                                                  | the chosen icon in the app dialog; the icon grid is a radio group, each icon named in the language of the page ("Rettungsring") and carrying its Lucide name as `data-icon` (one Tab stop; arrow keys, Home, End move, Enter or Space choose) |
+| `role-signs-out`                                                                    | notice in the user dialogs when the chosen role gives administrative rights: saving signs the person out                                                                                                                                      |
+| `field-limit`                                                                       | note under a field whose input has reached its `maxlength`                                                                                                                                                                                    |
+| `tenant-protected`                                                                  | reason in the row menu of an organization that can be neither deactivated nor deleted (`protected`); both entries are disabled                                                                                                                |
+| `revoke-self`                                                                       | reason in the own row menu on `/system/users` why the own system administrator right cannot be revoked                                                                                                                                        |
+| `tenant-theme`                                                                      | `<select>` on `/admin/settings`, default theme: `none` ("Keine Vorgabe"), `system`, `light`, `dark`                                                                                                                                           |
+| `tenant-accent`                                                                     | the accent colour group on `/admin/settings` (see `setting-accent` for what is in it); `tenant-accent-preview` shows the colour as it comes out, one tile per theme (`data-scheme`, `data-accent`)                                            |
+| `tenant-nav`                                                                        | `<select>` on `/admin/settings`, default dock position: `system`, `left`, `right`, `top`, `bottom` (was `tenant-nav-position`)                                                                                                                |
+| `tenant-app-bar`                                                                    | `<select>` on `/admin/settings`, default app bar: `none`, `top`, `bottom`, `hidden`                                                                                                                                                           |
+| `tenant-theme-lock`, `tenant-accent-lock`, `tenant-nav-lock`, `tenant-app-bar-lock` | the switches "… für alle festlegen" (`role="switch"`), one per setting                                                                                                                                                                        |
+| `tenant-logo-input`                                                                 | the file input for the logo (PNG, JPEG, GIF, WebP, SVG, at most 256 KB; checked before sending)                                                                                                                                               |
+| `tenant-logo-preview`                                                               | the logo as it will stand in the dock, on a light and on a dark tile; shows a chosen file before it is saved                                                                                                                                  |
+| `tenant-logo-remove`                                                                | button "Logo entfernen"                                                                                                                                                                                                                       |
+| `audit-table`                                                                       | `/admin/audit` and `/system/audit`; rows carry `data-action`                                                                                                                                                                                  |
+| `tenants-table`                                                                     | `/system/tenants`; rows carry `data-tenant-id`, `data-slug`; row menu `tenant-actions`                                                                                                                                                        |
+| `system-users-table`                                                                | `/system/users`; rows carry `data-user-id`, `data-username`; row menu `system-user-actions`                                                                                                                                                   |
+| `smtp-status`                                                                       | the "konfiguriert" indicator on `/system/settings`, `data-configured="true\|false"`                                                                                                                                                           |
 
 Confirmations are dialogs named by their title (for example "Konto löschen", "Gruppe
 löschen", "App löschen", "Organisation deaktivieren"); the confirming button repeats the

@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { setAccentColor } from '$lib/theme';
 import { errorResponse, makeApp, stubApi } from '../../../test/fixtures';
 import AppFrame, { SLOW_AFTER_MS } from './AppFrame.svelte';
 
@@ -66,6 +67,19 @@ describe('custom app frame', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].headers['X-Velydock-CSRF']).toBe('1');
     expect(calls[0].body).toEqual({ theme: 'dark', language: 'de' });
+  });
+
+  it('hands a custom app the theme and nothing else of the appearance: no accent colour', async () => {
+    setAccentColor('#c2410c');
+    const { calls } = stubApi({
+      [LAUNCH]: () => ({ url: 'http://sandbox.test/c/token-1', expires_in: 300 }),
+    });
+    render(AppFrame, { app: customApp(), active: true });
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(Object.keys(calls[0].body as object).sort()).toEqual(['language', 'theme']);
+    expect(frame().getAttribute('src')).toBe('http://sandbox.test/c/token-1'); // as signed
+    expect(frame().getAttribute('style') ?? '').not.toContain('--accent');
+    setAccentColor(null);
   });
 
   it('requests a fresh address whenever the frame is reloaded', async () => {

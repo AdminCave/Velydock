@@ -12,7 +12,8 @@ import {
 } from '$lib/api/client';
 import type { Me, SettingsUpdate } from '$lib/api/types';
 import { isLanguage, setLanguage, tNow } from '$lib/i18n';
-import { isThemePreference, setThemePreference } from '$lib/theme';
+import { normalizeAccent } from '$lib/accent';
+import { isThemePreference, setAccentColor, setThemePreference, showOwnTheme } from '$lib/theme';
 import { leaveTo, reloadPage } from '$lib/utils/browser';
 import { showToast } from './toasts';
 import { frames } from './workspace';
@@ -77,11 +78,26 @@ function put(state: SessionState): void {
   // that whatever reacts to the new session at once already speaks for its organization.
   setActiveTenant(state.me?.active_tenant?.id);
   _session.set(state);
+  // Nobody is signed in (any more): what applied to the user in their organization, its
+  // theme and its accent colour, goes with the session. The login page shows nothing of
+  // it. (An error at start-up says nothing about the session: the page stays as painted.)
+  if (!state.me && state.status !== 'error') {
+    showOwnTheme();
+    setAccentColor(null);
+  }
 }
 
-/** The effective settings of the user drive theme and language of the whole UI. */
+/**
+ * The effective settings of the user drive theme, accent colour and language of the whole
+ * UI. Theme and accent are what applies in the active organization (its default, or what
+ * it fixed for everybody, or the user's own choice): they follow a switch of the
+ * organization and a lock that is set or lifted with the next answer about the user.
+ */
 function applySettings(value: Me): void {
-  if (isThemePreference(value.settings.theme)) setThemePreference(value.settings.theme);
+  if (isThemePreference(value.settings.theme)) {
+    setThemePreference(value.settings.theme, { own: value.own_settings.theme ?? null });
+  }
+  setAccentColor(value.settings.accent_color);
   if (isLanguage(value.settings.language)) setLanguage(value.settings.language);
 }
 
@@ -375,14 +391,21 @@ export async function updateSettings(patch: SettingsUpdate): Promise<void> {
       ...before,
       // The own choices change exactly as sent (null = back to the default) …
       own_settings: { ...before.own_settings, ...patch },
-      // … the effective values only where the new value is known without asking the server.
+      // … the effective values only where the new value is known without asking the
+      // server: a concrete choice for a setting the organization has not fixed. (A choice
+      // for a fixed one is stored and applies once the lock is lifted; after a reset the
+      // server says what applies instead.)
       settings: {
         ...before.settings,
-        ...(patch.theme ? { theme: patch.theme } : {}),
+        ...(patch.theme && !before.settings.theme_locked ? { theme: patch.theme } : {}),
         ...(patch.language ? { language: patch.language } : {}),
         ...(patch.nav_position && !before.settings.nav_position_locked
           ? { nav_position: patch.nav_position }
           : {}),
+        ...(normalizeAccent(patch.accent_color) && !before.settings.accent_locked
+          ? { accent_color: normalizeAccent(patch.accent_color) }
+          : {}),
+        ...(patch.app_bar && !before.settings.app_bar_locked ? { app_bar: patch.app_bar } : {}),
       },
     };
     show(optimistic);

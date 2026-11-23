@@ -46,6 +46,7 @@ export const shell = {
   'shell.skip': ['Zum Inhalt springen', 'Skip to content'],
   'dock.label': ['Hauptnavigation', 'Main navigation'],
   'dock.home': ['Startseite', 'Home'],
+  'dock.app.reload': ['App neu laden', 'Reload app'],
   'dock.apps': ['Apps', 'Apps'],
   'dock.apps.before': ['Vorherige Apps zeigen', 'Show previous apps'],
   'dock.apps.after': ['Weitere Apps zeigen', 'Show more apps'],

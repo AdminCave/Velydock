@@ -58,9 +58,54 @@ export const account = {
     '„System“ folgt der Einstellung deines Geräts, auch wenn sie abends von selbst auf dunkel wechselt.',
     '“System” follows your device, even when it switches to dark by itself in the evening.',
   ],
+  'settings.theme.default': ['Standard', 'Default'],
+  'settings.theme.defaultHint': [
+    '„Standard“ folgt der Vorgabe deiner Organisation. Derzeit: {theme}.',
+    '“Default” follows what your organization has set. Currently: {theme}.',
+  ],
   'settings.theme.system': ['System', 'System'],
   'settings.theme.light': ['Hell', 'Light'],
   'settings.theme.dark': ['Dunkel', 'Dark'],
+  'settings.theme.locked': [
+    'Deine Organisation hat das Design für alle festgelegt: {theme}. Deshalb kannst du es hier nicht ändern.',
+    'Your organization has fixed the theme for everyone: {theme}. That is why you cannot change it here.',
+  ],
+  'settings.accent.title': ['Akzentfarbe', 'Accent colour'],
+  'settings.accent.text': [
+    'Die Farbe von Links, Markierungen und dem Rahmen um das, was gerade den Fokus hat. Nimm, was dir gefällt: Jede Farbe wird so aufgehellt oder abgedunkelt, dass sie im hellen wie im dunklen Design lesbar bleibt.',
+    'The colour of links, tags and the ring around whatever has the focus. Take what you like: any colour is made lighter or darker until it is readable in the light and in the dark theme.',
+  ],
+  'settings.accent.default': ['Standard', 'Default'],
+  'settings.accent.defaultHint.organization': [
+    '„Standard“ folgt der Vorgabe deiner Organisation. Derzeit: {color}.',
+    '“Default” follows what your organization has set. Currently: {color}.',
+  ],
+  'settings.accent.defaultHint.builtin': [
+    '„Standard“ folgt der Vorgabe deiner Organisation. Derzeit gibt es keine: Es gilt das eingebaute Blau.',
+    '“Default” follows what your organization has set. Currently there is nothing: the built-in blue applies.',
+  ],
+  'settings.accent.locked': [
+    'Deine Organisation hat die Akzentfarbe für alle festgelegt: {color}. Deshalb kannst du sie hier nicht ändern.',
+    'Your organization has fixed the accent colour for everyone: {color}. That is why you cannot change it here.',
+  ],
+  'settings.accent.lockedBuiltin': [
+    'Deine Organisation hat die Akzentfarbe für alle festgelegt: das eingebaute Blau. Deshalb kannst du sie hier nicht ändern.',
+    'Your organization has fixed the accent colour for everyone: the built-in blue. That is why you cannot change it here.',
+  ],
+  'settings.appBar.title': ['App-Leiste', 'App bar'],
+  'settings.appBar.text': [
+    'Die Leiste an einer geöffneten App zeigt ihren Namen und die Schaltflächen „Neu laden“ und „In neuem Tab öffnen“. Ausgeblendet hat die App die ganze Höhe; beides findest du dann im Benutzermenü des Docks.',
+    'The bar at an open app shows its name and the buttons “Reload” and “Open in new tab”. Hidden, the app has the whole height; you find both in the user menu of the dock then.',
+  ],
+  'settings.appBar.default': ['Standard', 'Default'],
+  'settings.appBar.defaultHint': [
+    '„Standard“ folgt der Vorgabe deiner Organisation. Derzeit: {position}.',
+    '“Default” follows what your organization has set. Currently: {position}.',
+  ],
+  'settings.appBar.locked': [
+    'Deine Organisation hat die App-Leiste für alle festgelegt: {position}. Deshalb kannst du sie hier nicht ändern.',
+    'Your organization has fixed the app bar for everyone: {position}. That is why you cannot change it here.',
+  ],
   'settings.nav.title': ['Position der Navigation', 'Navigation position'],
   'settings.nav.text': [
     'An welcher Seite das Dock mit deinen Apps sitzt. Auf schmalen Bildschirmen wandert ein seitliches Dock nach unten.',

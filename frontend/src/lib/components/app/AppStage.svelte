@@ -17,7 +17,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
   import { startFrameFocusGuard } from '$lib/frameFocus';
   import { openInNewTab, presentation } from '$lib/frames';
   import { t } from '$lib/i18n';
-  import { activateFrame, dropFrame, frames, loadApps, workspace } from '$lib/stores/workspace';
+  import { me } from '$lib/stores/session';
+  import {
+    activateFrame,
+    dropFrame,
+    frameReloads,
+    frames,
+    loadApps,
+    reloadFrame,
+    workspace,
+  } from '$lib/stores/workspace';
   import { showError, showToast } from '$lib/stores/toasts';
   import AppFrame from './AppFrame.svelte';
   import AppIcon from './AppIcon.svelte';
@@ -33,8 +42,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
   const app = $derived(appId ? (apps.find((a) => a.id === appId) ?? null) : null);
   const mode = $derived(app ? presentation(app) : null);
 
-  // Reload counters per app; bumping one re-creates that app's frame.
-  let nonces = $state<Record<string, number>>({});
+  // The bar with the name of the app and its actions: above the app, below it, or not
+  // shown at all (the user's choice, or what their organization fixed). Hidden, the app has
+  // the whole height; its actions are in the user menu of the dock then (Dock.svelte), and
+  // its name stays the heading of the page for assistive technology.
+  const bar = $derived($me?.settings.app_bar ?? 'top');
 
   // The app on screen, if it was unloaded for taking the keyboard focus (see below). It
   // then stays unloaded until the user asks for it again or comes back to it.
@@ -81,10 +93,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
     activateFrame(app.id);
   }
 
-  function reload() {
-    if (!app) return;
-    nonces[app.id] = (nonces[app.id] ?? 0) + 1;
-  }
+  // "Reload" (in the bar, or in the user menu while the bar is hidden) creates the frame
+  // anew: see `frameReloads`. It also brings back an app that was unloaded.
+  let reloadsSeen: Record<string, number> = {};
+  $effect(() => {
+    const counts = $frameReloads;
+    untrack(() => {
+      if (closed !== null && (counts[closed] ?? 0) !== (reloadsSeen[closed] ?? 0)) closed = null;
+      reloadsSeen = counts;
+    });
+  });
 
   function host(url: string | null | undefined): string {
     if (!url) return '';
@@ -97,14 +115,25 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </script>
 
 <section class="stage" hidden={appId === null} aria-label={app?.name ?? $t('app.view')}>
-  {#if appId !== null && app}
-    <header class="bar">
+  {#if appId !== null && app && bar === 'hidden'}
+    <!-- No bar: the name of the app is still the heading of this page. -->
+    <h1 class="visually-hidden">{app.name}</h1>
+  {:else if appId !== null && app}
+    <!-- First in the document in either position (heading, then the app); below the app
+         it is put there by the layout, not by moving it: a frame that is moved in the
+         document loads anew. -->
+    <header class="bar" data-testid="app-bar" data-position={bar}>
       <span class="glyph"><AppIcon name={app.icon_name} url={app.icon_url} size={18} /></span>
       <h1 class="name">{app.name}</h1>
       {#if app.url}<span class="host mono">{host(app.url)}</span>{/if}
       <span class="spacer"></span>
       {#if mode === 'frame'}
-        <button type="button" class="tool" data-testid="app-reload" onclick={reload}>
+        <button
+          type="button"
+          class="tool"
+          data-testid="app-reload"
+          onclick={() => reloadFrame(app.id)}
+        >
           <RefreshCw size={15} />
           <span class="tool-label">{$t('app.reload')}</span>
         </button>
@@ -129,7 +158,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
     {#each $frames as frame (frame.appId)}
       {@const framed = apps.find((a) => a.id === frame.appId)}
       {#if framed}
-        <AppFrame app={framed} active={frame.appId === appId} nonce={nonces[frame.appId] ?? 0} />
+        <AppFrame
+          app={framed}
+          active={frame.appId === appId}
+          nonce={$frameReloads[frame.appId] ?? 0}
+        />
       {/if}
     {/each}
 
@@ -234,6 +267,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
     height: 48px;
     padding: 0 var(--space-3) 0 var(--space-5);
     border-bottom: 1px solid var(--border);
+  }
+  .bar[data-position='bottom'] {
+    order: 1;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
   }
   .glyph {
     display: inline-flex;

@@ -143,7 +143,34 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
         parts.push(t('audit.detail.deletedUsers', { count: d.deleted_users }));
       }
       break;
-    case 'tenant.settings':
+    case 'tenant.settings': {
+      // Flat: each changed setting with its new value, a default that was removed as null.
+      const none = t('tenantSettings.noDefault');
+      const lock = (name: string, on: string, off: string) => {
+        if (d[name] === true) parts.push(t(on));
+        if (d[name] === false) parts.push(t(off));
+      };
+      if ('logo' in d) {
+        parts.push(
+          t(d.logo === 'removed' ? 'audit.detail.logoRemoved' : 'audit.detail.logoChanged'),
+        );
+      }
+      if ('default_theme' in d) {
+        parts.push(
+          t('audit.detail.themeDefault', {
+            theme: d.default_theme ? label('settings.theme', d.default_theme, t) : none,
+          }),
+        );
+      }
+      lock('theme_locked', 'audit.detail.themeLocked', 'audit.detail.themeUnlocked');
+      if ('accent_color' in d) {
+        parts.push(
+          t('audit.detail.accentDefault', {
+            color: d.accent_color ? String(d.accent_color) : none,
+          }),
+        );
+      }
+      lock('accent_locked', 'audit.detail.accentLocked', 'audit.detail.accentUnlocked');
       if ('default_nav_position' in d) {
         parts.push(
           t('audit.detail.navDefault', {
@@ -153,9 +180,17 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
           }),
         );
       }
-      if (d.nav_position_locked === true) parts.push(t('audit.detail.navLocked'));
-      if (d.nav_position_locked === false) parts.push(t('audit.detail.navUnlocked'));
+      lock('nav_position_locked', 'audit.detail.navLocked', 'audit.detail.navUnlocked');
+      if ('default_app_bar' in d) {
+        parts.push(
+          t('audit.detail.appBarDefault', {
+            position: d.default_app_bar ? label('appBar', d.default_app_bar, t) : none,
+          }),
+        );
+      }
+      lock('app_bar_locked', 'audit.detail.appBarLocked', 'audit.detail.appBarUnlocked');
       break;
+    }
   }
   return parts.join(' · ');
 }

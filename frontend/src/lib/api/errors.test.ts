@@ -44,6 +44,8 @@ const BACKEND_CODES = [
   'content_required',
   'icon_invalid',
   'icon_too_large',
+  'logo_invalid',
+  'logo_too_large',
   'order_mismatch',
   'not_embedded',
   'try_again',

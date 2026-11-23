@@ -26,6 +26,26 @@ export const PERMISSIONS = {
   ],
 };
 
+/** The settings of somebody who chose nothing, in an organization that set nothing. */
+export const SETTINGS: Me['settings'] = {
+  theme: 'system',
+  nav_position: 'left',
+  accent_color: null,
+  app_bar: 'top',
+  language: 'de',
+  theme_locked: false,
+  nav_position_locked: false,
+  accent_locked: false,
+  app_bar_locked: false,
+};
+export const OWN_SETTINGS: Me['own_settings'] = {
+  theme: null,
+  nav_position: null,
+  accent_color: null,
+  app_bar: null,
+  language: null,
+};
+
 export function makeMe(overrides: Partial<Me> = {}): Me {
   return {
     user: {
@@ -42,8 +62,8 @@ export function makeMe(overrides: Partial<Me> = {}): Me {
     permissions: PERMISSIONS.member,
     memberships: [{ tenant: ACME, role: 'member' }],
     inactive_memberships: 0,
-    settings: { theme: 'system', nav_position: 'left', language: 'de', nav_position_locked: false },
-    own_settings: { theme: null, nav_position: null, language: null },
+    settings: SETTINGS,
+    own_settings: OWN_SETTINGS,
     instance_name: 'Velydock',
     account_url: 'https://idp.example/account',
     version: '0.1.0',

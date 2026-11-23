@@ -13,6 +13,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     size?: 'sm' | 'md';
     label?: string;
     id?: string;
+    testid?: string;
     onChange?: (checked: boolean) => void;
   }
 
@@ -22,6 +23,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     size = 'md',
     label,
     id,
+    testid,
     onChange,
   }: Props = $props();
 
@@ -45,6 +47,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     aria-labelledby={label ? undefined : field?.labelId}
     aria-describedby={field?.describedBy}
     {disabled}
+    data-testid={testid}
     onclick={toggle}
   >
     <span class="knob"></span>

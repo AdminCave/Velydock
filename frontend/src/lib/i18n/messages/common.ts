@@ -88,6 +88,25 @@ export const common = {
   'nav.position.top': ['Oben', 'Top'],
   'nav.position.bottom': ['Unten', 'Bottom'],
   'nav.position.systemDefault': ['Systemstandard', 'System default'],
+  'appBar.top': ['Oben', 'Top'],
+  'appBar.bottom': ['Unten', 'Bottom'],
+  'appBar.hidden': ['Ausgeblendet', 'Hidden'],
+
+  // ── Accent colour ────────────────────────────────────────────────────
+  'accent.custom': ['Eigene Farbe', 'Own colour'],
+  'accent.custom.pick': ['Farbe auswählen', 'Pick a colour'],
+  'accent.custom.invalid': [
+    'Eine Farbe sieht so aus: #c2410c – ein # und sechs Zeichen aus 0–9 und a–f.',
+    'A colour looks like this: #c2410c – a # and six characters from 0–9 and a–f.',
+  ],
+  'accent.color.blue': ['Blau', 'Blue'],
+  'accent.color.cyan': ['Petrol', 'Cyan'],
+  'accent.color.teal': ['Türkis', 'Teal'],
+  'accent.color.green': ['Grün', 'Green'],
+  'accent.color.amber': ['Bernstein', 'Amber'],
+  'accent.color.orange': ['Orange', 'Orange'],
+  'accent.color.pink': ['Pink', 'Pink'],
+  'accent.color.violet': ['Violett', 'Violet'],
 
   // ── Validation in forms ──────────────────────────────────────────────
   'validation.required': ['Dieses Feld wird gebraucht.', 'This field is required.'],
