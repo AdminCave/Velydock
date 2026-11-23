@@ -173,17 +173,15 @@ test.describe('Die Docker-Installation', () => {
     expect((await request.get('/api/health')).status()).toBe(200);
 
     // Where browsers on their way to a published app arrive is behind the same limit: it answers
-    // without a sign-in, and every answer costs a look into the database.
+    // without a sign-in, and every answer costs a look into the database. One large burst: these
+    // answers take longer than a health check, and between smaller ones the allowance would refill.
     const detour = '/proxy/login?p=00000000-0000-4000-8000-000000000000';
-    let refused = 0;
-    for (let round = 0; round < 12 && refused === 0; round++) {
-      const statuses = await Promise.all(
-        Array.from({ length: 300 }, () => request.get(detour, { maxRedirects: 0 }).then((response) => response.status())),
-      );
-      expect(statuses.filter((status) => status !== 404 && status !== 429)).toEqual([]);
-      refused += statuses.filter((status) => status === 429).length;
-    }
-    expect(refused, 'a burst at the detour is throttled').toBeGreaterThan(0);
+    const statuses = await Promise.all(
+      Array.from({ length: 900 }, () => request.get(detour, { maxRedirects: 0 }).then((response) => response.status())),
+    );
+    expect(statuses.filter((status) => status !== 404 && status !== 429)).toEqual([]);
+    expect(statuses.filter((status) => status === 429).length, 'a burst at the detour is throttled').toBeGreaterThan(0);
+    expect(statuses.filter((status) => status === 404).length, 'normal use is not').toBeGreaterThanOrEqual(300);
     await new Promise((resolve) => setTimeout(resolve, 4000));
     expect((await request.get('/api/health')).status()).toBe(200);
   });
