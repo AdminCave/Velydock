@@ -95,6 +95,41 @@ Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je B
   wirklich neu.
 - Die Anmeldeseite bekommt nichts vom Erscheinungsbild einer Organisation.
 
+## Apps über den Proxy veröffentlichen
+
+Velydocks Seite prüft `test_proxy.py` (123 Tests); dass der Proxy damit tut, was gemeint ist,
+prüft `07b-app-proxy` gegen den echten Traefik.
+
+- **Was veröffentlicht werden darf.** Nur innerhalb dessen, was der Systemadministrator für die
+  Organisation freigegeben hat (Netz, Adresse, Port, genauer Hostname); nie eine Adresse der
+  Installation selbst – auch nicht als IPv6-Schreibweise, die eine IPv4-Adresse einpackt, und
+  auch nicht, wenn ein Dienst die Adresse erst später bekommt. Die Datenbank lässt eine
+  Organisation ihre Freigaben und die Erlaubnis für Pfad-Adressen nur lesen.
+- **Die Routen.** Aus geprüftem Namen und Art gebaut; kein Name kann einen Host von Velydock
+  bezeichnen. Was abgeschaltet, zurückgezogen oder ohne Vorlage ist, steht nicht darin. Im
+  Browser: Nach zurückgezogener Freigabe ist die Adresse Sekunden später weg, nach erneuter
+  Freigabe wieder da.
+- **Eingaben, die Traefik nicht versteht.** Jede erlaubte Middleware ist Feld für Feld mit der
+  Art ihres Wertes bekannt. `backend/tests/data/traefik_middlewares.json` enthält für jedes Feld
+  einen gültigen Wert: Der Backend-Test prüft, dass die Datei kein Feld auslässt, der
+  Browser-Test gibt sie dem echten Traefik und prüft, dass danach noch neue Routen ankommen. Das
+  `true` anstelle einer Zahl, das im Versuch die Routen aller Organisationen einfror, wird
+  abgelehnt.
+- **Anmeldung vor dem Weiterleiten.** Eine Seite wird zu Velydocks Anmeldung geschickt, die
+  Anfrage eines Skripts bekommt `401`; das Ticket gilt einmal, nur für seine App, nur im
+  Browser, der es angefordert hat; das Ziel nach der Anmeldung ist eine Seite dieser App und
+  nichts sonst. Im Browser: Ein Anmelde-Link, den jemand weitergibt, meldet den Empfänger als
+  ihn selbst an.
+- **Wer hineinkommt.** Nur wer die App freigegeben bekam – nicht einmal ihr Administrator ohne
+  Freigabe. Entzogene Freigabe, beendete Session und ein in Keycloak gesperrtes Konto beenden
+  den Zugriff. Die Arbeit in der App zählt als Aktivität der Session.
+- **Wer angemeldet ist, sagt nur Velydock.** Mitgeschickte `X-Velydock-…`-Kopfzeilen kommen bei
+  der App nicht an, bei öffentlichen Apps nie eine davon (im Browser gegen einen Dienst
+  geprüft, der seine Anfrage zurückgibt).
+- **Die Wege zwischen Traefik und Velydock** gibt es von außen nicht, mit oder ohne Geheimnis.
+- Jede der Schutzmaßnahmen aus der unabhängigen Prüfung wurde einzeln entfernt; jedes Mal
+  schlug ein Test fehl (18 von 18).
+
 ## Sicherheitstests im Einzelnen
 
 **Mandantenisolation** (`test_tenant_isolation.py`, `06-tenant-isolation`)

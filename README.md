@@ -17,6 +17,12 @@ Teil von [Admin Cave](https://admincave.com). Lizenz: GPL-3.0-or-later.
   helles und dunkles Design, Deutsch und Englisch, auch auf dem Telefon bedienbar.
 - **Drei Arten von Apps:** eingebettet im Frame, im neuen Tab, oder als eigene App aus HTML, CSS
   und JavaScript in einer abgeschotteten Sandbox.
+- **Apps veröffentlichen:** interne Anwendungen über den eingebauten Proxy unter einer
+  öffentlichen Adresse bereitstellen (`apps.example.com/name/` oder eigene Subdomain) –
+  geschützt durch die Velydock-Anmeldung oder öffentlich, mit Vorlagen für die
+  Proxy-Einstellungen.
+- **Erscheinungsbild:** Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation
+  und je Benutzer; die Organisation kann jede Einstellung für alle festlegen.
 - **Mandanten:** beliebig viele Organisationen mit eigenen Benutzern, Gruppen, Apps und
   Administratoren. Die Trennung wird in der API und zusätzlich in der Datenbank erzwungen.
 - **Benutzerverwaltung in der Oberfläche:** anlegen, bearbeiten, sperren, suchen, Gruppen und
