@@ -19,13 +19,13 @@ services:
 
   velydock:
     build: .
-    image: velydock:dev
+    image: ${VELYDOCK_DEV_IMAGE:-velydock:dev}
     environment:
       VELYDOCK_ENVIRONMENT: development
 
   theme:
     build: .
-    image: velydock:dev
+    image: ${VELYDOCK_DEV_IMAGE:-velydock:dev}
 
   keycloak:
     environment:

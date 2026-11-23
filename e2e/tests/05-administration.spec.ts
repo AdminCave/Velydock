@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { attemptSignIn, chooseNewPassword } from '../support/keycloak';
 import { MAIL_SMTP, mailTo } from '../support/mail';
-import { AUTH_URL, DOCK_URL, PASSWORD } from '../support/stack';
+import { AUTH_URL, DEMO_URL, DOCK_URL, PASSWORD } from '../support/stack';
 import { dockApp, dockAppNames } from '../support/ui';
 import { apiAs, contextAs, firstSignIn, signIn, unique, world } from '../support/world';
 
@@ -229,7 +229,7 @@ test.describe('Verwaltung einer Organisation', () => {
     await dialog.getByLabel('Name', { exact: true }).fill(name);
     await dialog.getByLabel('Beschreibung', { exact: true }).fill('Unser Handbuch');
     await dialog.getByTestId('app-type').locator('label:has(input[value="external"])').click();
-    await dialog.getByLabel('Adresse (URL)', { exact: true }).fill('https://demo.velydock.localhost:8443/wiki');
+    await dialog.getByLabel('Adresse (URL)', { exact: true }).fill(`${DEMO_URL}/wiki`);
     await dialog.getByTestId('app-audience').locator('label:has(input[value="selected"])').click();
     await dialog.getByRole('group', { name: 'Gruppen' }).locator('label', { hasText: 'Büro' }).click();
     await dialog.getByRole('button', { name: 'App anlegen' }).click();

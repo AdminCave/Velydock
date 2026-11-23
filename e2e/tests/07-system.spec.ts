@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { DEMO_URL } from '../support/stack';
 import { dockApp } from '../support/ui';
 import { apiAs, contextAs, firstSignIn, unique, world } from '../support/world';
 
@@ -31,7 +32,7 @@ test.describe('Systemverwaltung', () => {
     expect(user.status()).toBe(201);
     const app = await (
       await root.post('/api/v1/admin/apps', {
-        data: { name: 'Kundenportal', type: 'external', url: 'https://demo.velydock.localhost:8443/portal', visible_to_all: true },
+        data: { name: 'Kundenportal', type: 'external', url: `${DEMO_URL}/portal`, visible_to_all: true },
       })
     ).json();
     await page.goto('/');
