@@ -7,8 +7,11 @@ business of the browser suite, which runs the real one.
 
 from __future__ import annotations
 
+import json
+import time
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -25,10 +28,16 @@ from velydock.app import create_app
 from velydock.config import Settings
 from velydock.db import Scope, transaction
 from velydock.errors import ApiError
+from velydock.idp.base import IdpUnavailable
 from velydock.models import AppPublication, AuthSession, ProxyTarget, Role, Tenant, User
+from velydock.security import sessions as session_store
 from velydock.security.oidc import OidcClient
 from velydock.security.tokens import hash_token
 from velydock.services import proxy
+
+MIDDLEWARE_SAMPLES = json.loads(
+    (Path(__file__).parent.parent / "data" / "traefik_middlewares.json").read_text(encoding="utf-8")
+)["sets"]
 
 SECRET = "proxy-secret-for-the-tests"
 INTERNAL = {"Host": "velydock:8000"}
@@ -189,6 +198,12 @@ class TestWhereAnAppMayBePublishedFrom:
             "http://postgres:5432",
             "http://traefik:8080",
             "http://foo.localhost",
+            # The same addresses dressed as IPv6: a network may unwrap and deliver them.
+            "http://[::127.0.0.1]:8000",  # IPv4-compatible
+            "http://[2002:7f00:1::]:8000",  # 6to4 of 127.0.0.1
+            "http://[2002:a9fe:a9fe::]",  # 6to4 of 169.254.169.254
+            "http://[64:ff9b::7f00:1]",  # NAT64 of 127.0.0.1
+            "http://[2001:0:7f00:1::]",  # Teredo, server 127.0.0.1
         ],
     )
     async def test_the_installation_itself_is_never_a_target_whatever_was_released(
@@ -225,6 +240,38 @@ class TestWhereAnAppMayBePublishedFrom:
             await self.check(world.settings, url)
         assert refused.value.code == "proxy_target_invalid"
 
+    async def test_an_address_of_the_installation_s_own_services_is_no_target(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The database, Keycloak and Velydock have addresses in some network. Releasing that
+        network must not publish them - neither plainly nor wrapped into an IPv6 form."""
+        own = frozenset({"10.20.0.9"})
+        monkeypatch.setattr(proxy, "_own_cache", (time.monotonic() + 60, own))
+        everything = ("0.0.0.0/0", "::/0")
+        assert await self.check(world.settings, "http://10.20.0.7", everything) == "http://10.20.0.7"
+        for url in ("http://10.20.0.9:5432", "http://[::ffff:10.20.0.9]", "http://[2002:a14:9::]:5432"):
+            with pytest.raises(ApiError) as refused:
+                await self.check(world.settings, url, everything)
+            assert refused.value.code == "proxy_target_not_allowed", url
+        # Asked again whenever the routes are built: containers get new addresses over time.
+        assert proxy.still_released(world.settings, "http://10.20.0.7", list(everything), own)
+        assert not proxy.still_released(world.settings, "http://10.20.0.9", list(everything), own)
+        assert not proxy.still_released(world.settings, "http://[2002:a14:9::]", list(everything), own)
+        assert not proxy.still_released(world.settings, "http://[2002:7f00:1::]", list(everything))
+
+    async def test_an_address_that_later_becomes_the_installation_s_own_goes_off_the_proxy(
+        self, world: World, acme: Tenant, anna: User, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await release(acme, "10.20.0.0/16")
+        async with await world.login(anna) as client:
+            assert (await publish(client, "wiki")).status_code == 201
+            assert len((await routes(world))["http"]["routers"]) == 1
+            # A container was recreated and now has the address the app pointed to.
+            monkeypatch.setattr(proxy, "_own_cache", (time.monotonic() + 60, frozenset({"10.20.0.7"})))
+            assert await routes(world) == {}
+            listed = (await client.get("/api/v1/admin/apps")).json()
+            assert listed[0]["publication"]["problem"] == "target_not_allowed"
+
 
 class TestOptions:
     def test_what_an_organization_may_set(self) -> None:
@@ -245,6 +292,15 @@ class TestOptions:
             {"rate_limit": {"average": 0, "burst": 1}},
             {"rate_limit": {"average": 10, "burst": 5}},
             {"rate_limit": {"average": 10}},
+            # True counts as a number in Python - and makes the proxy refuse the routes of everybody.
+            {"rate_limit": {"average": True, "burst": True}},
+            {"rate_limit": {"average": 10.0, "burst": 20}},
+            {"rate_limit": {"average": "10", "burst": 20}},
+            {"strip_prefix": 1},
+            {"allow_embedding": None},
+            # A cookie set here would reach the other apps published by path.
+            {"response_headers": {"Set-Cookie": "session=1; Path=/"}},
+            {"response_headers": {"set-cookie": "session=1"}},
             {"request_headers": {"Host": "evil.example"}},
             {"request_headers": {"X-Forwarded-For": "1.2.3.4"}},  # the proxy's own
             {"request_headers": {"X-Velydock-User": "admin"}},  # who is signed in is not for an admin to say
@@ -275,6 +331,66 @@ class TestOptions:
         ):
             with pytest.raises(ApiError):
                 proxy.check_options({"custom_middlewares": definition}, by_system_admin=True)
+
+    @pytest.mark.parametrize(
+        "definition",
+        [
+            # Each of these makes Traefik refuse the whole document, not just this route (tried
+            # with the proxy itself): a field it does not know, a value of the wrong kind.
+            {"headers": {"nonsense": 1}},
+            {"headers": {"frameDeny": "yes"}},
+            {"headers": {"stsSeconds": "1"}},
+            {"headers": {"customRequestHeaders": {"X-A": 5}}},
+            {"rateLimit": {"average": True}},
+            {"rateLimit": {"average": 10, "period": "abc"}},
+            {"rateLimit": {"average": 10, "period": "1 minute"}},
+            {"rateLimit": {"average": 10, "sourceCriterion": {"ipStrategy": {"depth": "2"}}}},
+            {"rateLimit": {"average": 10, "sourceCriterion": {"ipStrategy": {"unknown": 1}}}},
+            {"rateLimit": {"average": 10, "sourceCriterion": "ip"}},
+            {"retry": {"attempts": 2.5}},
+            {"retry": {"attempts": -1}},
+            {"stripPrefix": {"prefixes": "/x"}},
+            {"ipAllowList": {"sourceRange": [10]}},
+            {"ipAllowList": ["10.0.0.0/8"]},
+            {"compress": None},
+        ],
+    )
+    def test_a_mistake_in_traefik_s_words_is_refused_before_it_reaches_traefik(
+        self, definition: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ApiError) as refused:
+            proxy.check_options({"custom_middlewares": {"x": definition}}, by_system_admin=True)
+        assert refused.value.code == "proxy_options_invalid"
+
+    def test_every_field_of_every_allowed_middleware_is_known_with_its_kind(self) -> None:
+        """The samples are what the browser suite hands to the real Traefik. Here: they are
+        accepted, and they leave no field of the list out - so that run vouches for all of it."""
+        for sample in MIDDLEWARE_SAMPLES:
+            assert proxy.check_options({"custom_middlewares": sample}, by_system_admin=True)
+
+        def fields_of(body: dict[str, Any], known: dict[str, Any]) -> set[str]:
+            found: set[str] = set()
+            for name, value in body.items():
+                found.add(name)
+                if isinstance(known[name], dict):
+                    found |= {f"{name}.{inner}" for inner in fields_of(value, known[name])}
+            return found
+
+        def all_of(known: dict[str, Any]) -> set[str]:
+            found: set[str] = set()
+            for name, kind in known.items():
+                found.add(name)
+                if isinstance(kind, dict):
+                    found |= {f"{name}.{inner}" for inner in all_of(kind)}
+            return found
+
+        sampled: dict[str, set[str]] = {}
+        for sample in MIDDLEWARE_SAMPLES:
+            for definition in sample.values():
+                ((kind, body),) = definition.items()
+                sampled.setdefault(kind, set()).update(fields_of(body, proxy.MIDDLEWARE_FIELDS[kind]))
+        assert sampled == {kind: all_of(fields) for kind, fields in proxy.MIDDLEWARE_FIELDS.items()}
+        assert frozenset(sampled) == proxy.CUSTOM_MIDDLEWARES
 
 
 class TestPublishing:
@@ -386,7 +502,61 @@ class TestPublishing:
             assert refused.json()["error"]["code"] == "proxy_template_unknown"
             refused = await publish(client, "wiki", access="public", options={"identity_headers": True})
             assert refused.status_code == 422
+            # What made the proxy drop the routes of every organization when it was found.
+            poison = await publish(client, "wiki", options={"rate_limit": {"average": True, "burst": True}})
+            assert (poison.status_code, poison.json()["error"]["code"]) == (422, "proxy_options_invalid")
             assert (await client.get("/api/v1/admin/apps")).json() == []
+
+    async def test_by_path_only_where_the_system_administrator_allows_it(
+        self, world: World, acme: Tenant, anna: User, root: User
+    ) -> None:
+        """Apps published by path share one origin in the browser, across organizations. Where
+        organizations do not trust each other, the system administrator leaves them sub-domains."""
+        await release(acme, "10.20.0.0/16")
+        async with await world.login(anna) as client:
+            assert (await client.get("/api/v1/admin/proxy")).json()["path_allowed"] is True
+            by_path = (await publish(client, "wiki")).json()
+            by_name = (await publish(client, "intern", mode="subdomain")).json()
+        assert len((await routes(world))["http"]["routers"]) == 2
+        async with await world.login(root) as client:
+            changed = await client.patch(
+                f"/api/v1/system/tenants/{acme.id}", json={"proxy_path_allowed": False}
+            )
+            assert changed.status_code == 200 and changed.json()["proxy_path_allowed"] is False
+            log = (await client.get("/api/v1/system/audit")).json()["items"]
+            assert log[0]["action"] == "tenant.update"
+            assert log[0]["details"] == {"proxy_path_allowed": False}
+        # What was published by path is off the proxy at the next fetch, and says why.
+        assert list((await routes(world))["http"]["routers"]) == [f"vd-{uuid.UUID(by_name['id']).hex}"]
+        async with await world.login(anna) as client:
+            assert (await client.get("/api/v1/admin/proxy")).json()["path_allowed"] is False
+            problems = {
+                a["publication"]["name"]: a["publication"]["problem"]
+                for a in (await client.get("/api/v1/admin/apps")).json()
+            }
+            assert problems == {"wiki": "mode_not_allowed", "intern": None}
+            refused = await publish(client, "neu")
+            assert (refused.status_code, refused.json()["error"]["code"]) == (
+                422,
+                "publication_mode_not_allowed",
+            )
+            moved = await client.patch(
+                f"/api/v1/admin/apps/{by_path['id']}",
+                json={"publication": publication("wiki", mode="subdomain")},
+            )
+            assert moved.status_code == 200 and moved.json()["publication"]["problem"] is None
+        assert len((await routes(world))["http"]["routers"]) == 2
+        # Not for the organization to decide: the database refuses, whatever the application does.
+        with pytest.raises(DBAPIError):
+            async with transaction(Scope.TENANT, tenant_id=acme.id, user_id=anna.id) as db:
+                await db.execute(
+                    text("UPDATE tenants SET proxy_path_allowed = true WHERE id = :id"), {"id": acme.id}
+                )
+        # Its own settings it may still change.
+        async with transaction(Scope.TENANT, tenant_id=acme.id, user_id=anna.id) as db:
+            await db.execute(
+                text("UPDATE tenants SET default_theme = 'dark' WHERE id = :id"), {"id": acme.id}
+            )
 
     async def test_an_app_that_is_no_longer_published_needs_an_address_again(
         self, world: World, acme: Tenant, anna: User
@@ -511,6 +681,27 @@ class TestSystemAdministration:
             )
             assert changed.status_code == 200
         assert f"{key}-c-office" not in (await routes(world))["http"].get("middlewares", {})
+
+    async def test_own_middlewares_apply_in_the_order_of_their_names_after_the_sign_in_check(
+        self, world: World, acme: Tenant, anna: User, root: User
+    ) -> None:
+        await release(acme, "10.20.0.0/16")
+        own = {
+            "20-password": {"basicAuth": {"users": ["a:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"]}},
+            "zz": {"compress": {}},
+            "10-office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}},
+        }
+        async with await world.login(root) as client:
+            made = await client.post(
+                "/api/v1/system/proxy-templates",
+                json={"name": "Büro mit Passwort", "options": {"custom_middlewares": own}},
+            )
+            assert made.status_code == 201, made.text
+        async with await world.login(anna) as client:
+            app = (await publish(client, "wiki", mode="subdomain", template=made.json()["id"])).json()
+        key = f"vd-{uuid.UUID(app['id']).hex}"
+        chain = (await routes(world))["http"]["routers"][key]["middlewares"]
+        assert chain == [f"{key}-auth", f"{key}-c-10-office", f"{key}-c-20-password", f"{key}-c-zz"]
 
 
 class TestTheRoutesTheProxyGets:
@@ -696,40 +887,83 @@ class TestSignInBeforeForwarding:
         async with world.client() as client:
             return await client.get(f"/internal/proxy/auth/{app['id']}", headers=headers)
 
+    async def begin(
+        self, world: World, app: dict[str, Any], uri: str = "/", *, host: str = "wiki.apps.test"
+    ) -> tuple[str, str]:
+        """A browser without a sign-in for the app opens it. Returns the fingerprint Velydock is
+        told, and the cookie with the secret that the browser keeps."""
+        sent = await self.ask(world, app, uri, host=host)
+        assert sent.status_code == 302, sent.text
+        fingerprint = parse_qs(urlsplit(sent.headers["location"]).query)["st"][0]
+        (state,) = (line.split(";")[0] for line in sent.headers.get_list("set-cookie"))
+        return fingerprint, state
+
+    async def callback(
+        self, world: World, app: dict[str, Any], user: User, rd: str = "/", *, st: str = ""
+    ) -> str:
+        """Velydock recognises the user and sends the browser back: the address it is sent to."""
+        async with await world.login(user) as browser:
+            there = await browser.get("/proxy/login", params={"p": app["id"], "rd": rd, "st": st})
+        assert there.status_code == 302, there.text
+        target = urlsplit(there.headers["location"])
+        return f"{target.path}?{target.query}"
+
+    @staticmethod
+    def app_cookie(answer: httpx.Response) -> str:
+        """The cookie an answer sets for the app itself (as opposed to the state of the round trip)."""
+        lines = [line for line in answer.headers.get_list("set-cookie") if "velydock-app" in line]
+        return lines[0] if lines else ""
+
     async def sign_in(
-        self, world: World, app: dict[str, Any], user: User, rd: str = "/"
+        self, world: World, app: dict[str, Any], user: User, rd: str = "/", *, host: str = "wiki.apps.test"
     ) -> tuple[httpx.Response, str]:
         """The whole round trip of a browser that has a Velydock session; returns the app cookie."""
-        async with await world.login(user) as browser:
-            there = await browser.get("/proxy/login", params={"p": app["id"], "rd": rd})
-        assert there.status_code == 302, there.text
-        callback = urlsplit(there.headers["location"])
-        answer = await self.ask(world, app, f"{callback.path}?{callback.query}")
-        cookie = answer.headers.get("set-cookie", "").split(";")[0]
-        return answer, cookie
+        fingerprint, state = await self.begin(world, app, host=host)
+        uri = await self.callback(world, app, user, rd, st=fingerprint)
+        answer = await self.ask(world, app, uri, cookie=state, host=host)
+        return answer, self.app_cookie(answer).split(";")[0]
 
     async def test_a_page_is_sent_to_velydock_a_script_gets_401(
         self, world: World, wiki: dict[str, Any]
     ) -> None:
         page = await self.ask(world, wiki, "/seite?x=1")
         assert page.status_code == 302
-        assert page.headers["location"] == f"https://dock.test/proxy/login?p={wiki['id']}&rd=%2Fseite%3Fx%3D1"
-        assert (await self.ask(world, wiki, "/api/data", page=False)).status_code == 401
+        target = urlsplit(page.headers["location"])
+        query = parse_qs(target.query)
+        assert (target.netloc, target.path) == ("dock.test", "/proxy/login")
+        assert (query["p"], query["rd"]) == ([wiki["id"]], ["/seite?x=1"])
+        # The browser keeps a secret for the way back. Velydock is told its fingerprint only.
+        (state,) = page.headers.get_list("set-cookie")
+        assert state.startswith("__Host-velydock-state=")
+        for attribute in ("Path=/;", "Max-Age=300", "HttpOnly", "Secure", "SameSite=Lax"):
+            assert attribute in state
+        secret = state.split(";")[0].split("=", 1)[1]
+        assert len(query["st"][0]) == 32 and secret not in page.headers["location"]
+        # A second tab opening the app meanwhile shares the state instead of replacing it.
+        again = await self.ask(world, wiki, "/andere", cookie=state.split(";")[0])
+        assert parse_qs(urlsplit(again.headers["location"]).query)["st"] == query["st"]
+        assert again.headers.get_list("set-cookie")[0].split(";")[0] == state.split(";")[0]
+        script = await self.ask(world, wiki, "/api/data", page=False)
+        assert script.status_code == 401 and "set-cookie" not in script.headers
         # The way back after signing in to Velydock is accepted as a destination there.
-        assert (
-            safe_return_path(f"/proxy/login?p={wiki['id']}&rd=%2Fseite")
-            == f"/proxy/login?p={wiki['id']}&rd=%2Fseite"
-        )
+        back = f"/proxy/login?p={wiki['id']}&rd=%2Fseite&st={query['st'][0]}"
+        assert safe_return_path(back) == back
 
     async def test_without_a_velydock_session_the_way_leads_through_its_sign_in(
         self, world: World, wiki: dict[str, Any]
     ) -> None:
-        async with world.client() as browser:
-            asked = await browser.get("/proxy/login", params={"p": wiki["id"], "rd": "/seite"})
-        assert asked.status_code == 302
-        target = urlsplit(asked.headers["location"])
-        assert target.path == "/login"
-        assert parse_qs(target.query)["return_to"] == [f"/proxy/login?p={wiki['id']}&rd=%2Fseite"]
+        fingerprint = "0123456789abcdef" * 2
+        for given, kept in ((fingerprint, fingerprint), ("<script>", ""), ("", "")):
+            async with world.client() as browser:
+                asked = await browser.get(
+                    "/proxy/login", params={"p": wiki["id"], "rd": "/seite", "st": given}
+                )
+            assert asked.status_code == 302
+            target = urlsplit(asked.headers["location"])
+            assert target.path == "/login"
+            assert parse_qs(target.query)["return_to"] == [
+                f"/proxy/login?p={wiki['id']}&rd=%2Fseite&st={kept}"
+            ]
 
     async def test_the_round_trip_ends_in_the_app_with_a_cookie_for_that_app_only(
         self, world: World, acme: Tenant, wiki: dict[str, Any]
@@ -738,10 +972,17 @@ class TestSignInBeforeForwarding:
         answer, cookie = await self.sign_in(world, wiki, mia, "/seite?x=1")
         assert answer.status_code == 302
         assert answer.headers["location"] == "https://wiki.apps.test/seite?x=1"
-        attributes = answer.headers["set-cookie"]
+        attributes = self.app_cookie(answer)
         assert cookie.startswith("__Host-velydock-app=")
-        for attribute in ("Path=/", "HttpOnly", "Secure", "SameSite=Lax"):
+        for attribute in ("Path=/;", "HttpOnly", "Secure", "SameSite=Lax"):
             assert attribute in attributes
+        # The state has done its work and goes.
+        (cleared,) = (
+            line
+            for line in answer.headers.get_list("set-cookie")
+            if line.startswith("__Host-velydock-state=")
+        )
+        assert cleared.startswith("__Host-velydock-state=;") and "Max-Age=0" in cleared
         # With the cookie the proxy may forward. Who is signed in is not told unless asked for.
         allowed = await self.ask(world, wiki, "/seite", cookie=cookie)
         assert allowed.status_code == 200
@@ -754,15 +995,67 @@ class TestSignInBeforeForwarding:
     async def test_a_ticket_works_once_for_its_app_and_not_when_tampered_with(
         self, world: World, acme: Tenant, anna: User, wiki: dict[str, Any]
     ) -> None:
+        fingerprint, state = await self.begin(world, wiki)
+        uri = await self.callback(world, wiki, anna, st=fingerprint)
         async with await world.login(anna) as browser:
-            there = await browser.get("/proxy/login", params={"p": wiki["id"]})
             other = (await publish(browser, "andere", mode="subdomain")).json()
-        callback = urlsplit(there.headers["location"])
-        uri = f"{callback.path}?{callback.query}"
-        assert (await self.ask(world, other, uri, host="andere.apps.test")).status_code == 403
-        assert (await self.ask(world, wiki, uri[:-3] + "abc")).status_code == 403
-        assert (await self.ask(world, wiki, uri)).status_code == 302
-        assert (await self.ask(world, wiki, uri)).status_code == 403  # used
+        elsewhere = await self.ask(world, other, uri, cookie=state, host="andere.apps.test")
+        assert elsewhere.status_code == 403
+        assert (await self.ask(world, wiki, uri[:-3] + "abc", cookie=state)).status_code == 403
+        assert self.app_cookie(await self.ask(world, wiki, uri, cookie=state))
+        assert (await self.ask(world, wiki, uri, cookie=state)).status_code == 403  # used
+
+    async def test_a_ticket_signs_in_only_the_browser_that_set_out_for_it(
+        self, world: World, acme: Tenant, anna: User, wiki: dict[str, Any]
+    ) -> None:
+        """Somebody who may use the app could otherwise hand their own ticket to another person
+        (a link is enough), who would then work in the app under the wrong name without noticing."""
+        fingerprint, state = await self.begin(world, wiki)
+        uri = await self.callback(world, wiki, anna, "/seite", st=fingerprint)
+        _, state_of_another_browser = await self.begin(world, wiki)
+        assert state_of_another_browser != state
+        for cookie in ("", state_of_another_browser, "__Host-velydock-state=" + "x" * 32):
+            elsewhere = await self.ask(world, wiki, uri, cookie=cookie)
+            # Sent on to the app, where it starts a round trip of its own - as itself.
+            assert elsewhere.status_code == 302
+            assert elsewhere.headers["location"] == "https://wiki.apps.test/seite"
+            assert "set-cookie" not in elsewhere.headers
+        # A ticket asked for without any state belongs to no browser at all.
+        loose = await self.callback(world, wiki, anna)
+        for cookie in ("", state):
+            answer = await self.ask(world, wiki, loose, cookie=cookie)
+            assert answer.status_code == 302 and "set-cookie" not in answer.headers
+        # None of this locked the rightful browser out.
+        assert self.app_cookie(await self.ask(world, wiki, uri, cookie=state))
+
+    async def test_an_account_locked_at_the_identity_provider_loses_the_app_too(
+        self, world: World, acme: Tenant, wiki: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Locked or deleted in Keycloak's console, no sign-out reaches Velydock. Its own pages
+        notice within minutes; somebody who only uses a published app must not keep it all day."""
+        mia = await world.user(acme, "mia")
+        _, cookie = await self.sign_in(world, wiki, mia)
+        assert (await self.ask(world, wiki, cookie=cookie)).status_code == 200
+        # Asked when the app was first opened, and not with every request since.
+        assert world.idp.state_checks.count(mia.idp_id) == 1
+        await world.idp.set_enabled(mia.idp_id, False)
+        proxy.forget_decisions()
+        assert (await self.ask(world, wiki, cookie=cookie)).status_code == 200, "not asked again so soon"
+        # Five minutes later - and the provider happens to be away: nobody is thrown out for that.
+        monkeypatch.setattr(session_store, "_idp_checked", {})
+        proxy.forget_decisions()
+        world.idp.fail_next, world.idp.fail_on = IdpUnavailable("down"), "account_state"
+        assert (await self.ask(world, wiki, cookie=cookie)).status_code == 200
+        # It is back and says: locked.
+        monkeypatch.setattr(session_store, "_idp_checked", {})
+        proxy.forget_decisions()
+        assert (await self.ask(world, wiki, cookie=cookie)).status_code == 302
+        assert (await self.ask(world, wiki, cookie=cookie, page=False)).status_code == 401
+        async with transaction(Scope.SYSTEM) as db:
+            account = await db.get(User, mia.id)
+            assert account is not None and account.active is False
+            theirs = select(AuthSession).where(AuthSession.user_id == mia.id)
+            assert (await db.execute(theirs)).scalars().all() == []
 
     async def test_only_who_is_granted_the_app_gets_in(
         self, world: World, acme: Tenant, anna: User, wiki: dict[str, Any]
@@ -807,14 +1100,12 @@ class TestSignInBeforeForwarding:
     async def test_when_the_velydock_session_ends_so_does_the_access(
         self, world: World, anna: User, wiki: dict[str, Any]
     ) -> None:
+        fingerprint, state = await self.begin(world, wiki)
         async with await world.login(anna) as browser:
-            there = await browser.get("/proxy/login", params={"p": wiki["id"]})
+            there = await browser.get("/proxy/login", params={"p": wiki["id"], "st": fingerprint})
             callback = urlsplit(there.headers["location"])
-            cookie = (
-                (await self.ask(world, wiki, f"{callback.path}?{callback.query}"))
-                .headers["set-cookie"]
-                .split(";")[0]
-            )
+            answer = await self.ask(world, wiki, f"{callback.path}?{callback.query}", cookie=state)
+            cookie = self.app_cookie(answer).split(";")[0]
             assert (await self.ask(world, wiki, cookie=cookie)).status_code == 200
             assert (await browser.post("/api/auth/logout")).status_code == 200
         proxy.forget_decisions()  # otherwise up to half a minute later
@@ -825,14 +1116,12 @@ class TestSignInBeforeForwarding:
         self, world: World, anna: User, wiki: dict[str, Any]
     ) -> None:
         value = await world.session(anna)
+        fingerprint, state = await self.begin(world, wiki)
         async with world.client(value) as browser:
-            there = await browser.get("/proxy/login", params={"p": wiki["id"]})
+            there = await browser.get("/proxy/login", params={"p": wiki["id"], "st": fingerprint})
         callback = urlsplit(there.headers["location"])
-        cookie = (
-            (await self.ask(world, wiki, f"{callback.path}?{callback.query}"))
-            .headers["set-cookie"]
-            .split(";")[0]
-        )
+        answer = await self.ask(world, wiki, f"{callback.path}?{callback.query}", cookie=state)
+        cookie = self.app_cookie(answer).split(";")[0]
         async with transaction(Scope.SYSTEM) as db:
             await db.execute(text("UPDATE sessions SET last_seen_at = now() - interval '30 minutes'"))
         proxy.forget_decisions()
@@ -866,15 +1155,22 @@ class TestSignInBeforeForwarding:
             ("/wiki\\@evil.example", "https://apps.test/wiki/"),
             ("/wiki/__velydock/callback?t=x", "https://apps.test/wiki/"),
         ):
+            fingerprint, state = await self.begin(world, app, "/wiki/", host="apps.test")
+            # By path, the cookies are for this app's path and carry its name.
+            assert state.startswith("__Secure-velydock-state-wiki=")
             async with await world.login(anna) as browser:
-                there = await browser.get("/proxy/login", params={"p": app["id"], "rd": wanted})
+                there = await browser.get(
+                    "/proxy/login", params={"p": app["id"], "rd": wanted, "st": fingerprint}
+                )
             callback = urlsplit(there.headers["location"])
             assert (callback.netloc, callback.path) == ("apps.test", "/wiki/__velydock/callback")
-            answer = await self.ask(world, app, f"{callback.path}?{callback.query}", host="apps.test")
+            answer = await self.ask(
+                world, app, f"{callback.path}?{callback.query}", cookie=state, host="apps.test"
+            )
             assert answer.headers["location"] == lands, wanted
-            # By path, the cookie is for this app's path and carries its name.
-            assert answer.headers["set-cookie"].startswith("__Secure-velydock-app-wiki=")
-            assert "Path=/wiki/;" in answer.headers["set-cookie"]
+            for line in answer.headers.get_list("set-cookie"):
+                assert line.startswith(("__Secure-velydock-app-wiki=", "__Secure-velydock-state-wiki="))
+                assert "Path=/wiki/;" in line
 
     async def test_the_check_itself_is_only_for_the_proxy(
         self, world: World, anna: User, wiki: dict[str, Any]

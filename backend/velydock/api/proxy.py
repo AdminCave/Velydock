@@ -90,12 +90,16 @@ async def authorize(
     answer = await proxy_service.authorize(
         db,
         settings,
+        request.app.state.idp,
         publication,
         uri=request.headers.get("x-forwarded-uri", "/"),
         cookies=dict(request.cookies),
         navigation=navigation,
     )
-    return Response(content=answer.body, status_code=answer.status, headers=answer.headers)
+    response = Response(content=answer.body, status_code=answer.status, headers=answer.headers)
+    for cookie in answer.cookies:
+        response.headers.append("set-cookie", cookie)
+    return response
 
 
 @router.get("/proxy/login", include_in_schema=False)
@@ -103,6 +107,7 @@ async def login(
     request: Request,
     p: uuid.UUID,
     rd: str = "",
+    st: str = "",
     db: AsyncSession = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> Response:
@@ -123,13 +128,16 @@ async def login(
     user = await db.get(User, session.user_id) if session is not None else None
     if session is None or user is None or not user.active:
         # Not signed in: through Velydock's own sign-in, and then here again.
-        back = f"/proxy/login?p={publication.app_id}&rd={quote(rd, safe='')}"
+        state = proxy_service.clean_state(st)
+        back = f"/proxy/login?p={publication.app_id}&rd={quote(rd, safe='')}&st={state}"
         return RedirectResponse(f"/login?return_to={quote(back, safe='')}", status_code=302)
     if not await proxy_service.granted(db, publication, user):
         return PlainTextResponse(
             "Du hast keinen Zugriff auf diese App. / You are not allowed to use this app.", status_code=403
         )
-    response = RedirectResponse(proxy_service.ticket_for(settings, publication, session, rd), status_code=302)
+    response = RedirectResponse(
+        proxy_service.ticket_for(settings, publication, session, rd, st), status_code=302
+    )
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response

@@ -23,8 +23,9 @@ http:
 
     velydock-api:
       # The API additionally gets a per-client rate limit (sign-in attempts themselves are
-      # throttled by Keycloak's brute-force protection).
-      rule: "Host(`{{ env "VELYDOCK_HOST" }}`) && PathPrefix(`/api/`)"
+      # throttled by Keycloak's brute-force protection). So does /proxy/login, where browsers
+      # on their way to a published app arrive: it can be called without a sign-in.
+      rule: "Host(`{{ env "VELYDOCK_HOST" }}`) && (PathPrefix(`/api/`) || PathPrefix(`/proxy/`))"
       # Must be set: without it Traefik prefers the router with the longer rule text, which is
       # "velydock" above for every sandbox host name of 11 or more characters – the rate limit
       # would never apply. Any value above the length of that rule will do.

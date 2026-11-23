@@ -22,6 +22,21 @@ _IN_TENANT = "(app_scope() = 'tenant' AND tenant_id = app_tenant_id())"
 _SYSTEM = "app_scope() = 'system'"
 _SIGNED_IN = "app_scope() IN ('tenant', 'system')"
 
+# The guard of the tenants table (see 0001), with and without the new column.
+_GUARD = """
+    CREATE OR REPLACE FUNCTION tenants_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF app_scope() <> 'system' AND (
+           NEW.slug IS DISTINCT FROM OLD.slug OR NEW.name IS DISTINCT FROM OLD.name
+        OR NEW.active IS DISTINCT FROM OLD.active OR NEW.idp_org_id IS DISTINCT FROM OLD.idp_org_id
+        {more}
+      ) THEN
+        RAISE EXCEPTION 'tenant identity can only be changed in system scope' USING ERRCODE = '42501';
+      END IF;
+      RETURN NEW;
+    END $$
+"""
+
 
 def upgrade() -> None:
     op.create_table(
@@ -98,8 +113,18 @@ def upgrade() -> None:
     )
     op.execute(f"CREATE POLICY proxy_templates_delete ON proxy_templates FOR DELETE USING ({_SYSTEM})")
 
+    # Publishing by path puts an organization's apps on an origin shared with others: whether it
+    # may is decided for it, like the releases above.
+    op.add_column(
+        "tenants",
+        sa.Column("proxy_path_allowed", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+    )
+    op.execute(_GUARD.format(more="OR NEW.proxy_path_allowed IS DISTINCT FROM OLD.proxy_path_allowed"))
+
 
 def downgrade() -> None:
+    op.execute(_GUARD.format(more=""))
+    op.drop_column("tenants", "proxy_path_allowed")
     op.drop_table("proxy_templates")
     op.drop_table("proxy_targets")
     op.drop_table("app_publications")

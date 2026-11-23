@@ -189,12 +189,19 @@ async def update_tenant(
             )
         if name != tenant.name:
             await _ensure_free(db, slug=None, name=name, exclude=tenant.id)
+        by_path = (
+            data.proxy_path_allowed if data.proxy_path_allowed is not None else tenant.proxy_path_allowed
+        )
         changed = {
             field: value
-            for field, value, before in (("name", name, tenant.name), ("active", active, tenant.active))
+            for field, value, before in (
+                ("name", name, tenant.name),
+                ("active", active, tenant.active),
+                ("proxy_path_allowed", by_path, tenant.proxy_path_allowed),
+            )
             if value != before
         }
-        tenant.name, tenant.active = name, active
+        tenant.name, tenant.active, tenant.proxy_path_allowed = name, active, by_path
         await db.flush()
         if changed:
             # Only what really changed is in the log; saving without a change is not an event.

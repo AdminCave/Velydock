@@ -18,6 +18,8 @@ Three things keep this from becoming a hole in the wall:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -35,10 +37,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from velydock.api.deps import Principal
+from velydock.api.deps import Principal, wanted_at_identity_provider
 from velydock.config import Settings
 from velydock.db import system_scope
 from velydock.errors import ApiError, conflict, invalid, not_found
+from velydock.idp.base import IdentityProvider
 from velydock.models import (
     App,
     AppGroupGrant,
@@ -188,8 +191,19 @@ def _own_names(settings: Settings) -> set[str]:
     return names
 
 
-async def _own_addresses(settings: Settings) -> set[str]:
-    """What those names resolve to right now, so that their addresses are no way in either."""
+_own_cache: tuple[float, frozenset[str]] = (0.0, frozenset())
+
+
+async def _own_addresses(settings: Settings) -> frozenset[str]:
+    """What those names resolve to, so that their addresses are no way in either.
+
+    Looked up at most once a minute: the routes are built every few seconds, and containers
+    get new addresses when they are recreated - an address that was free when an app was
+    published may be the database's tomorrow.
+    """
+    global _own_cache
+    if _own_cache[0] > time.monotonic():
+        return _own_cache[1]
     loop = asyncio.get_running_loop()
     found: set[str] = set()
     for name in _own_names(settings):
@@ -198,7 +212,38 @@ async def _own_addresses(settings: Settings) -> set[str]:
                 found.add(str(ipaddress.ip_address(info[4][0])))
         except (OSError, ValueError):
             continue
+    _own_cache = (time.monotonic() + 60.0, frozenset(found))
+    return _own_cache[1]
+
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _meant(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """An address and every IPv4 address that hides in it.
+
+    Several IPv6 forms carry an IPv4 address that a network may deliver the packet to: mapped
+    (::ffff:a.b.c.d), 6to4 (2002:aabb:ccdd::), Teredo, NAT64 (64:ff9b::a.b.c.d). What must not be
+    reached as IPv4 must not be reached in these clothes either.
+    """
+    found: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = [address]
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            found.append(address.ipv4_mapped)
+        if address.sixtofour is not None:
+            found.append(address.sixtofour)
+        if address.teredo is not None:
+            found.extend(address.teredo)
+        if address in _NAT64 or int(address) >> 32 == 0:
+            found.append(ipaddress.IPv4Address(int(address) & 0xFFFFFFFF))
     return found
+
+
+def _never(address: ipaddress.IPv4Address | ipaddress.IPv6Address, own: frozenset[str]) -> bool:
+    """Not a target, whoever released what: the machine itself, link-local, this installation."""
+    return any(_refused(candidate) or str(candidate) in own for candidate in _meant(address))
 
 
 def _refused(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -242,10 +287,10 @@ async def check_target(settings: Settings, url: str, allowed: list[str]) -> str:
     except ValueError:
         address = None
     if address is not None:
+        if _never(address, await _own_addresses(settings)):
+            raise not_released
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
             address = address.ipv4_mapped
-        if _refused(address) or str(address) in await _own_addresses(settings):
-            raise not_released
         if not any(
             rule.network is not None and address in rule.network and rule.port in (None, port)
             for rule in rules
@@ -318,16 +363,10 @@ _FIXED_HEADERS = frozenset(
         "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade", "x-real-ip",
     }
 )  # fmt: skip
-# Middlewares a system administrator may add to a template in Traefik's own words. Left out on
-# purpose: forwardAuth (it would replace or bypass the sign-in check and makes the proxy call any
-# address), errors and chain (they refer to other services and middlewares), plugins.
-CUSTOM_MIDDLEWARES = frozenset(
-    {
-        "addPrefix", "basicAuth", "buffering", "compress", "contentType", "digestAuth", "headers",
-        "inFlightReq", "ipAllowList", "rateLimit", "redirectRegex", "redirectScheme", "replacePath",
-        "replacePathRegex", "retry", "stripPrefix", "stripPrefixRegex",
-    }
-)  # fmt: skip
+# Middlewares a system administrator may add to a template in Traefik's own words: those listed
+# in MIDDLEWARE_FIELDS below. Left out on purpose: forwardAuth (it would replace or bypass the
+# sign-in check and makes the proxy call any address), errors and chain (they refer to other
+# services and middlewares), plugins.
 
 
 def _check_headers(value: Any, what: str) -> dict[str, str]:
@@ -343,6 +382,10 @@ def _check_headers(value: Any, what: str) -> dict[str, str]:
             raise invalid(
                 f"The header {name} is set by the proxy and cannot be changed.", "proxy_options_invalid"
             )
+        if lowered in ("set-cookie", "set-cookie2"):
+            # Under the apps host a cookie reaches every app published by path - including the
+            # ones of other organizations. An app may set its own; configuration may not.
+            raise invalid("Cookies cannot be set through the proxy options.", "proxy_options_invalid")
         if len(content) > 1000 or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in content):
             raise bad
         checked[name] = content
@@ -361,7 +404,7 @@ def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str
             "allow_embedding",
             "identity_headers",
         ):
-            if not isinstance(value, bool):
+            if type(value) is not bool:
                 raise bad
             checked[key] = value
         elif key == "rate_limit":
@@ -371,7 +414,9 @@ def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str
             if not isinstance(value, dict) or set(value) != {"average", "burst"}:
                 raise bad
             average, burst = value["average"], value["burst"]
-            if not (isinstance(average, int) and isinstance(burst, int) and 1 <= average <= 10_000):
+            # Exactly int: True is an int to Python, and "true" where the proxy expects a number
+            # makes it throw away the routes of everybody (see MIDDLEWARE_FIELDS).
+            if not (type(average) is int and type(burst) is int and 1 <= average <= 10_000):
                 raise bad
             if not average <= burst <= 100_000:
                 raise bad
@@ -389,10 +434,122 @@ def check_options(options: dict[str, Any], *, by_system_admin: bool) -> dict[str
     return checked
 
 
+# The fields of the middlewares a system administrator may use, and what they hold, as Traefik
+# v3 decodes them (the list was run through the proxy itself). This matters more than it looks:
+# Traefik reads all routes as one document, and a field it does not know or a value of the wrong
+# type makes it refuse the whole document - it then keeps the routes it had, for every
+# organization, until the mistake is gone. A wrong network or expression, in contrast, only
+# breaks its own route.
+_S, _I, _B, _L, _M, _D = "text", "number", "yes/no", "list of texts", "name: text pairs", "duration"
+_IP_STRATEGY = {"depth": _I, "excludedIPs": _L, "ipv6Subnet": _I}
+_CRITERION = {"ipStrategy": _IP_STRATEGY, "requestHeaderName": _S, "requestHost": _B}
+MIDDLEWARE_FIELDS: dict[str, dict[str, Any]] = {
+    "addPrefix": {"prefix": _S},
+    "basicAuth": {"users": _L, "realm": _S, "removeHeader": _B, "headerField": _S},
+    "digestAuth": {"users": _L, "realm": _S, "removeHeader": _B, "headerField": _S},
+    "buffering": {
+        "maxRequestBodyBytes": _I,
+        "memRequestBodyBytes": _I,
+        "maxResponseBodyBytes": _I,
+        "memResponseBodyBytes": _I,
+        "retryExpression": _S,
+    },
+    "compress": {
+        "excludedContentTypes": _L,
+        "includedContentTypes": _L,
+        "minResponseBodyBytes": _I,
+        "defaultEncoding": _S,
+        "encodings": _L,
+    },
+    "contentType": {"autoDetect": _B},
+    "headers": {
+        "customRequestHeaders": _M,
+        "customResponseHeaders": _M,
+        "accessControlAllowCredentials": _B,
+        "accessControlAllowHeaders": _L,
+        "accessControlAllowMethods": _L,
+        "accessControlAllowOriginList": _L,
+        "accessControlAllowOriginListRegex": _L,
+        "accessControlExposeHeaders": _L,
+        "accessControlMaxAge": _I,
+        "addVaryHeader": _B,
+        "allowedHosts": _L,
+        "hostsProxyHeaders": _L,
+        "sslProxyHeaders": _M,
+        "stsSeconds": _I,
+        "stsIncludeSubdomains": _B,
+        "stsPreload": _B,
+        "forceSTSHeader": _B,
+        "frameDeny": _B,
+        "customFrameOptionsValue": _S,
+        "contentTypeNosniff": _B,
+        "browserXssFilter": _B,
+        "customBrowserXSSValue": _S,
+        "contentSecurityPolicy": _S,
+        "contentSecurityPolicyReportOnly": _S,
+        "publicKey": _S,
+        "referrerPolicy": _S,
+        "permissionsPolicy": _S,
+        "isDevelopment": _B,
+    },
+    "inFlightReq": {"amount": _I, "sourceCriterion": _CRITERION},
+    "ipAllowList": {"sourceRange": _L, "ipStrategy": _IP_STRATEGY, "rejectStatusCode": _I},
+    "rateLimit": {"average": _I, "burst": _I, "period": _D, "sourceCriterion": _CRITERION},
+    "redirectRegex": {"regex": _S, "replacement": _S, "permanent": _B},
+    "redirectScheme": {"scheme": _S, "port": _S, "permanent": _B},
+    "replacePath": {"path": _S},
+    "replacePathRegex": {"regex": _S, "replacement": _S},
+    "retry": {"attempts": _I, "initialInterval": _D},
+    "stripPrefix": {"prefixes": _L, "forceSlash": _B},
+    "stripPrefixRegex": {"regex": _L},
+}
+CUSTOM_MIDDLEWARES = frozenset(MIDDLEWARE_FIELDS)
+
+
+def _fits(value: Any, kind: str) -> bool:
+    text = isinstance(value, str) and len(value) <= 4000 and "\x00" not in value
+    number = type(value) is int and 0 <= value < 2**53
+    if kind == _S:
+        return text
+    if kind == _I:
+        return number
+    if kind == _B:
+        return type(value) is bool
+    if kind == _D:
+        # "90" (seconds) or Go's notation, "1m30s". Anything else and the proxy refuses to read on.
+        return number or (text and re.fullmatch(r"\d+|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+", value) is not None)
+    if kind == _L:
+        return (
+            isinstance(value, list)
+            and len(value) <= 200
+            and all(isinstance(item, str) and len(item) <= 4000 for item in value)
+        )
+    if kind == _M:
+        return isinstance(value, dict) and all(
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+        )
+    return False
+
+
+def _check_fields(body: Any, fields: dict[str, Any], where: str) -> None:
+    if not isinstance(body, dict):
+        raise invalid(f"{where} must be an object.", "proxy_options_invalid")
+    for name, value in body.items():
+        if name not in fields:
+            raise invalid(
+                f"{where} has no field {name!r}. Known: {', '.join(sorted(fields))}.", "proxy_options_invalid"
+            )
+        expected = fields[name]
+        if isinstance(expected, dict):
+            _check_fields(value, expected, f"{where}.{name}")
+        elif not _fits(value, expected):
+            raise invalid(f"{where}.{name} must be a {expected}.", "proxy_options_invalid")
+
+
 def _check_custom(value: Any) -> dict[str, Any]:
     bad = invalid(
         "Custom middlewares must be an object of name -> one Traefik middleware, for example "
-        '{"limit": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}. Allowed: '
+        '{"office": {"ipAllowList": {"sourceRange": ["10.0.0.0/8"]}}}. Allowed: '
         + ", ".join(sorted(CUSTOM_MIDDLEWARES))
         + ".",
         "proxy_options_invalid",
@@ -405,8 +562,9 @@ def _check_custom(value: Any) -> dict[str, Any]:
         if not isinstance(definition, dict) or len(definition) != 1:
             raise bad
         ((kind, body),) = definition.items()
-        if kind not in CUSTOM_MIDDLEWARES or not isinstance(body, dict):
+        if kind not in MIDDLEWARE_FIELDS:
             raise bad
+        _check_fields(body, MIDDLEWARE_FIELDS[kind], f"{name}.{kind}")
     return value
 
 
@@ -495,7 +653,9 @@ def _build(settings: Settings, publication: AppPublication, options: dict[str, A
         add("headers", {"headers": headers})
     if path_mode and options["strip_prefix"]:
         add("strip", {"stripPrefix": {"prefixes": [f"/{publication.name}"]}})
-    for name, definition in options["custom_middlewares"].items():
+    # In the order of their names: the database does not keep the order they were written in,
+    # and for middlewares the order matters ("10-office", "20-password").
+    for name, definition in sorted(options["custom_middlewares"].items()):
         add(f"c-{name}", definition)
 
     service: dict[str, Any] = {
@@ -525,11 +685,14 @@ def _build(settings: Settings, publication: AppPublication, options: dict[str, A
     }
 
 
-def still_released(settings: Settings, url: str, allowed: list[str]) -> bool:
+def still_released(
+    settings: Settings, url: str, allowed: list[str], own: frozenset[str] = frozenset()
+) -> bool:
     """Is the address a publication points to (still) among what was released?
 
     Asked every time the routes are built: a release that is withdrawn takes its publications
-    off the proxy at once, without anybody having to find and remove them.
+    off the proxy at once, without anybody having to find and remove them. ``own`` are the
+    addresses of the installation's own services at the moment.
     """
     try:
         parts = urlsplit(url)
@@ -544,7 +707,7 @@ def still_released(settings: Settings, url: str, allowed: list[str]) -> bool:
         return host not in _own_names(settings) and any(
             rule.host == host and rule.port in (None, port) for rule in rules
         )
-    if _refused(address):
+    if _never(address, own):
         return False
     return any(
         rule.network is not None and address in rule.network and rule.port in (None, port) for rule in rules
@@ -552,13 +715,21 @@ def still_released(settings: Settings, url: str, allowed: list[str]) -> bool:
 
 
 def problem_of(
-    settings: Settings, publication: AppPublication, allowed: list[str], known: dict[str, dict[str, Any]]
+    settings: Settings,
+    publication: AppPublication,
+    allowed: list[str],
+    known: dict[str, dict[str, Any]],
+    own: frozenset[str] = frozenset(),
+    *,
+    path_allowed: bool = True,
 ) -> str | None:
     """Why the proxy does not serve a publication, or None if it does."""
     if publication.template not in known:
         # Not "then without a template": the template may be what restricted who gets in.
         return "template_missing"
-    if not still_released(settings, publication.target_url, allowed):
+    if publication.mode == PublicationMode.PATH.value and not path_allowed:
+        return "mode_not_allowed"
+    if not still_released(settings, publication.target_url, allowed, own):
         return "target_not_allowed"
     return None
 
@@ -581,15 +752,21 @@ async def traefik_configuration(db: AsyncSession, settings: Settings) -> dict[st
         )
     ).scalars()
     known = await templates(db)
+    own = await _own_addresses(settings)
     released: dict[uuid.UUID, list[str]] = {}
     for tenant_id, value in (await db.execute(select(ProxyTarget.tenant_id, ProxyTarget.value))).all():
         released.setdefault(tenant_id, []).append(value)
+    sub_domains_only = set(
+        (await db.execute(select(Tenant.id).where(Tenant.proxy_path_allowed.is_(False)))).scalars()
+    )
     routers: dict[str, Any] = {}
     services: dict[str, Any] = {}
     middlewares: dict[str, Any] = {}
     transports: dict[str, Any] = {}
     for publication in rows:
-        if problem_of(settings, publication, released.get(publication.tenant_id, []), known) is not None:
+        allowed = released.get(publication.tenant_id, [])
+        by_path = publication.tenant_id not in sub_domains_only
+        if problem_of(settings, publication, allowed, known, own, path_allowed=by_path) is not None:
             continue
         try:
             built = _build(
@@ -644,15 +821,21 @@ def cookie_name(settings: Settings, publication: AppPublication) -> str:
     return f"{'__Secure-' if secure else ''}velydock-app-{publication.name}"
 
 
-def _set_cookie(settings: Settings, publication: AppPublication, value: str, max_age: int) -> str:
+def _set_cookie(
+    settings: Settings, publication: AppPublication, value: str, max_age: int, *, name: str | None = None
+) -> str:
     secure = "; Secure" if (settings.apps_url or "").startswith("https://") else ""
     path = f"{_prefix(publication)}/"
-    name = cookie_name(settings, publication)
+    name = name or cookie_name(settings, publication)
     return f"{name}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}"
 
 
 async def _may_use(
-    db: AsyncSession, settings: Settings, publication: AppPublication, session_hash: str
+    db: AsyncSession,
+    settings: Settings,
+    idp: IdentityProvider | None,
+    publication: AppPublication,
+    session_hash: str,
 ) -> tuple[str, str, str] | None:
     """Is this session alive, and may its user use the published app? Returns who it is, or None."""
     cached = _decisions.get((session_hash, publication.app_id))
@@ -662,7 +845,15 @@ async def _may_use(
     session = await sessions.session_by_hash(db, settings, session_hash)
     if session is not None:
         user = await db.get(User, session.user_id)
-        if user is not None and user.active and await granted(db, publication, user):
+        # The same question the interface asks every few minutes: is the account still wanted
+        # at the identity provider? Somebody who only ever uses a published app would otherwise
+        # keep it for the rest of the session after being locked there.
+        if (
+            user is not None
+            and user.active
+            and await wanted_at_identity_provider(db, idp, user, session)
+            and await granted(db, publication, user)
+        ):
             answer = (user.username, user.email or "", f"{user.first_name} {user.last_name}".strip())
     if len(_decisions) > 20_000:
         _decisions.clear()
@@ -717,10 +908,27 @@ def safe_destination(publication: AppPublication, wanted: str | None) -> str:
     return wanted[:2000]
 
 
+def state_cookie_name(settings: Settings, publication: AppPublication) -> str:
+    # "velydock-state…", not "velydock-app-state…": by path the app's name follows, and an app
+    # may be called "state-x".
+    return cookie_name(settings, publication).replace("velydock-app", "velydock-state", 1)
+
+
+def _state_of(nonce: str) -> str:
+    return hashlib.sha256(nonce.encode()).hexdigest()[:32]
+
+
+def clean_state(value: str) -> str:
+    return value if re.fullmatch(r"[0-9a-f]{32}", value) else ""
+
+
 def ticket_for(
-    settings: Settings, publication: AppPublication, session: AuthSession, destination: str
+    settings: Settings, publication: AppPublication, session: AuthSession, destination: str, state: str
 ) -> str:
-    """After Velydock recognised the user: the address that carries this over to the app's host."""
+    """After Velydock recognised the user: the address that carries this over to the app's host.
+
+    ``state`` ties the ticket to the browser that began the round trip (see ``authorize``).
+    """
     ticket = sign(
         settings.secret_key,
         _TICKET,
@@ -728,6 +936,7 @@ def ticket_for(
             "pub": str(publication.app_id),
             "sid": session.id_hash,
             "rd": safe_destination(publication, destination),
+            "st": clean_state(state),
             "jti": secrets.token_urlsafe(12),
         },
         _TICKET_SECONDS,
@@ -741,6 +950,7 @@ class Answer:
     status: int
     headers: dict[str, str]
     body: str = ""
+    cookies: tuple[str, ...] = ()
 
 
 def _origin_of(settings: Settings, publication: AppPublication) -> str:
@@ -751,6 +961,7 @@ def _origin_of(settings: Settings, publication: AppPublication) -> str:
 async def authorize(
     db: AsyncSession,
     settings: Settings,
+    idp: IdentityProvider | None,
     publication: AppPublication,
     *,
     uri: str,
@@ -782,9 +993,18 @@ async def authorize(
             return Answer(
                 403, {"Content-Type": "text/plain; charset=utf-8"}, "This sign-in link is not valid any more."
             )
+        destination = origin + safe_destination(publication, str(ticket.get("rd", "")))
+        # The ticket must come back to the browser that set out for it. Otherwise somebody with
+        # access to the app could hand their own ticket to another person, who would then work
+        # in the app as them without noticing. A browser that does not hold the matching state
+        # is simply sent to the app again and gets a round trip of its own.
+        nonce = cookies.get(state_cookie_name(settings, publication), "")
+        expected = str(ticket.get("st", ""))
+        if not nonce or not expected or not hmac.compare_digest(_state_of(nonce), expected):
+            return Answer(302, {"Location": destination, "Cache-Control": "no-store"})
         _used_tickets[str(ticket.get("jti"))] = now + _TICKET_SECONDS + 5
         session_hash = str(ticket.get("sid", ""))
-        if await _may_use(db, settings, publication, session_hash) is None:
+        if await _may_use(db, settings, idp, publication, session_hash) is None:
             return Answer(
                 403, {"Content-Type": "text/plain; charset=utf-8"}, "You are not allowed to use this app."
             )
@@ -796,12 +1016,11 @@ async def authorize(
         )
         return Answer(
             302,
-            {
-                "Location": origin + safe_destination(publication, str(ticket.get("rd", ""))),
-                "Set-Cookie": _set_cookie(settings, publication, value, _SESSION_SECONDS),
-                "Cache-Control": "no-store",
-                "Referrer-Policy": "no-referrer",
-            },
+            {"Location": destination, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            cookies=(
+                _set_cookie(settings, publication, value, _SESSION_SECONDS),
+                _set_cookie(settings, publication, "", 0, name=state_cookie_name(settings, publication)),
+            ),
         )
 
     value = cookies.get(cookie_name(settings, publication), "")
@@ -811,7 +1030,7 @@ async def authorize(
         except TokenError:
             claims = {}
         if claims.get("pub") == str(publication.app_id):
-            who = await _may_use(db, settings, publication, str(claims.get("sid", "")))
+            who = await _may_use(db, settings, idp, publication, str(claims.get("sid", "")))
             if who is not None:
                 await sessions.touch_by_hash(db, str(claims.get("sid", "")))
                 options = effective_options(
@@ -824,12 +1043,23 @@ async def authorize(
         # A request of the app's own scripts: no page to send anywhere. The app sees 401.
         return Answer(401, {"Cache-Control": "no-store"})
     destination = quote(safe_destination(publication, uri), safe="")
+    # One state per browser and app while a sign-in is under way: two tabs opening the app at
+    # the same moment must not invalidate each other's round trip.
+    nonce = cookies.get(state_cookie_name(settings, publication), "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32}", nonce):
+        nonce = secrets.token_urlsafe(24)
     return Answer(
         302,
         {
-            "Location": f"{settings.public_url}/proxy/login?p={publication.app_id}&rd={destination}",
+            "Location": (
+                f"{settings.public_url}/proxy/login?p={publication.app_id}&rd={destination}"
+                f"&st={_state_of(nonce)}"
+            ),
             "Cache-Control": "no-store",
         },
+        cookies=(
+            _set_cookie(settings, publication, nonce, 300, name=state_cookie_name(settings, publication)),
+        ),
     )
 
 
@@ -871,6 +1101,11 @@ async def publish(
     if app.type not in (AppType.EMBEDDED.value, AppType.EXTERNAL.value):
         raise invalid("Only embedded apps and apps in a new tab can be published.", "publication_type")
     name = check_name(data.name)
+    tenant = await db.get(Tenant, app.tenant_id)
+    if data.mode == PublicationMode.PATH and (tenant is None or not tenant.proxy_path_allowed):
+        raise invalid(
+            "This organization publishes apps under a sub-domain only.", "publication_mode_not_allowed"
+        )
     target = await check_target(settings, data.target_url, await allowed_targets(db, app.tenant_id))
     known = await templates(db)
     if data.template not in known:
@@ -952,16 +1187,24 @@ async def publications_of(
         return {}
     allowed = await allowed_targets(db, tenant_id)
     known = await templates(db)
-    return {row.app_id: out(settings, row, problem_of(settings, row, allowed, known)) for row in rows}
+    own = await _own_addresses(settings)
+    tenant = await db.get(Tenant, tenant_id)
+    by_path = tenant is None or tenant.proxy_path_allowed
+    return {
+        row.app_id: out(settings, row, problem_of(settings, row, allowed, known, own, path_allowed=by_path))
+        for row in rows
+    }
 
 
 async def info(db: AsyncSession, settings: Settings, tenant_id: uuid.UUID) -> ProxyInfo:
     if not settings.apps_url:
         return ProxyInfo(enabled=False)
     parts = urlsplit(settings.apps_url)
+    tenant = await db.get(Tenant, tenant_id)
     return ProxyInfo(
         enabled=True,
         path_base=f"{settings.apps_url}/",
+        path_allowed=tenant is None or tenant.proxy_path_allowed,
         subdomain_suffix=f".{parts.netloc}",
         subdomain_scheme=parts.scheme,
         targets=await allowed_targets(db, tenant_id),

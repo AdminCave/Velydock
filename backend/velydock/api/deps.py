@@ -147,7 +147,7 @@ async def resolve_tenant(
     return chosen if chosen else (None, None)
 
 
-async def _wanted_at_identity_provider(
+async def wanted_at_identity_provider(
     db: AsyncSession, idp: IdentityProvider | None, user: User, session: AuthSession
 ) -> bool:
     """Ask the identity provider, every few minutes, whether this session is still wanted there.
@@ -211,7 +211,7 @@ async def get_principal(
 
     verify_csrf(request, settings)
 
-    if not await _wanted_at_identity_provider(db, request.app.state.idp, user, session):
+    if not await wanted_at_identity_provider(db, request.app.state.idp, user, session):
         # What was just learned is stored even though the request itself fails.
         await db.commit()
         raise not_authenticated()

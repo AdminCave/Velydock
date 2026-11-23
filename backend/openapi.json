@@ -1410,6 +1410,11 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "path_allowed": {
+            "default": true,
+            "title": "Path Allowed",
+            "type": "boolean"
+          },
           "path_base": {
             "anyOf": [
               {
@@ -2223,6 +2228,11 @@
             "title": "Protected",
             "type": "boolean"
           },
+          "proxy_path_allowed": {
+            "default": true,
+            "title": "Proxy Path Allowed",
+            "type": "boolean"
+          },
           "slug": {
             "title": "Slug",
             "type": "string"
@@ -2497,6 +2507,17 @@
               }
             ],
             "title": "Name"
+          },
+          "proxy_path_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proxy Path Allowed"
           }
         },
         "title": "TenantUpdate",

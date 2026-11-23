@@ -573,6 +573,8 @@ class TenantOut(Model):
     app_count: int = 0
     # Home of a system administrator: cannot be deactivated or deleted.
     protected: bool = False
+    # Whether the organization may publish apps by path on the shared apps host.
+    proxy_path_allowed: bool = True
     created_at: datetime
 
 
@@ -584,6 +586,7 @@ class TenantCreate(Model):
 class TenantUpdate(Model):
     name: TenantName | None = None
     active: bool | None = None
+    proxy_path_allowed: bool | None = None
 
 
 class TenantDelete(Model):
@@ -725,6 +728,8 @@ class ProxyInfo(Model):
     # "https://apps.example.com/" and ".apps.example.com": the name goes after the first and
     # before the second.
     path_base: str | None = None
+    # False: the system administrator allows this organization sub-domains only.
+    path_allowed: bool = True
     subdomain_suffix: str | None = None
     subdomain_scheme: str | None = None
     targets: list[str] = Field(default_factory=list)

@@ -122,6 +122,10 @@ class Tenant(Base):
     # loaded with every request, and must not drag a quarter of a megabyte along each time.
     logo_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     logo_mime: Mapped[str | None] = mapped_column(String(40))
+    # May this organization publish apps by path (apps.example.com/name/)? Apps published that
+    # way share one origin in the browser - also with those of other organizations. Decided by
+    # the system administrator; the database keeps the organization itself from changing it.
+    proxy_path_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 

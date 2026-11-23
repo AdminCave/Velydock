@@ -1,0 +1,251 @@
+{
+  "about": "One valid value for every field of the Traefik middlewares a system administrator may use in a proxy template. The backend tests check that this list is complete (MIDDLEWARE_FIELDS); the browser suite hands it to the real Traefik and checks that it still reads its routes afterwards. Several sets because a template takes ten middlewares.",
+  "sets": [
+    {
+      "prefix": {
+        "addPrefix": {
+          "prefix": "/x"
+        }
+      },
+      "basic": {
+        "basicAuth": {
+          "users": [
+            "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"
+          ],
+          "realm": "r",
+          "removeHeader": true,
+          "headerField": "X-User"
+        }
+      },
+      "digest": {
+        "digestAuth": {
+          "users": [
+            "test:traefik:a2688e031edb4be6a3797f3882655c05"
+          ],
+          "realm": "r",
+          "removeHeader": true,
+          "headerField": "X-User"
+        }
+      },
+      "buffer": {
+        "buffering": {
+          "maxRequestBodyBytes": 2000000,
+          "memRequestBodyBytes": 1000000,
+          "maxResponseBodyBytes": 2000000,
+          "memResponseBodyBytes": 1000000,
+          "retryExpression": "IsNetworkError() && Attempts() < 2"
+        }
+      },
+      "zip": {
+        "compress": {
+          "excludedContentTypes": [
+            "text/event-stream"
+          ],
+          "minResponseBodyBytes": 1024,
+          "defaultEncoding": "gzip",
+          "encodings": [
+            "gzip",
+            "br"
+          ]
+        }
+      },
+      "zip-only": {
+        "compress": {
+          "includedContentTypes": [
+            "text/html"
+          ]
+        }
+      },
+      "type": {
+        "contentType": {
+          "autoDetect": false
+        }
+      },
+      "office": {
+        "ipAllowList": {
+          "sourceRange": [
+            "10.0.0.0/8"
+          ],
+          "ipStrategy": {
+            "depth": 1,
+            "excludedIPs": [
+              "10.0.0.1"
+            ],
+            "ipv6Subnet": 64
+          },
+          "rejectStatusCode": 404
+        }
+      },
+      "parallel": {
+        "inFlightReq": {
+          "amount": 10,
+          "sourceCriterion": {
+            "requestHeaderName": "X-Client"
+          }
+        }
+      },
+      "per-host": {
+        "inFlightReq": {
+          "amount": 10,
+          "sourceCriterion": {
+            "requestHost": true
+          }
+        }
+      }
+    },
+    {
+      "head": {
+        "headers": {
+          "customRequestHeaders": {
+            "X-A": "1"
+          },
+          "customResponseHeaders": {
+            "X-B": "2"
+          },
+          "accessControlAllowCredentials": true,
+          "accessControlAllowHeaders": [
+            "X-A"
+          ],
+          "accessControlAllowMethods": [
+            "GET"
+          ],
+          "accessControlAllowOriginList": [
+            "https://a.example"
+          ],
+          "accessControlAllowOriginListRegex": [
+            "https://.*\\.example"
+          ],
+          "accessControlExposeHeaders": [
+            "X-B"
+          ],
+          "accessControlMaxAge": 60,
+          "addVaryHeader": true,
+          "allowedHosts": [
+            "a.example"
+          ],
+          "hostsProxyHeaders": [
+            "X-Forwarded-Host"
+          ],
+          "sslProxyHeaders": {
+            "X-Forwarded-Proto": "https"
+          },
+          "stsSeconds": 31536000,
+          "stsIncludeSubdomains": true,
+          "stsPreload": true,
+          "forceSTSHeader": true,
+          "frameDeny": true,
+          "customFrameOptionsValue": "SAMEORIGIN",
+          "contentTypeNosniff": true,
+          "browserXssFilter": true,
+          "customBrowserXSSValue": "0",
+          "contentSecurityPolicy": "default-src 'self'",
+          "contentSecurityPolicyReportOnly": "default-src 'self'",
+          "publicKey": "k",
+          "referrerPolicy": "no-referrer",
+          "permissionsPolicy": "camera=()",
+          "isDevelopment": false
+        }
+      },
+      "limit": {
+        "rateLimit": {
+          "average": 10,
+          "burst": 20,
+          "period": "1m30s",
+          "sourceCriterion": {
+            "ipStrategy": {
+              "depth": 1,
+              "excludedIPs": [
+                "10.0.0.1"
+              ],
+              "ipv6Subnet": 64
+            }
+          }
+        }
+      },
+      "limit-seconds": {
+        "rateLimit": {
+          "average": 10,
+          "period": 90
+        }
+      },
+      "to-https": {
+        "redirectRegex": {
+          "regex": "^http://(.*)",
+          "replacement": "https://$1",
+          "permanent": true
+        }
+      },
+      "scheme": {
+        "redirectScheme": {
+          "scheme": "https",
+          "port": "443",
+          "permanent": true
+        }
+      },
+      "path": {
+        "replacePath": {
+          "path": "/x"
+        }
+      },
+      "path-regex": {
+        "replacePathRegex": {
+          "regex": "^/a/(.*)",
+          "replacement": "/b/$1"
+        }
+      },
+      "again": {
+        "retry": {
+          "attempts": 2,
+          "initialInterval": "100ms"
+        }
+      },
+      "strip": {
+        "stripPrefix": {
+          "prefixes": [
+            "/x"
+          ],
+          "forceSlash": false
+        }
+      },
+      "strip-regex": {
+        "stripPrefixRegex": {
+          "regex": [
+            "/x/[a-z]+"
+          ]
+        }
+      }
+    },
+    {
+      "parallel-ip": {
+        "inFlightReq": {
+          "amount": 10,
+          "sourceCriterion": {
+            "ipStrategy": {
+              "depth": 1,
+              "excludedIPs": [
+                "10.0.0.1"
+              ],
+              "ipv6Subnet": 64
+            }
+          }
+        }
+      },
+      "limit-header": {
+        "rateLimit": {
+          "average": 10,
+          "sourceCriterion": {
+            "requestHeaderName": "X-Client"
+          }
+        }
+      },
+      "limit-host": {
+        "rateLimit": {
+          "average": 10,
+          "sourceCriterion": {
+            "requestHost": true
+          }
+        }
+      }
+    }
+  ]
+}
