@@ -42,14 +42,25 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
   funktionieren weiter; von dort sind die Menüs wieder benutzbar.
 - **Veröffentlichen über den Proxy** gibt es nur mit dem mitgelieferten Traefik. Im Pfad-Modus
   (`apps.example.com/name/`) teilen sich alle so veröffentlichten Apps – auch die verschiedener
-  Organisationen – einen Ursprung: Ihre Skripte können einander im Browser erreichen. Für Apps,
-  denen man nicht gleichermaßen vertraut, die Subdomain wählen. Viele Anwendungen laufen nur
+  Organisationen – einen Ursprung: Das Skript einer App kann die anderen mit den Rechten der
+  Person aufrufen, die sie gerade benutzt. Für Apps, denen man nicht gleichermaßen vertraut, die
+  Subdomain wählen; teilen sich Organisationen die Installation, die einander nicht vertrauen,
+  Pfad-Adressen für sie abschalten (*System → Organisationen*). Viele Anwendungen laufen nur
   unter einem Unterpfad, wenn sie dafür eingerichtet sind.
+- **Die Namen veröffentlichter Apps sind ein gemeinsamer Vorrat.** Wer einen vergebenen Namen
+  wählt, erfährt, dass er vergeben ist – auch wenn er einer anderen Organisation gehört. (Die
+  Adresse selbst verrät dasselbe.)
+- **Eigene Traefik-Bausteine in Vorlagen prüft Velydock auf Form, nicht auf Sinn.** Ein
+  ungültiges Netz oder ein fehlerhafter Ausdruck nimmt die Apps mit dieser Vorlage vom Proxy;
+  der Grund steht dann in Traefiks Protokoll, nicht in Velydock.
+- **Veröffentlichte Routen haben keine voreingestellte Ratenbegrenzung.** Sie lässt sich je App
+  oder Vorlage setzen.
 - **Von einer veröffentlichten App entfernt Velydock nur `X-Frame-Options`** (Vorlage „In Velydock
   einbettbar“). Ein Verbot per `Content-Security-Policy: frame-ancestors` bleibt bestehen; es
   ließe sich nur zusammen mit dem übrigen Schutz der App entfernen.
 - **Entzogener Zugriff wirkt bei veröffentlichten Apps nach bis zu 30 Sekunden:** So lange merkt
-  sich Velydock die Antwort auf die Frage, ob jemand eine App nutzen darf.
+  sich Velydock die Antwort auf die Frage, ob jemand eine App nutzen darf. Eine Sperre direkt in
+  Keycloak wirkt wie in der Oberfläche nach bis zu fünf Minuten.
 - **Vorhandene Benutzer fügt nur der Systemadministrator weiteren Organisationen hinzu.** Eine
   Einladung durch Mandantenadministratoren gibt es nicht.
 - **Feste Rollen.** Eigene Rollen lassen sich nicht definieren.

@@ -218,6 +218,12 @@ Technisch folgt daraus:
 - Vor jeder Anfrage an eine geschützte App fragt Traefik Velydock (`forwardAuth`). Die Anmeldung
   läuft über Velydocks Adresse und kommt mit einem einmal gültigen Ticket zurück; die App bekommt
   ein eigenes Cookie, das nur für sie gilt. Velydocks Session-Cookie verlässt dessen Host nie.
+- Der Pfad bleibt der Standard, wie entschieden. Weil sich Apps im Pfad-Modus einen Ursprung
+  teilen – auch über Organisationen hinweg –, kann der Systemadministrator ihn je Organisation
+  abschalten. Das kam nach einer unabhängigen Prüfung dazu, ebenso die Bindung des Tickets an
+  den Browser, die Nachfrage bei Keycloak auf diesem Weg und die strenge Prüfung aller Werte, die
+  an Traefik gehen (ein `true` anstelle einer Zahl hatte im Versuch die Routen aller
+  Organisationen eingefroren).
 
 ## 16. Abweichungen vom freigegebenen Vorschlag
 

@@ -254,6 +254,10 @@ Funktion ist aus, solange `APPS_HOST` in `.env` leer ist.
 5. Als Systemadministrator je Organisation freigeben, welche internen Adressen sie
    veröffentlichen darf (*System → Organisationen*). Ohne Freigabe lässt sich nichts
    veröffentlichen.
+6. Teilen sich mehrere Organisationen die Installation, die einander nicht vertrauen: für sie
+   dort die Pfad-Adressen abschalten. Apps unter `apps.example.com/name/` sind für den Browser
+   *eine* Website; nur Subdomains trennen sie
+   ([sicherheit.md](sicherheit.md#veröffentlichte-apps-proxy)).
 
 **Zertifikate.** Für jeden veröffentlichten Hostnamen holt Traefik ein eigenes Zertifikat von
 Let's Encrypt, sobald die App veröffentlicht ist und der DNS-Eintrag stimmt. Let's Encrypt
@@ -271,6 +275,17 @@ freigegeben wurde, in dem sie liegen.
 Änderung in der Oberfläche wirkt also nach wenigen Sekunden, ohne Neustart. Ist Velydock nicht
 erreichbar, behält Traefik die letzten Routen; geschützte Apps antworten dann mit einem Fehler,
 öffentliche laufen weiter.
+
+**Wenn eine Änderung nicht ankommt.** `docker compose logs traefik` zeigt, was Traefik mit den
+Routen gemacht hat. `Provider error` heißt, dass es das ganze Dokument abgelehnt hat und beim
+alten Stand geblieben ist – Velydock prüft Eingaben so, dass das nicht vorkommen sollte; wenn
+doch, ist es ein Fehler in Velydock. Eine Meldung mit `routerName=vd-…` betrifft nur diese eine
+App, meist wegen eines eigenen Bausteins in ihrer Vorlage (ungültiges Netz, fehlerhafter
+Ausdruck).
+
+**Ratenbegrenzung.** Der Umweg über Velydocks Anmeldung (`/proxy/login`) fällt unter dieselbe
+Begrenzung wie die API. Die veröffentlichten Apps selbst haben keine voreingestellte; sie lässt
+sich je App oder Vorlage setzen („Anfragen begrenzen“).
 
 **Eigener Reverse Proxy.** Ohne den mitgelieferten Traefik (`COMPOSE_PROFILES` leer) gibt es die
 Funktion nicht: Die Routen sind in Traefiks Format.
