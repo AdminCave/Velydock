@@ -234,6 +234,47 @@ eigenen früher schließen (Traefik: 90 s, nginx: 60 s – beides die Voreinstel
 Velydock zuerst, träfe gelegentlich eine Anfrage auf eine gerade beendete Verbindung und der
 Proxy meldete `502 Bad Gateway`.
 
+## Apps über den Proxy veröffentlichen
+
+Velydock kann interne Anwendungen über den mitgelieferten Traefik ins Internet stellen
+([anwendungsintegration.md](anwendungsintegration.md#apps-über-den-proxy-veröffentlichen)). Die
+Funktion ist aus, solange `APPS_HOST` in `.env` leer ist.
+
+**Einrichten**
+
+1. Einen vierten Hostnamen wählen, zum Beispiel `apps.example.com`. Er muss ein eigener Name
+   sein, und keiner der drei anderen darf unter ihm liegen (`apps.example.com`, nicht
+   `example.com`): Unter `<name>.APPS_HOST` darf sich nie die Adresse von Velydock, der Sandbox
+   oder der Anmeldung bilden lassen. Velydock verweigert sonst den Start.
+2. DNS: `apps.example.com` auf den Server zeigen lassen. Für Apps mit eigener Subdomain
+   zusätzlich `*.apps.example.com` (Wildcard) oder je App ein eigener Eintrag.
+3. In `.env` `APPS_HOST=apps.example.com` eintragen. `VELYDOCK_PROXY_SECRET` hat `install.sh`
+   bereits erzeugt; in einer älteren `.env` ergänzen (`openssl rand -hex 32`).
+4. `docker compose up -d`.
+5. Als Systemadministrator je Organisation freigeben, welche internen Adressen sie
+   veröffentlichen darf (*System → Organisationen*). Ohne Freigabe lässt sich nichts
+   veröffentlichen.
+
+**Zertifikate.** Für jeden veröffentlichten Hostnamen holt Traefik ein eigenes Zertifikat von
+Let's Encrypt, sobald die App veröffentlicht ist und der DNS-Eintrag stimmt. Let's Encrypt
+begrenzt die Zahl neuer Zertifikate je Domain und Woche (derzeit 50) – wer viele Apps auf
+Subdomains veröffentlicht, plant das ein oder nutzt den Pfad-Modus, der mit dem einen Zertifikat
+von `APPS_HOST` auskommt.
+
+**Was der Proxy erreichen muss.** Traefik baut die Verbindung zur internen Adresse auf. Sie muss
+vom Server aus erreichbar sein (Routing, Firewall). Adressen dieser Installation selbst –
+Datenbank, Keycloak, Velydock, `localhost` – nimmt Velydock nie als Ziel an, auch wenn ein Netz
+freigegeben wurde, in dem sie liegen.
+
+**Wie die Routen zu Traefik kommen.** Traefik fragt Velydock alle fünf Sekunden nach den Routen
+(`/internal/proxy/traefik`, nur im internen Netz und nur mit `VELYDOCK_PROXY_SECRET`). Eine
+Änderung in der Oberfläche wirkt also nach wenigen Sekunden, ohne Neustart. Ist Velydock nicht
+erreichbar, behält Traefik die letzten Routen; geschützte Apps antworten dann mit einem Fehler,
+öffentliche laufen weiter.
+
+**Eigener Reverse Proxy.** Ohne den mitgelieferten Traefik (`COMPOSE_PROFILES` leer) gibt es die
+Funktion nicht: Die Routen sind in Traefiks Format.
+
 ## Zugang zur Keycloak-Verwaltung
 
 Für Aufgaben, die Velydock nicht abdeckt (Apps per OIDC anbinden, LDAP/AD, externe Identity

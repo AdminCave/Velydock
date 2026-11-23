@@ -30,6 +30,12 @@ services:
     profiles: ["proxy"]
     command:
       - --providers.file.directory=/etc/traefik/dynamic
+      # The routes of apps published through this proxy are not in a file: Traefik fetches them
+      # from Velydock every few seconds, with a secret only the two share. While Velydock is
+      # away it keeps the routes it has. Without APPS_HOST Velydock answers with no routes.
+      - --providers.http.endpoint=http://velydock:8000/internal/proxy/traefik
+      - --providers.http.pollinterval=5s
+      - --providers.http.headers.X-Velydock-Proxy-Secret=${VELYDOCK_PROXY_SECRET:-}
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
@@ -66,8 +72,12 @@ services:
     cap_add: [NET_BIND_SERVICE]
     read_only: true
     depends_on:
-      - velydock
-      - keycloak
+      # Healthy, not merely started: Traefik fetches routes from Velydock right away, and
+      # would fill its log with errors until Velydock answers.
+      velydock:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
     networks: [edge]
 
   velydock:
@@ -77,6 +87,11 @@ services:
       VELYDOCK_PUBLIC_URL: https://${VELYDOCK_HOST}${PUBLIC_PORT_SUFFIX:-}
       VELYDOCK_SANDBOX_URL: https://${SANDBOX_HOST}${PUBLIC_PORT_SUFFIX:-}
       VELYDOCK_KEYCLOAK_PUBLIC_URL: https://${KEYCLOAK_HOST}${PUBLIC_PORT_SUFFIX:-}
+      # Publishing apps through the proxy: off without APPS_HOST. Apps are served below that
+      # host (https://APPS_HOST/<name>/) or below it as a sub-domain (https://<name>.APPS_HOST/).
+      VELYDOCK_APPS_URL: ${APPS_HOST:+https://${APPS_HOST}${PUBLIC_PORT_SUFFIX:-}}
+      VELYDOCK_PROXY_SECRET: ${VELYDOCK_PROXY_SECRET:-}
+      VELYDOCK_PROXY_TLS_RESOLVER: ${TLS_RESOLVER-letsencrypt}
       VELYDOCK_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       VELYDOCK_BACKCHANNEL_BASE_URL: http://velydock:8000
       VELYDOCK_DATABASE_URL: postgresql+asyncpg://velydock:${VELYDOCK_DB_PASSWORD:?}@postgres:5432/velydock

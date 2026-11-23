@@ -11,6 +11,9 @@ export const DOCK_URL = `https://dock.velydock.localhost:${port}`;
 export const AUTH_URL = `https://auth.velydock.localhost:${port}`;
 export const SANDBOX_URL = `https://sandbox.velydock.localhost:${port}`;
 export const DEMO_URL = `https://demo.velydock.localhost:${port}`;
+/** Apps published through the proxy: by path below this host, or as a sub-domain of it. */
+export const APPS_HOST = `apps.velydock.localhost:${port}`;
+export const APPS_URL = `https://${APPS_HOST}`;
 /** Keycloak's Admin API, published on localhost by the development stack only. */
 export const KEYCLOAK_ADMIN_URL = `http://127.0.0.1:${process.env.DEV_KEYCLOAK_PORT ?? '18080'}`;
 export const KEYCLOAK_BOOTSTRAP = { id: 'velydock-bootstrap', secret: 'dev-keycloak-bootstrap-secret' };

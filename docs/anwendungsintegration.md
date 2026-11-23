@@ -97,6 +97,57 @@ Die Adresse wird in einem neuen Tab geöffnet; die neue Seite erhält keinen Zug
 Velydock-Fenster. `http://`-Adressen sind hier erlaubt (interne Geräte), bei eingebetteten Apps
 nicht, weil Browser sie in einer `https`-Seite nicht laden.
 
+## Apps über den Proxy veröffentlichen
+
+Liegt eine Anwendung nur im internen Netz, kann Velydocks eingebauter Proxy sie nach außen
+bereitstellen. Die App bekommt dann eine öffentliche Adresse, und Velydock leitet die Anfragen an
+die interne weiter. Das gibt es für eingebettete Apps und Apps im neuen Tab, wenn der Betreiber
+einen Apps-Host eingerichtet hat ([betrieb.md](betrieb.md#apps-über-den-proxy-veröffentlichen)).
+
+Im App-Dialog unter **Über den Proxy veröffentlichen**:
+
+| Angabe | Bedeutung |
+|---|---|
+| **Interne Adresse** | Wohin der Proxy weiterleitet, z. B. `http://10.20.0.7:8080`. Möglich ist nur, was der Systemadministrator für die Organisation freigegeben hat; der Dialog zeigt die Freigaben. Hostnamen gehen nur, wenn genau dieser Name freigegeben ist. |
+| **Adresse** | *Pfad* (Standard): `https://apps.example.com/name/`. *Subdomain*: `https://name.apps.example.com/`. Der Name ist über alle Organisationen eindeutig. |
+| **Zugriff** | *Geschützt* (Standard): nur angemeldete Benutzer, denen die App freigegeben ist – wer die Adresse ohne Anmeldung öffnet, landet bei Velydocks Anmeldung und danach in der App. *Öffentlich*: jeder, der die Adresse kennt. |
+| **Vorlage** | Ein Satz von Proxy-Einstellungen; einzelne lassen sich darunter abweichend setzen. |
+
+**Pfad oder Subdomain?** Der Pfad braucht keinen weiteren DNS-Eintrag, hat aber zwei Haken. Die
+Anwendung muss damit zurechtkommen, nicht an der Wurzel der Adresse zu liegen: Velydock entfernt
+den Namen aus dem Pfad, bevor es weiterleitet, und teilt ihn der Anwendung mit
+(`X-Forwarded-Prefix`) – Anwendungen, die ihre Links trotzdem mit `/` beginnen lassen,
+funktionieren so nicht (dann die Vorlage „App kennt ihren Unterpfad“ und die Anwendung
+entsprechend einstellen, oder die Subdomain wählen). Und alle Apps im Pfad-Modus teilen sich im
+Browser einen Ursprung. Die Subdomain hat beides nicht, braucht aber einen DNS-Eintrag.
+
+**Vorlagen und Einstellungen**
+
+| Einstellung | Wirkung | Mitgelieferte Vorlage |
+|---|---|---|
+| Namen aus dem Pfad entfernen | Nur Pfad-Modus: Die Anwendung sieht `/seite` statt `/name/seite`. Standard: an. | „App kennt ihren Unterpfad“ schaltet es aus |
+| Einbettung erlauben | Entfernt `X-Frame-Options` aus den Antworten der Anwendung. | „In Velydock einbettbar“ |
+| Zertifikat des Ziels nicht prüfen | Für interne Geräte mit selbstsigniertem Zertifikat (`https://`-Ziele). | „Internes Gerät mit selbstsigniertem Zertifikat“ |
+| Anmeldung per Kopfzeile | Die Anwendung erfährt, wer angemeldet ist: `X-Velydock-User`, `X-Velydock-Email`, `X-Velydock-Name`. Nur bei geschützten Apps. Die Anwendung muss so eingerichtet sein, dass sie diesen Kopfzeilen nur vom Proxy glaubt. | „Anmeldung per Kopfzeile“ |
+| Öffentlichen Hostnamen weitergeben | Die Anwendung sieht den öffentlichen Namen als `Host`. Standard: an. | – |
+| Anfragen begrenzen | Höchstzahl pro Sekunde je Client-Adresse. | – |
+| Zusätzliche Kopfzeilen | An die Anwendung (z. B. ein fester `Authorization`-Wert für ein Gerät ohne eigene Benutzer) oder an den Browser. | – |
+
+Eigene Vorlagen legt der Systemadministrator an (*System → Proxy-Vorlagen*). Nur dort lassen sich
+auch Traefik-Middlewares im Wortlaut hinterlegen, etwa eine Beschränkung auf bestimmte
+Quelladressen.
+
+**Gut zu wissen**
+
+- Eine veröffentlichte App hat keine frei wählbare Adresse mehr; ihre Adresse ist die öffentliche.
+  Wird die Veröffentlichung beendet, braucht die App wieder eine eigene.
+- Änderungen wirken nach etwa fünf Sekunden.
+- Zieht der Systemadministrator eine Freigabe zurück, ist die App nicht mehr erreichbar; die
+  App-Liste zeigt den Grund.
+- Die Arbeit in einer geschützten App zählt als Aktivität der Velydock-Sitzung.
+- Soll eine geschützte App *eingebettet* funktionieren, muss der Apps-Host unter derselben Domain
+  liegen wie Velydock (siehe oben, „Die App muss unter derselben Domain laufen“).
+
 ## Eigene Apps
 
 Eine eigene App besteht aus drei Feldern: HTML (Inhalt des `<body>`), CSS und JavaScript. Velydock

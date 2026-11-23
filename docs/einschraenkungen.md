@@ -40,8 +40,16 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
   wird, den Fokus ständig an sich (manche Terminal- und Fernwartungs-Oberflächen tun das),
   schließen sich Velydocks Menüs gleich wieder. Die Einträge im Dock – Startseite, andere Apps –
   funktionieren weiter; von dort sind die Menüs wieder benutzbar.
-- **Kein eingebauter App-Proxy.** Velydock entfernt keine Framing-Verbote fremder Anwendungen und
-  schützt keine Apps ohne eigene Anmeldung.
+- **Veröffentlichen über den Proxy** gibt es nur mit dem mitgelieferten Traefik. Im Pfad-Modus
+  (`apps.example.com/name/`) teilen sich alle so veröffentlichten Apps – auch die verschiedener
+  Organisationen – einen Ursprung: Ihre Skripte können einander im Browser erreichen. Für Apps,
+  denen man nicht gleichermaßen vertraut, die Subdomain wählen. Viele Anwendungen laufen nur
+  unter einem Unterpfad, wenn sie dafür eingerichtet sind.
+- **Von einer veröffentlichten App entfernt Velydock nur `X-Frame-Options`** (Vorlage „In Velydock
+  einbettbar“). Ein Verbot per `Content-Security-Policy: frame-ancestors` bleibt bestehen; es
+  ließe sich nur zusammen mit dem übrigen Schutz der App entfernen.
+- **Entzogener Zugriff wirkt bei veröffentlichten Apps nach bis zu 30 Sekunden:** So lange merkt
+  sich Velydock die Antwort auf die Frage, ob jemand eine App nutzen darf.
 - **Vorhandene Benutzer fügt nur der Systemadministrator weiteren Organisationen hinzu.** Eine
   Einladung durch Mandantenadministratoren gibt es nicht.
 - **Feste Rollen.** Eigene Rollen lassen sich nicht definieren.

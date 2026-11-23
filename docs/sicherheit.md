@@ -204,6 +204,25 @@ Keycloak-Sitzung unterschieben, sodass er sich unbemerkt als jemand anderes anme
 eigene Domain gehören deshalb nur Apps, denen man vertraut
 ([einschraenkungen.md](einschraenkungen.md)).
 
+## Veröffentlichte Apps (Proxy)
+
+Der eingebaute Proxy stellt interne Adressen ins Internet. Was das absichert:
+
+| Gefahr | Schutz |
+|---|---|
+| Eine Organisation veröffentlicht interne Dienste des Betreibers oder einer anderen Organisation | Ziele gibt der Systemadministrator je Organisation frei (Netze, Adressen, genaue Hostnamen); die Datenbank setzt das durch (eine Organisation kann ihre Freigaben nur lesen). Adressen der Installation selbst – Datenbank, Keycloak, Velydock, `localhost`, Link-Local – sind nie ein Ziel, was auch immer freigegeben wurde. |
+| Ein Hostname zeigt später woandershin (DNS-Rebinding) | Hostnamen gelten nur, wenn genau dieser Name freigegeben ist; sonst sind nur IP-Adressen aus freigegebenen Netzen möglich. |
+| Eine Route beansprucht Velydocks eigene Adresse | Routen werden aus einem geprüften Namen und der Art gebaut; der Apps-Host darf keiner von Velydocks Hosts sein und nicht über ihnen liegen. Freie Traefik-Bausteine gibt es nur für Systemadministratoren, nur als Middleware und nur aus einer festen Liste (kein `forwardAuth`, keine Plugins). |
+| Eine interne App steht ungeschützt im Internet | Standard ist „geschützt“: Traefik fragt vor jeder Anfrage Velydock, ob eine Sitzung besteht und die App der Person freigegeben ist. Fällt Velydock aus, bleibt die App zu. „Öffentlich“ ist eine ausdrückliche Wahl je App und steht im Protokoll. |
+| Velydocks Session-Cookie gelangt zu einer App | Es gilt nur für Velydocks eigenen Host. Die App erhält nach einem Umweg über Velydock ein eigenes Cookie, das nur für sie gilt (`HttpOnly`, im Pfad-Modus auf ihren Pfad beschränkt); das Ticket dafür gilt einmal und 60 Sekunden. |
+| Jemand gibt sich der App gegenüber als ein anderer aus | Die Kopfzeilen `X-Velydock-User`, `-Email`, `-Name` setzt nur Velydock (und nur mit der Vorlage dafür); mitgeschickte entfernt der Proxy – bei öffentlichen Apps immer. |
+| Zurückgezogene Freigabe, gelöschte Vorlage | Eine Veröffentlichung, deren Ziel nicht mehr freigegeben ist oder deren Vorlage fehlt, nimmt Velydock beim nächsten Abruf aus den Routen. Eine Vorlage in Verwendung lässt sich nicht löschen: Sie kann das sein, was eine App einschränkt. |
+| Die Wege zwischen Traefik und Velydock werden von außen benutzt | Sie antworten nur unter Velydocks internem Namen; der Routen-Abruf zusätzlich nur mit einem Geheimnis. Über die öffentliche Adresse gibt es sie nicht. |
+
+Was bleibt: Im Pfad-Modus teilen sich die Apps einen Ursprung, und alle Apps unter derselben
+Domain wie Velydock können Cookies für die ganze Domain setzen
+([einschraenkungen.md](einschraenkungen.md)). Eine „öffentliche“ App schützt nur sich selbst.
+
 ## Eingaben
 
 - Alle Anfragen werden gegen ein Schema geprüft; unbekannte Felder führen zu einem Fehler.

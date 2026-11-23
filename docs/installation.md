@@ -112,6 +112,7 @@ Alle Einstellungen stehen in `.env`. Nach einer Änderung: `docker compose up -d
 | Variable | Bedeutung |
 |---|---|
 | `VELYDOCK_HOST`, `KEYCLOAK_HOST`, `SANDBOX_HOST` | Die drei Hostnamen (klein geschrieben, ohne `https://`). Sie müssen sich unterscheiden. |
+| `APPS_HOST` | Optional: vierter Hostname für Apps, die Velydocks Proxy veröffentlicht ([betrieb.md](betrieb.md#apps-über-den-proxy-veröffentlichen)). Leer: Funktion aus. |
 | `ACME_EMAIL` | E-Mail-Adresse für Let's Encrypt. |
 | `COMPOSE_PROFILES` | `proxy` startet den mitgelieferten Traefik. Leer lassen für einen eigenen Proxy. |
 | `HTTP_BIND`, `HTTPS_BIND` | Adresse und Port, an die Traefik bindet (Standard `0.0.0.0:80` und `0.0.0.0:443`). |
@@ -132,6 +133,7 @@ Von `install.sh` erzeugt; von Hand jeweils mit `openssl rand -hex 32`. Wer `.env
 | `VELYDOCK_SECRET_KEY` | Signiert Login-Zustand und Links zu eigenen Apps. |
 | `VELYDOCK_OIDC_CLIENT_SECRET` | Geheimnis des OIDC-Clients `velydock`. |
 | `VELYDOCK_IDP_ADMIN_CLIENT_SECRET` | Geheimnis des Dienstzugangs `velydock-admin` für Keycloaks Admin-API. |
+| `VELYDOCK_PROXY_SECRET` | Damit holt Traefik die Routen veröffentlichter Apps bei Velydock ab. Nur nötig mit `APPS_HOST`. |
 | `KEYCLOAK_BOOTSTRAP_SECRET` | Damit legt Velydock beim ersten Start seinen Realm an. Muss danach in `.env` stehen bleiben: Keycloak startet ohne den Wert nicht, und Compose verweigert deshalb den Start. |
 
 ### Geheimnisse tauschen

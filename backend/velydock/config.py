@@ -82,6 +82,12 @@ class Settings(BaseSettings):
             raise ValueError("must be an absolute http(s) URL")
         return value
 
+    @field_validator("proxy_secret", mode="before")
+    @classmethod
+    def _empty_is_none(cls, value: object) -> object:
+        # An empty variable in .env means "not set", not "a secret of no characters".
+        return value or None
+
     @field_validator("apps_url")
     @classmethod
     def _apps_url(cls, value: str | None) -> str | None:

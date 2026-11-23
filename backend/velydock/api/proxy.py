@@ -49,6 +49,9 @@ async def traefik_configuration(
     settings: Settings = Depends(get_settings),
 ) -> Response:
     _internal_only(request, settings)
+    if not settings.apps_url:
+        # The feature is off: the proxy asks all the same, and "no routes" is the true answer.
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
     given = request.headers.get(SECRET_HEADER, "")
     if not settings.proxy_secret or not hmac.compare_digest(given.encode(), settings.proxy_secret.encode()):
         raise not_found("Page")

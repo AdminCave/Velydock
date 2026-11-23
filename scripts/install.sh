@@ -56,6 +56,8 @@ cat > .env <<ENV
 VELYDOCK_HOST=$velydock_host
 KEYCLOAK_HOST=$keycloak_host
 SANDBOX_HOST=$sandbox_host
+# Optional fourth host for apps published through the proxy (see docs/betrieb.md); empty: off.
+APPS_HOST=
 ACME_EMAIL=$acme_email
 
 COMPOSE_PROFILES=proxy
@@ -69,6 +71,7 @@ VELYDOCK_OIDC_CLIENT_SECRET=$(secret)
 VELYDOCK_IDP_ADMIN_CLIENT_SECRET=$(secret)
 # Must stay in this file: Keycloak does not start without it.
 KEYCLOAK_BOOTSTRAP_SECRET=$(secret)
+VELYDOCK_PROXY_SECRET=$(secret)
 
 VELYDOCK_REQUIRE_ADMIN_2FA=true
 ENV

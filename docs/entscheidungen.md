@@ -192,7 +192,34 @@ auf eine andere Adresse umleitet – und in der Adresse Daten mitgibt. Wohin ein
 darf, bestimmt das Dokument, das ihn enthält; das ist beim Zwischendokument unter Kontrolle, bei
 der Velydock-Seite nicht (sie muss beliebige `https`-Apps einbetten können).
 
-## 15. Abweichungen vom freigegebenen Vorschlag
+## 15. Apps über den eingebauten Proxy veröffentlichen (23.11.2026)
+
+Velydock stellt interne Anwendungen über Traefik bereit. Drei Punkte hat der Auftraggeber
+entschieden, nachdem die Folgen benannt waren:
+
+- **Adressen:** je App eine eigene Subdomain oder ein Pfad auf einem *eigenen* Apps-Host
+  (`apps.example.com/name/`, der Standard) – nie unter Velydocks eigener Adresse. Eine App dort
+  liefe als Teil von Velydock: Ihre Skripte könnten mit der Sitzung jedes angemeldeten Benutzers
+  auf Velydock zugreifen, über Organisationsgrenzen hinweg.
+- **Wer was festlegt:** Der Systemadministrator gibt je Organisation frei, welche internen Netze
+  und Hosts erreichbar sind, und pflegt die Vorlagen. Organisations-Administratoren
+  veröffentlichen innerhalb dieser Grenzen. Freie Traefik-Optionen nur für den
+  Systemadministrator: Ein Proxy-Ziel kann jede Adresse sein, die der Server erreicht.
+- **Zugriff:** standardmäßig nur angemeldete Benutzer mit Freigabe der App; „öffentlich“ je App.
+
+Technisch folgt daraus:
+
+- Traefik holt die Routen bei Velydock ab (HTTP-Provider), statt dass Velydock Dateien schreibt
+  oder Traefik Zugriff auf den Docker-Socket bekommt. Die Routen werden aus geprüften Teilen
+  *gebaut* (ein Name, eine Art), nie als Text übernommen: Eine frei formulierte Regel könnte
+  Velydocks eigene Adresse beanspruchen (im Versuch bestätigt).
+- Hostnamen als Ziel gelten nur, wenn der Systemadministrator genau diesen Namen freigegeben
+  hat: Ein Name ist nur so viel wert wie das, worauf er im Moment der Anfrage zeigt.
+- Vor jeder Anfrage an eine geschützte App fragt Traefik Velydock (`forwardAuth`). Die Anmeldung
+  läuft über Velydocks Adresse und kommt mit einem einmal gültigen Ticket zurück; die App bekommt
+  ein eigenes Cookie, das nur für sie gilt. Velydocks Session-Cookie verlässt dessen Host nie.
+
+## 16. Abweichungen vom freigegebenen Vorschlag
 
 - Python 3.13 statt 3.14: identisch mit der Entwicklungs- und Testumgebung.
 - Bits UI wurde nicht benötigt; die Komponenten basieren auf denen von AdminHelper.
