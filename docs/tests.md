@@ -5,12 +5,12 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
 | Unit-Tests Backend | pytest | 324 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 270 Tests | PostgreSQL |
+| Integrationstests Backend | pytest gegen PostgreSQL | 404 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 688 Tests | nichts |
-| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 74 Tests | kompletter Stack |
+| Unit-Tests Frontend | Vitest, Testing Library | 857 Tests | nichts |
+| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 87 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
-| Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` |
+| Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` (oder `VELYDOCK_DEV_IMAGE`) |
 
 ## Ausführen
 
@@ -32,6 +32,13 @@ E2E_BROWSERS=firefox,webkit ./scripts/tests/e2e.sh
 
 # Installation nach Anleitung mit der Produktiv-Compose-Datei (eigener, kurzlebiger Stack)
 ./scripts/tests/install-smoke.sh
+
+# Browser-Tests und Backup-Test auf einem eigenen Stack statt auf dem Entwicklungs-Stack, etwa
+# weil dort gerade jemand arbeitet: Projektname, Image und Ports kommen aus der Umgebung
+export VELYDOCK_DEV_PROJECT=velydock-e2e VELYDOCK_DEV_IMAGE=velydock:e2e DEV_HTTPS_PORT=7443 \
+       PUBLIC_PORT_SUFFIX=:7443 DEV_KEYCLOAK_PORT=17080 DEV_POSTGRES_PORT=17432 DEV_MAIL_PORT=17025
+./scripts/tests/e2e.sh && ./scripts/tests/backup-restore.sh
+./scripts/dev-stack.sh down --volumes            # danach wieder abräumen
 ```
 
 Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
@@ -97,8 +104,11 @@ Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je B
 
 ## Apps über den Proxy veröffentlichen
 
-Velydocks Seite prüft `test_proxy.py` (123 Tests); dass der Proxy damit tut, was gemeint ist,
-prüft `07b-app-proxy` gegen den echten Traefik.
+Velydocks Seite prüft `test_proxy.py` (134 Tests); dass der Proxy damit tut, was gemeint ist,
+prüft `07b-app-proxy` gegen den echten Traefik, und `07c-app-proxy-ui` geht den Weg durch die
+Oberfläche: Der Systemadministrator gibt ein Ziel frei, die Organisation veröffentlicht eine
+eingebettete App im Dialog, ein Mitglied öffnet sie aus dem Dock und ist ohne weiteres Zutun in
+der App angemeldet.
 
 - **Was veröffentlicht werden darf.** Nur innerhalb dessen, was der Systemadministrator für die
   Organisation freigegeben hat (Netz, Adresse, Port, genauer Hostname); nie eine Adresse der
@@ -127,8 +137,17 @@ prüft `07b-app-proxy` gegen den echten Traefik.
   der App nicht an, bei öffentlichen Apps nie eine davon (im Browser gegen einen Dienst
   geprüft, der seine Anfrage zurückgibt).
 - **Die Wege zwischen Traefik und Velydock** gibt es von außen nicht, mit oder ohne Geheimnis.
-- Jede der Schutzmaßnahmen aus der unabhängigen Prüfung wurde einzeln entfernt; jedes Mal
-  schlug ein Test fehl (18 von 18).
+- **Eigene Traefik-Middlewares.** Nur für Systemadministratoren, in Vorlagen oder an einer
+  einzelnen App; sie wirken in der Reihenfolge ihrer Namen nach der Anmeldeprüfung. Was der
+  Systemadministrator einer App mitgegeben hat, bleibt, ob die Organisation es unverändert
+  zurückschickt, weglässt oder zu ändern versucht. In der Oberfläche: Ein Feld, das Traefik nicht
+  kennt, wird am Eingabefeld mit seinem Namen abgelehnt; eine Vorlage, die verwendet wird, lässt
+  sich nicht löschen, und die Seite nennt die App.
+- **Freigaben und Pfad-Adressen in der Oberfläche.** Ohne Freigabe erklärt der App-Dialog, was
+  fehlt, und bietet kein Speichern an; eine zurückgezogene Freigabe zeigt die App-Liste als
+  Grund; sind Pfad-Adressen abgeschaltet, bietet der Dialog nur die Subdomain.
+- Jede der Schutzmaßnahmen aus der unabhängigen Prüfung und aus dem Bau der Oberfläche wurde
+  einzeln entfernt; jedes Mal schlug ein Test fehl (25 von 25).
 
 ## Sicherheitstests im Einzelnen
 

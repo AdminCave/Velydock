@@ -109,7 +109,7 @@ Im App-Dialog unter **Über den Proxy veröffentlichen**:
 | Angabe | Bedeutung |
 |---|---|
 | **Interne Adresse** | Wohin der Proxy weiterleitet, z. B. `http://10.20.0.7:8080`. Möglich ist nur, was der Systemadministrator für die Organisation freigegeben hat; der Dialog zeigt die Freigaben. Hostnamen gehen nur, wenn genau dieser Name freigegeben ist. |
-| **Adresse** | *Pfad* (Standard): `https://apps.example.com/name/`. *Subdomain*: `https://name.apps.example.com/`. Der Name ist über alle Organisationen eindeutig. Hat der Systemadministrator Pfad-Adressen für die Organisation abgeschaltet, gibt es nur die Subdomain. |
+| **Adresse** | *Pfad* (Standard): `https://apps.example.com/name/`. *Subdomain*: `https://name.apps.example.com/`. Der **Name in der Adresse** (Kleinbuchstaben, Ziffern, Bindestriche) wird aus dem Namen der App vorgeschlagen und ist über alle Organisationen eindeutig; darunter steht die **öffentliche Adresse**, die sich ergibt. Hat der Systemadministrator Pfad-Adressen für die Organisation abgeschaltet, gibt es nur die Subdomain. |
 | **Zugriff** | *Geschützt* (Standard): nur angemeldete Benutzer, denen die App freigegeben ist – wer die Adresse ohne Anmeldung öffnet, landet bei Velydocks Anmeldung und danach in der App. *Öffentlich*: jeder, der die Adresse kennt. |
 | **Vorlage** | Ein Satz von Proxy-Einstellungen; einzelne lassen sich darunter abweichend setzen. |
 
@@ -133,11 +133,14 @@ Subdomain hat beides nicht, braucht aber einen DNS-Eintrag.
 | Anmeldung per Kopfzeile | Die Anwendung erfährt, wer angemeldet ist: `X-Velydock-User`, `X-Velydock-Email`, `X-Velydock-Name`. Nur bei geschützten Apps. Die Anwendung muss so eingerichtet sein, dass sie diesen Kopfzeilen nur vom Proxy glaubt. | „Anmeldung per Kopfzeile“ |
 | Öffentlichen Hostnamen weitergeben | Die Anwendung sieht den öffentlichen Namen als `Host`. Standard: an. | – |
 | Anfragen begrenzen | Höchstzahl pro Sekunde je Client-Adresse. | – |
-| Zusätzliche Kopfzeilen | An die Anwendung (z. B. ein fester `Authorization`-Wert für ein Gerät ohne eigene Benutzer) oder an den Browser. Nicht möglich: Kopfzeilen, die der Proxy selbst setzt (`Host`, `X-Forwarded-…`, `X-Velydock-…`), und `Set-Cookie`. | – |
+| Zusätzliche Kopfzeilen | Zwei Felder, je Zeile „Name: Wert“: *an die Anwendung* (z. B. ein fester `Authorization`-Wert für ein Gerät ohne eigene Benutzer) und *an den Browser*. Nicht möglich: Kopfzeilen, die der Proxy selbst setzt (`Host`, `X-Forwarded-…`, `X-Velydock-…`), und `Set-Cookie`. | – |
 
-Eigene Vorlagen legt der Systemadministrator an (*System → Proxy-Vorlagen*). Nur dort lassen sich
-auch Traefik-Middlewares im Wortlaut hinterlegen, etwa eine Beschränkung auf bestimmte
-Quelladressen:
+Unter **Einstellungen anpassen** steht bei jeder Einstellung, was die gewählte Vorlage vorgibt;
+gespeichert wird nur, was davon abweicht.
+
+Eigene Vorlagen legt der Systemadministrator an (*System → Proxy-Vorlagen*). Nur er kann auch
+Traefik-Middlewares im Wortlaut hinterlegen – in einer Vorlage oder, für eine einzelne App, im
+App-Dialog –, etwa eine Beschränkung auf bestimmte Quelladressen:
 
 ```json
 {
@@ -146,12 +149,16 @@ Quelladressen:
 }
 ```
 
-- Je Name genau eine Middleware. Erlaubt sind `addPrefix`, `basicAuth`, `buffering`, `compress`,
+- Je Name genau eine Middleware; Namen aus Kleinbuchstaben, Ziffern und Bindestrichen, höchstens
+  31 Zeichen, höchstens zehn je Vorlage oder App. Erlaubt sind `addPrefix`, `basicAuth`, `buffering`, `compress`,
   `contentType`, `digestAuth`, `headers`, `inFlightReq`, `ipAllowList`, `rateLimit`,
   `redirectRegex`, `redirectScheme`, `replacePath`, `replacePathRegex`, `retry`, `stripPrefix`
   und `stripPrefixRegex` – nicht `forwardAuth`, `errors`, `chain` und Plugins.
 - Sie wirken **nach** der Anmeldeprüfung und in der Reihenfolge ihrer Namen; mit Namen wie
-  `10-…`, `20-…` lässt sich die Reihenfolge festlegen.
+  `10-…`, `20-…` lässt sich die Reihenfolge festlegen. Die einer App kommen zu denen ihrer
+  Vorlage hinzu; bei gleichem Namen gilt die der App.
+- Was der Systemadministrator einer einzelnen App mitgegeben hat, kann deren Organisation weder
+  ändern noch entfernen. Sie verwaltet die App wie sonst; der Dialog weist darauf hin.
 - Velydock nimmt nur Felder an, die Traefik kennt, und nur Werte der richtigen Art (Zahl,
   Ja/Nein, Text, Liste, Dauer wie `"1m30s"`). Der Grund: Traefik liest die Routen aller
   Organisationen als ein Dokument und verwirft es als Ganzes, wenn es ein Feld nicht versteht.

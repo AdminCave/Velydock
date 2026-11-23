@@ -37,6 +37,7 @@ Bindestriche). Der Kurzname ist dauerhaft; er erscheint in Keycloak als Alias de
 | **Umbenennen** | Ändert den Namen; der Kurzname bleibt. |
 | **Deaktivieren** | Mitglieder behalten ihr Konto, können die Organisation aber nicht mehr betreten. Wer nur dieser Organisation angehört, sieht nach der Anmeldung statt des Workspace den Hinweis, dass seine Organisation deaktiviert ist. |
 | **Löschen** | Entfernt die Organisation mit Gruppen, Apps und Protokoll **und löscht alle Konten, die ihr gehören**. Gäste aus anderen Organisationen behalten ihr Konto. Zur Bestätigung muss der Kurzname eingegeben werden. Nicht umkehrbar. |
+| **Proxy-Freigaben** | Welche internen Adressen die Organisation über den Proxy veröffentlichen darf, und ob sie Pfad-Adressen verwenden darf. Siehe unten. Ist das Veröffentlichen auf der Installation nicht eingerichtet ([betrieb.md](betrieb.md#apps-über-den-proxy-veröffentlichen)), sagt der Dialog das. |
 
 Die Organisation, der das Konto eines Systemadministrators gehört, lässt sich weder deaktivieren
 noch löschen; die beiden Aktionen sind dort ausgegraut.
@@ -44,6 +45,23 @@ noch löschen; die beiden Aktionen sind dort ausgegraut.
 Namen werden bereinigt: Mehrere Leerzeichen hintereinander zählen als eines, damit nicht zwei
 Organisationen, Gruppen oder Apps entstehen, die gleich aussehen. Listen sind nach Namen
 sortiert, Umlaute bei ihrem Grundbuchstaben.
+
+**Proxy-Freigaben.** Eine Organisation kann nur veröffentlichen, was ihr freigegeben ist. Eine
+Freigabe ist ein Netz (`10.20.0.0/16`), eine Adresse (`10.20.0.7`), eine Adresse mit Port
+(`10.20.0.7:8080`) oder ein genauer Hostname (`nas.intern`, auch mit Port) – dazu eine Notiz,
+wofür sie gedacht ist. Hostnamen gelten nur, wenn genau dieser Name freigegeben ist: Ein Name ist
+nur so viel wert wie das, worauf er gerade zeigt. Adressen der Installation selbst (Datenbank,
+Keycloak, Velydock, `localhost`) lassen sich nicht freigeben und sind auch in einem freigegebenen
+Netz kein Ziel. Wird eine Freigabe zurückgezogen (Velydock fragt vorher nach), sind die Apps, die
+auf sie angewiesen waren, wenige Sekunden später nicht mehr erreichbar; die Organisation sieht
+den Grund in ihrer App-Liste.
+
+**Pfad-Adressen erlauben** (dort, standardmäßig an): Apps unter `apps.example.com/name/` teilen
+sich im Browser einen Ursprung – mit allen so veröffentlichten Apps, auch denen anderer
+Organisationen. Das Skript einer solchen App kann die anderen mit den Rechten der Person
+aufrufen, die sie gerade benutzt. Teilen sich Organisationen die Installation, die einander nicht
+vertrauen, den Schalter für sie ausschalten (auch hier fragt Velydock nach): Ihnen bleiben
+Subdomains, und was sie per Pfad veröffentlicht hatten, geht vom Netz, bis sie es umstellen.
 
 **Eine neue Organisation einrichten:** anlegen → „Betreten“ → unter *Verwaltung → Benutzer* den
 ersten Benutzer mit der Rolle „Administration“ anlegen. Ab dann kann die Organisation sich selbst
@@ -155,6 +173,7 @@ verschiebst du sie.
 |---|---|
 | **Name**, **Beschreibung** | Erscheinen im Dock und auf der Startseite. |
 | **Typ** | „Eingebettet“, „Neuer Tab“ oder „Eigene App“ – Erklärung in [anwendungsintegration.md](anwendungsintegration.md). |
+| **Über den Proxy veröffentlichen** | Für eingebettete Apps und Apps im neuen Tab, wenn der Betreiber es eingerichtet hat: Die App bekommt eine öffentliche Adresse, und Velydock leitet an eine interne weiter – geschützt durch die Velydock-Anmeldung oder öffentlich. Alle Angaben in [anwendungsintegration.md](anwendungsintegration.md#apps-über-den-proxy-veröffentlichen). Die „Adresse (URL)“ entfällt dann. |
 | **Adresse (URL)** | Für eingebettete Apps nur `https://`. „Einbettbarkeit prüfen“ sagt, ob die Seite das Einbetten erlaubt, und bietet bei einem Verbot an, auf „Neuer Tab“ umzustellen. |
 | **HTML, CSS, JavaScript** | Nur bei eigenen Apps. „Netzwerkzugriff erlauben“ nur einschalten, wenn die App Daten aus dem Internet laden muss. |
 | **Symbol** | Aus der Auswahl oder ein eigenes Bild (höchstens 256 KB). |
@@ -168,6 +187,12 @@ mehr im Dock.
 Die Spalte **Einbettung** zeigt bei eingebetteten Apps „Einbettbar“, „Blockiert“ oder
 „Ungeprüft“. Hat sich an der App etwas geändert, löst „Einbettung erneut prüfen“ die Prüfung neu
 aus.
+
+Eine veröffentlichte App ist in der Tabelle als solche gekennzeichnet, mit ihrer öffentlichen
+Adresse. Steht dort eine Warnung, leitet der Proxy sie gerade nicht weiter: Das Ziel ist nicht
+(mehr) freigegeben, die Vorlage wurde entfernt, oder Pfad-Adressen sind für die Organisation
+abgeschaltet. Die ersten beiden behebt der Systemadministrator, das dritte die Umstellung auf
+eine Subdomain.
 
 Als Administrator siehst du im eigenen Workspace nur die Apps, die dir selbst freigegeben sind –
 alle Apps der Organisation stehen in dieser Tabelle.
@@ -220,6 +245,23 @@ Systemeinstellungen, Systemadministrator-Rechte), stehen im **Systemprotokoll**.
 | **Standardsprache** (zusätzlich) | Ist auch die Sprache der E-Mails und – für alle ohne eigene Wahl – der Anmeldeseiten von Keycloak. |
 | **Zwei-Faktor für Administratoren verlangen** | Wer eine Rolle mit Verwaltungsrechten hat, muss bei der Anmeldung eine Authenticator-App einrichten, falls noch keine vorhanden ist. Wird die Pflicht abgeschaltet oder verliert jemand die Rolle, bevor die Einrichtung abgeschlossen ist, verlangt Keycloak sie nicht mehr. |
 | **E-Mail-Versand (SMTP)** | Server, Port, Verschlüsselung, Absender, Zugangsdaten. Danach kann Velydock Passwort-Links verschicken, und die Anmeldeseite bietet „Passwort vergessen“ an. Das Passwort wird nie wieder angezeigt; ein leeres Feld behält das gespeicherte – außer du änderst Server, Port, Verschlüsselung, Absenderadresse oder Benutzername: dann muss das Passwort neu eingegeben werden. |
+
+## Proxy-Vorlagen (System → Proxy-Vorlagen)
+
+Eine Vorlage ist ein Satz von Proxy-Einstellungen, den Organisationen beim Veröffentlichen einer
+App auswählen. Die mitgelieferten Vorlagen lassen sich nicht ändern; eigene legt der
+Systemadministrator hier an – mit denselben Einstellungen wie im App-Dialog
+([anwendungsintegration.md](anwendungsintegration.md#apps-über-den-proxy-veröffentlichen)) und
+eigenen Traefik-Middlewares im Wortlaut. Die Spalte „Was sie setzt“ zeigt, worin eine Vorlage vom
+Standard abweicht.
+
+- Eigene Vorlagen gelten für alle Organisationen.
+- Eine Änderung wirkt auf alle Apps, die die Vorlage verwenden, nach wenigen Sekunden.
+- Eine Vorlage, die verwendet wird, lässt sich nicht löschen: Sie kann das sein, was den Zugriff
+  auf eine App einschränkt.
+- Eigene Middlewares prüft Velydock auf Form (bekannte Felder, richtige Art der Werte), nicht
+  auf Sinn. Ist der Inhalt falsch – ein ungültiges Netz, ein fehlerhafter Ausdruck –, sind die
+  Apps mit dieser Vorlage nicht erreichbar; `docker compose logs traefik` nennt den Grund.
 
 ## Was Benutzer selbst tun
 
