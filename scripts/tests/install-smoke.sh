@@ -4,11 +4,13 @@
 #   scripts/install.sh  →  docker compose up -d --wait  →  velydock setup-admin  →  first sign-in
 #
 # Runs as its own Compose project ("velydock-install") on local ports and removes it afterwards.
-# Uses the image velydock:dev (build it first: ./scripts/dev-stack.sh build).
+# Uses the image velydock:dev (build it first: ./scripts/dev-stack.sh build), or the one named by
+# VELYDOCK_DEV_IMAGE.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 port=${INSTALL_HTTPS_PORT:-9443}
 project=velydock-install
+image=${VELYDOCK_DEV_IMAGE:-velydock:dev}
 
 work=$(mktemp -d)
 compose=(docker compose -p "$project" --project-directory "$work")
@@ -33,7 +35,7 @@ fi
 
 # Local stand-ins for DNS, public ports and Let's Encrypt.
 cat >> .env <<ENV
-VELYDOCK_IMAGE=velydock:dev
+VELYDOCK_IMAGE=$image
 TLS_RESOLVER=
 HTTP_BIND=127.0.0.1:$((port - 363))
 HTTPS_BIND=127.0.0.1:$port
