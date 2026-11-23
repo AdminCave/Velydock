@@ -352,7 +352,7 @@ ohne Netzwerkzugriff über WebRTC dennoch senden kann ([sicherheit.md](sicherhei
 
 Die CI prüft Chromium. Am 22.11.2026 lief die Suite zusätzlich vollständig in Firefox und in
 WebKit, der Engine von Safari (je 68 von 68 Tests), am 23.11.2026 erneut mit dem
-Erscheinungsbild (je 74 von 74). Dazu kam eine Prüfung von Hand mit echten
+Erscheinungsbild (je 74 von 74) und mit dem Veröffentlichen über den Proxy (je 87 von 87). Dazu kam eine Prüfung von Hand mit echten
 Maus- und Tastaturereignissen in echten Browserfenstern – Chromium, WebKit und der installierte
 Firefox 153 ESR –, weil sich gerade das Verhalten des Tastaturfokus mit simulierten Eingaben
 nicht verlässlich beurteilen lässt.
@@ -366,6 +366,7 @@ Was die anderen Browser gezeigt haben:
 | Am 23.11.2026 bekam in WebKit eine App im Hintergrund einen Tastendruck mit, der auf einer **Velydock-Seite** getippt wurde – in einem Lauf der Suite, während die Maschine stark ausgelastet war. Dort waren noch drei Versuche erlaubt, weil frühere Messungen auf ruhiger Maschine keinen Tastendruck gezeigt hatten. | Behoben: Auch hier wird die App beim ersten Mal beendet. Danach je 20 automatisierte Läufe unter Last in WebKit und Chromium: kein Tastendruck kam an; in einem WebKit-Lauf ging einer verloren. Der Test lässt genau das zu – höchstens einen betroffenen Tastendruck –, weil sich der Augenblick zwischen Griff und Bemerken nicht schließen lässt ([sicherheit.md](sicherheit.md#eigene-apps)). `frameFocus.test.ts`, `04-custom-app-isolation` |
 | Firefox lässt eine nicht angezeigte App den Tastaturfokus gar nicht nehmen und wirft bei `window.open` in einer Sandbox eine Ausnahme, statt `null` zu liefern. | Kein Fehler; zwei Tests unterscheiden jetzt nach Browser. |
 | Im Firefox, den Playwright mitbringt (Version 157), nimmt ein Feld in einem Frame keinen Klick als Fokus an, sobald vorher etwas auf der Seite angeklickt wurde – auch auf einer Testseite ohne Velydock und ohne Playwrights Steuerung. Der installierte Firefox 153 ESR zeigt das nicht. | Kein Fehler von Velydock. Eingaben in App-Feldern lassen sich in diesem Firefox nicht testen; sie sind im installierten Firefox von Hand geprüft. Ein offizieller Firefox 157 war nicht zur Hand. |
+| Das WebKit, das Playwright unter Linux mitbringt, hält jeden Namen unter `.localhost` für eine eigene Website. Eine eingebettete Seite unter `apps.velydock.localhost` bekommt im Frame von `dock.velydock.localhost` deshalb kein Cookie, und die Anmeldung einer geschützten, veröffentlichten App im Frame dreht sich im Kreis. Chromium und Firefox betrifft das nicht. | Kein Fehler von Velydock, sondern der Testnamen: Mit Namen unter einer echten Endung (`….example.com`, `….co.uk`) behält dasselbe WebKit das Cookie der eingebetteten Seite – geprüft mit einer eigenen Testseite ohne Velydock. Der Test öffnet die App in WebKit deshalb im eigenen Tab. Velydock selbst zeigt in so einem Fall nach kurzer Zeit den Hinweis, dass die App nicht geladen ist, und bietet den neuen Tab an. |
 
 Ergebnis der Prüfung mit echten Eingaben (eine App im Hintergrund versucht mitzulesen), mit der
 Regel vom 23.11.2026 wiederholt in Chromium und WebKit:

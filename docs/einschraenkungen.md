@@ -106,3 +106,12 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
   prüft nur Chromium. Safari selbst (macOS, iOS) und Edge sind nicht geprüft – WebKit unter
   Linux ist dieselbe Engine wie Safari, aber nicht derselbe Browser.
 - Der Betrieb hinter einem fremden Reverse Proxy.
+- Veröffentlichte Apps unter echten Domainnamen mit Zertifikaten von Let's Encrypt (je App eines
+  bei Subdomains). Die Tests laufen unter `*.velydock.localhost`.
+- Eine geschützte, veröffentlichte App *eingebettet* in WebKit oder Safari: Unter den Testnamen
+  nimmt WebKit im Frame kein Cookie an. Dass es das unter echten Domainnamen tut, ist mit einer
+  eigenen Testseite geprüft, nicht mit Velydock ([tests.md](tests.md#andere-browser)). In
+  Chromium und Firefox ist der Weg vollständig getestet.
+- Die Installation nach Anleitung *mit* eingerichtetem Apps-Host. Der Installationstest läuft
+  ohne; das Veröffentlichen selbst ist auf dem Entwicklungs-Stack getestet, der dieselbe
+  Compose-Datei verwendet.

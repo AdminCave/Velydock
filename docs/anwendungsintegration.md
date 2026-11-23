@@ -175,7 +175,10 @@ App-Dialog –, etwa eine Beschränkung auf bestimmte Quelladressen:
   Organisation ab, ist die App nicht mehr erreichbar; die App-Liste zeigt den Grund.
 - Die Arbeit in einer geschützten App zählt als Aktivität der Velydock-Sitzung.
 - Soll eine geschützte App *eingebettet* funktionieren, muss der Apps-Host unter derselben Domain
-  liegen wie Velydock (siehe oben, „Die App muss unter derselben Domain laufen“).
+  liegen wie Velydock (siehe oben, „Die App muss unter derselben Domain laufen“): Die Anmeldung
+  für die App läuft im Frame, und Browser nehmen dort nur Cookies der eigenen Domain an. Liegt
+  er woanders, bleibt der Frame leer; Velydock weist dann darauf hin und bietet an, die App im
+  neuen Tab zu öffnen – dort funktioniert sie.
 
 ## Eigene Apps
 

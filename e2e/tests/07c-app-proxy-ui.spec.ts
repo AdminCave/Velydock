@@ -63,7 +63,7 @@ test.describe('Veröffentlichen über den Proxy in der Oberfläche', () => {
     await release(false, 'main');
   });
 
-  test('der Systemadministrator gibt frei, die Organisation veröffentlicht, ein Mitglied arbeitet in der App', async ({ browser, playwright }) => {
+  test('der Systemadministrator gibt frei, die Organisation veröffentlicht, ein Mitglied arbeitet in der App', async ({ browser, browserName, playwright }) => {
     await release(false);
 
     // Nothing released yet: the dialog says what is missing and does not offer to save.
@@ -125,8 +125,18 @@ test.describe('Veröffentlichen über den Proxy in der Oberfläche', () => {
     const member = await contextAs(browser, 'mia');
     const memberPage = await member.newPage();
     await memberPage.goto('/');
-    await dockApp(memberPage, appId).click();
-    const shown = appFrame(memberPage, appId).contentFrame().locator('body');
+    await expect(dockApp(memberPage, appId)).toBeVisible();
+    let shown: Locator;
+    if (browserName === 'webkit') {
+      // WebKit takes every *.localhost name for a site of its own and keeps no cookie of a framed
+      // one - so the sign-in inside the frame cannot complete on this stack. Under a real domain
+      // it keeps them (tried with a page of its own, see docs/tests.md). Here: in a tab of its own.
+      await memberPage.goto(`${APPS_URL}/${slug}/`);
+      shown = memberPage.locator('body');
+    } else {
+      await dockApp(memberPage, appId).click();
+      shown = appFrame(memberPage, appId).contentFrame().locator('body');
+    }
     await expect(shown).toContainText('X-Velydock-User: mia', { timeout: 20_000 });
     await expect(shown).toContainText(`X-Forwarded-Prefix: /${slug}`);
     await member.close();
