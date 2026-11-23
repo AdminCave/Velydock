@@ -13,7 +13,14 @@ project=velydock-install
 image=${VELYDOCK_DEV_IMAGE:-velydock:dev}
 
 work=$(mktemp -d)
-compose=(docker compose -p "$project" --project-directory "$work")
+# Nothing of the caller's environment reaches Compose: there it would take precedence over the
+# .env that install.sh writes. A PUBLIC_PORT_SUFFIX exported for the development stack sent the
+# sign-in of this test to the wrong port.
+clean=(env -i "PATH=$PATH" "HOME=$HOME")
+for name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG XDG_RUNTIME_DIR; do
+  [[ -z ${!name:-} ]] || clean+=("$name=${!name}")
+done
+compose=("${clean[@]}" docker compose -p "$project" --project-directory "$work")
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "$work"
