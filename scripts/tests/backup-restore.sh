@@ -4,10 +4,14 @@
 #
 #   ./scripts/dev-stack.sh up -d --build --wait      (and some data, e.g. after the browser tests)
 #   ./scripts/tests/backup-restore.sh
+#
+# It destroys and restores the data of the stack it runs against: the development stack, or the
+# one named by VELYDOCK_DEV_PROJECT (see dev-stack.sh) - never a real installation.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-export VELYDOCK_COMPOSE_ARGS="-p velydock-dev --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml"
+project=${VELYDOCK_DEV_PROJECT:-velydock-dev}
+export VELYDOCK_COMPOSE_ARGS="-p $project --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml"
 export VELYDOCK_ENV_FILE=.env.dev
 export VELYDOCK_RESTORE_CONFIRM=yes
 stack=(./scripts/dev-stack.sh)
@@ -67,7 +71,7 @@ fi
 
 # A backup that fails leaves nothing behind that could be taken for a backup. Here it fails
 # because the project it is pointed at has no containers, as if the stack were not running.
-if VELYDOCK_COMPOSE_ARGS="${VELYDOCK_COMPOSE_ARGS/-p velydock-dev /-p velydock-dev-not-running }" \
+if VELYDOCK_COMPOSE_ARGS="${VELYDOCK_COMPOSE_ARGS/-p $project /-p $project-not-running }" \
    ./scripts/backup.sh "$work/failed" >/dev/null 2>&1; then
   echo "error: backup.sh reported success without a running stack" >&2; exit 1
 fi
