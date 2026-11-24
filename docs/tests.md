@@ -4,10 +4,10 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
-| Unit-Tests Backend | pytest | 374 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 430 Tests | PostgreSQL |
+| Unit-Tests Backend | pytest | 378 Tests | nichts |
+| Integrationstests Backend | pytest gegen PostgreSQL | 435 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 1030 Tests | nichts |
+| Unit-Tests Frontend | Vitest, Testing Library | 1035 Tests | nichts |
 | Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 92 Tests | kompletter Stack |
 | Zertifikate am echten Proxy | Shell-Skript mit Pebble, dem ACME-Testserver von Let's Encrypt | 1 Durchlauf | Image wie unten, Docker, `openssl` |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
@@ -116,12 +116,12 @@ Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je B
 
 Drei Ebenen, weil jede etwas anderes beweist:
 
-- **Was angenommen wird** (`unit/test_certificates.py`, 50 Tests): Zertifikat, Kette und Schlüssel
+- **Was angenommen wird** (`unit/test_certificates.py`, 54 Tests): Zertifikat, Kette und Schlüssel
   in jeder Reihenfolge und Schreibweise, PKCS#12, geschützte Schlüssel; abgelehnt mit je eigenem
   Grund: fremder Schlüssel, abgelaufen, kein Name, RSA-1024, P-521, Ed25519, Unlesbares. Dazu
   Traefiks Auswahlregel – welches von zwei Zertifikaten es für einen Namen nimmt –, nachgebaut
   aus dessen Quelltext, und das Aufräumen seines Speichers (`acme.json`).
-- **Wer darf und was der Proxy erfährt** (`integration/test_certificates.py`, 26 Tests): nur
+- **Wer darf und was der Proxy erfährt** (`integration/test_certificates.py`, 31 Tests): nur
   Systemadministratoren; im Kontext einer Organisation ist die Tabelle leer und nimmt nichts an
   (Row Level Security, direkt an der Datenbank geprüft); keine Antwort, keine Fehlermeldung und
   kein Protokolleintrag enthält den Schlüssel; die Dateien für den Proxy entstehen, folgen der
@@ -135,9 +135,12 @@ Drei Ebenen, weil jede etwas anderes beweist:
   - `scripts/tests/tls-modes.sh` stellt den Produktiv-Stack neben **Pebble**, den Testserver von
     Let's Encrypt: Der Proxy bestellt Zertifikate für die Namen, die Velydock ihm nennt, und
     Pebble prüft sie über Port 80 – derselbe Ablauf wie mit Let's Encrypt, ohne Internet. Danach
-    eigene Zertifikate per Kommandozeile, ein Name mit schon geholtem Zertifikat (das geholte
-    bleibt vorn, bis `cert prune-fetched` es entfernt; dann gilt das eigene, auch nach Neustarts,
-    und es wird nichts neu geholt) und das Entfernen (der Proxy holt wieder selbst).
+    eigene Zertifikate per Kommandozeile: erst ohne, dann mit Kette (der Proxy muss die Kette
+    danach mitschicken); zwei Namen mit schon geholtem Zertifikat – einer, bei dem das geholte
+    sicher vorn bleibt, und einer mit derselben Namensliste, bei dem die Wahl des Proxys wechselt.
+    Velydock warnt bei beiden schon beim Hochladen; nach `cert prune-fetched` gelten die eigenen,
+    auch nach drei Neustarts, und es wird nichts neu geholt. Zuletzt das Entfernen (der Proxy holt
+    wieder selbst) und ein Blick in die Aufrufargumente des Proxys: kein Geheimnis darin.
 
 ## Apps über den Proxy veröffentlichen
 

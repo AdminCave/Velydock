@@ -257,8 +257,16 @@ Systemadministratoren können TLS-Zertifikate mit privatem Schlüssel hochladen
   Das entspricht dem, wie Traefik die Schlüssel der Let's-Encrypt-Zertifikate ablegt. Wer die
   Datenbank oder ein Backup lesen kann, hat die Schlüssel: Backups verschlüsseln und nicht auf
   demselben Server lassen ([betrieb.md](betrieb.md#backup)).
+- **Auch ein Datenbankfehler nennt ihn nicht:** Schlägt eine Anweisung fehl, protokolliert
+  Velydock ihren Text, nie ihre Werte (`hide_parameters`). Unter den Werten wäre beim Speichern
+  eines Zertifikats der Schlüssel.
 - **Eine Passphrase** wird nur zum Öffnen des hochgeladenen Schlüssels verwendet und nicht
   gespeichert.
+- **Das gemeinsame Geheimnis von Proxy und Velydock** (`VELYDOCK_PROXY_SECRET`) steht in der
+  Umgebung des Proxy-Containers, nicht unter seinen Aufrufargumenten: Argumente kann jeder
+  Benutzer des Servers lesen (`ps`). Wer das Geheimnis hat und das interne Docker-Netz erreicht,
+  erfährt die Routen aller Organisationen und die Dateinamen der Zertifikate – nicht die
+  Schlüssel.
 - **Was der Proxy bekommt, ist vorher geprüft:** Schlüssel passt zum Zertifikat, Schlüsseltyp und
   -länge, Gültigkeit, Namen. Traefik übergeht ein Zertifikat, das es nicht laden kann, ohne
   Meldung – und lieferte dann sein selbstsigniertes aus.

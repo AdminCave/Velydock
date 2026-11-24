@@ -350,19 +350,23 @@ entgegen ([installation.md](installation.md)).
   wird mit der Passphrase geöffnet und ohne sie gespeichert: Der Proxy muss ihn unbeaufsichtigt
   lesen können.
 - **Was abgelehnt wird,** jeweils mit dem Grund: ein Schlüssel, der nicht zum Zertifikat gehört;
-  ein abgelaufenes Zertifikat; eines ohne Namen im Feld *Subject Alternative Name* (Browser werten
-  den *Common Name* nicht mehr aus); ein nicht unterstützter Schlüsseltyp. Traefik würde ein
-  Zertifikat, das es nicht laden kann, wortlos übergehen – deshalb prüft Velydock vorher.
+  ein abgelaufenes oder noch nicht gültiges Zertifikat (der Proxy lieferte es sofort aus); eines
+  ohne Namen im Feld *Subject Alternative Name* (Browser werten den *Common Name* nicht mehr
+  aus); eines, dessen *Common Name* ein Hostname ist, der nicht unter diesen Namen steht (Traefik
+  lieferte es für ihn aus, Browser lehnten es ab); ein nicht unterstützter Schlüsseltyp. Traefik
+  würde ein Zertifikat, das es nicht laden kann, wortlos übergehen – deshalb prüft Velydock vorher.
 - **Kette:** Die Zertifikate der Aussteller gehören dazu („fullchain“). Fehlen sie, speichert
   Velydock das Zertifikat trotzdem und warnt: Browser, die den Aussteller nicht kennen, lehnen die
-  Verbindung ab. Ein mitgeliefertes Wurzelzertifikat wird nicht gespeichert; Clients haben ihr
-  eigenes.
+  Verbindung ab. Dann dasselbe Zertifikat mit Kette über **Ersetzen** noch einmal hinterlegen. Ein
+  mitgeliefertes Wurzelzertifikat wird nicht gespeichert; Clients haben ihr eigenes.
 - **Für welche Adressen es gilt:** für jeden Namen, der im Zertifikat steht – Velydock, Anmeldung,
   Sandbox, Apps-Host und veröffentlichte Apps. Ein Platzhalter (`*.example.com`) steht für genau
   eine Ebene: `dock.example.com` ja, `example.com` und `a.dock.example.com` nein.
 - **Ein Name, ein Zertifikat:** Velydock nimmt kein zweites Zertifikat an, in dem ein Name eines
   hinterlegten steht – eine Verlängerung geht über **Ersetzen** (`--replace`). Ein Platzhalter neben
-  einem genauen Namen ist erlaubt; dann gilt das Zertifikat mit dem genauen Namen.
+  einem genauen Namen ist erlaubt. Welches der beiden der Proxy dann für diesen Namen nimmt, folgt
+  Traefiks Reihenfolge (siehe unten) – meist das mit dem genauen Namen, nicht immer; die Seite
+  zeigt je Adresse, welches gilt.
 - **Ablauf:** Ein eigenes Zertifikat verlängert niemand automatisch. Die Seite zeigt „läuft bald
   ab“ ab 30 Tagen vor dem Ende; im selben Zeitraum schreibt Velydock zweimal täglich eine Zeile
   `WARNING certificate "…" expires on …` ins Log (`docker compose logs velydock`).
@@ -386,10 +390,17 @@ wieder selbst eines.
 
 Eine Ausnahme braucht einen Handgriff: **ein Name, für den der Proxy früher schon ein Zertifikat
 geholt hat.** Traefik behält jedes geholte Zertifikat und verlängert es weiter. Liegen für einen
-Namen zwei vor, nimmt es das, dessen Namensliste alphabetisch später steht – ein hochgeladenes
-Platzhalter-Zertifikat verliert so immer gegen ein geholtes. Die Seite zeigt das an („Der Proxy
-liefert für diesen Namen weiter ein Zertifikat aus, das er selbst geholt hat“). Dann das geholte aus
-Traefiks Speicher nehmen, während der Proxy steht (etwa zehn Sekunden Unterbrechung):
+Namen zwei vor, sortiert es sie nach ihrer Namensliste und nimmt das letzte: Ein hochgeladenes
+Platzhalter-Zertifikat verliert so immer gegen ein geholtes. Stehen in beiden dieselben Namen –
+der häufige Fall bei einem Zertifikat für genau eine Adresse –, ist nicht festgelegt, welches es
+nimmt; das kann mit jeder Änderung an seiner Konfiguration wechseln.
+
+Velydock verlässt sich deshalb nicht auf einen Blick: Beim Hochladen fragt es den Proxy, womit
+er die betroffenen Adressen gerade ausliefert. Ist es ein Zertifikat, das nicht hinterlegt ist,
+merkt Velydock sich die Adresse und warnt – auf der Seite („Der Proxy hält für diesen Namen noch
+ein Zertifikat, das er selbst geholt hat“) und auf der Kommandozeile –, bis das geholte aus
+Traefiks Speicher genommen ist. Das geschieht, während der Proxy steht (etwa zehn Sekunden
+Unterbrechung):
 
 ```bash
 velydock cert takeover
@@ -408,9 +419,10 @@ Der Befehl entfernt nur geholte Zertifikate für Namen, die ein eigenes haben, u
 ein geholtes für mehrere Namen, geht es als Ganzes; für die übrigen holt der Proxy beim Start ein
 neues. `velydock_` ist der Projektname der Installation (`docker compose ls`).
 
-**Ganz auf eigene Zertifikate umstellen:** `TLS_RESOLVER=` (leer) in `.env`, `velydock restart`
-(von Hand: `docker compose up -d`), dann wie oben aufräumen. Der Proxy holt danach nichts mehr; Namen ohne eigenes Zertifikat bekommen
-das Ersatzzertifikat.
+**Ganz auf eigene Zertifikate umstellen:** `TLS_RESOLVER=` (leer) in `.env`, dann `velydock start`
+(von Hand: `docker compose up -d`) – ein bloßer Neustart liest `.env` nicht neu –, dann wie oben
+aufräumen. Der Proxy holt danach nichts mehr; Namen ohne eigenes Zertifikat bekommen das
+Ersatzzertifikat.
 
 **Let's Encrypt ausprobieren, ohne das Limit zu berühren:** `ACME_CA_SERVER` in `.env` nennt ein
 anderes ACME-Verzeichnis, zum Beispiel die Testumgebung von Let's Encrypt

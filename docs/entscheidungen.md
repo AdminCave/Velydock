@@ -275,7 +275,8 @@ Rückfrage entschieden, weil es aus dem Bestehenden folgt:
   Routen von Velydock, Anmeldung und Sandbox den Let's-Encrypt-Resolver fest in der Datei. Ein Test
   gegen den echten Proxy zeigte, wohin das führt: Für einen Namen lagen dann zwei Zertifikate vor,
   und Traefik nimmt das, dessen Namensliste alphabetisch später steht – ein hochgeladenes
-  Platzhalter-Zertifikat verlor immer. Jetzt nennt dieselbe Antwort, die die hochgeladenen
+  Platzhalter-Zertifikat verlor immer, und bei gleicher Namensliste wechselt die Wahl mit jedem
+  Neuladen seiner Konfiguration. Jetzt nennt dieselbe Antwort, die die hochgeladenen
   Zertifikate nennt, auch die Namen, für die der Proxy eines holen soll; ein Name mit eigenem
   Zertifikat ist nie darunter. Für Namen, die *vorher* schon ein geholtes hatten, bleibt ein
   Handgriff auf dem Server ([betrieb.md](betrieb.md#zertifikate-tls)): Velydock kann Traefiks
