@@ -11,6 +11,8 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 | Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 87 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` (oder `VELYDOCK_DEV_IMAGE`) |
+| Installer und Verwaltungsbefehl | Shell-Skript, Pseudo-Terminal, Playwright | 1 Durchlauf | Image wie oben, Docker |
+| Installer: was root braucht | Shell-Skript in Containern | 2 Teile | Docker, Netzzugang |
 
 ## Ausführen
 
@@ -32,6 +34,12 @@ E2E_BROWSERS=firefox,webkit ./scripts/tests/e2e.sh
 
 # Installation nach Anleitung mit der Produktiv-Compose-Datei (eigener, kurzlebiger Stack)
 ./scripts/tests/install-smoke.sh
+
+# Installer und Befehl "velydock" gegen ein lokales Release (eigener Stack, etwa 25 Minuten)
+./scripts/tests/installer.sh
+INSTALLER_TEST_ONLY=quick ./scripts/tests/installer.sh      # nur die Teile ohne Container
+# Was root auf einem frischen System braucht, in Containern (braucht Netzzugang)
+./scripts/tests/installer-system.sh
 
 # Browser-Tests und Backup-Test auf einem eigenen Stack statt auf dem Entwicklungs-Stack, etwa
 # weil dort gerade jemand arbeitet: Projektname, Image und Ports kommen aus der Umgebung
@@ -80,7 +88,7 @@ Einrichtung der Umgebung: [entwicklung.md](entwicklung.md).
 | 8 | Benutzereinstellungen bleiben gespeichert | `TestSettings::test_personal_settings_persist` | `03-navigation`: Neuladen und frisches Browserprofil |
 | 9 | Benutzerdefinierte Anwendungen werden sicher isoliert | `test_embed_and_custom_apps.py::TestCustomAppLockdown`, `…::TestSandboxHost` | `04-custom-app-isolation` (7 Tests) |
 | 10 | Logout und Session-Ablauf funktionieren | `test_auth_flow.py::TestSessionLifetime`, `TestSignOut`, `TestBackChannelLogout`, `test_edge_cases.py::TestSignOutWithoutALiveSession` | `01-auth`: Abmeldung, Back-Channel-Logout, Sitzungen beenden, Ablauf mit Hinweis, Abmelden nach Ablauf |
-| 11 | Die Docker-Installation funktioniert | – | `08-deployment`, `scripts/tests/install-smoke.sh`, `scripts/tests/backup-restore.sh` |
+| 11 | Die Docker-Installation funktioniert | – | `08-deployment`, `scripts/tests/install-smoke.sh`, `scripts/tests/backup-restore.sh`, `scripts/tests/installer.sh`, `scripts/tests/installer-system.sh` |
 
 ## Erscheinungsbild
 
@@ -244,9 +252,10 @@ der App angemeldet.
 
 **Installation nach Anleitung** (`scripts/tests/install-smoke.sh`)
 
-Folgt [installation.md](installation.md) mit der unveränderten Produktiv-Compose-Datei in einem
-eigenen Stack: `install.sh` erzeugt `.env` (nur für den Besitzer lesbar, kein Geheimnis leer, kein
-Überschreiben), `docker compose up -d --wait`, `velydock setup-admin`. Im Browser: Anmeldung mit dem
+Folgt der Installation von Hand aus [installation.md](installation.md) mit der unveränderten
+Produktiv-Compose-Datei in einem eigenen Stack: `scripts/install.sh` erzeugt `.env` (nur für den
+Besitzer lesbar, kein Geheimnis leer, kein Überschreiben), `docker compose up -d --wait`,
+`velydock setup-admin`. Im Browser: Anmeldung mit dem
 Einmalpasswort, erzwungener Passwortwechsel, erzwungene Einrichtung einer Authenticator-App, dann
 Zugang als Systemadministrator; die erneute Anmeldung verlangt Passwort und Code, das
 Einmalpasswort ist wertlos. Geprüft wird außerdem, dass weder Datenbank noch Keycloak einen Port
@@ -381,9 +390,100 @@ Regel vom 23.11.2026 wiederholt in Chromium und WebKit:
 
 Nicht geprüft: Safari selbst (macOS, iOS), Edge, Firefox auf Windows oder macOS.
 
+## Installer und Verwaltungsbefehl
+
+**Gegen ein lokales Release** (`scripts/tests/installer.sh`). Das Skript baut sich ein Release,
+wie es der Workflow `release.yml` veröffentlicht: eine Registry auf einem lokalen Port mit zwei
+Versionen des Images und einen HTTP-Server mit `install.sh`, den Paketen aus
+`scripts/make-bundle.sh` und `SHA256SUMS`. Dann, ohne root in einem eigenen Verzeichnis
+(`--no-system`), auf lokalen Ports und unter einem eigenen Compose-Projekt:
+
+- **Optionen und Meldungen**, deutsch und englisch: unbekannte Option, fehlende Antwort mit `--yes`
+  (die Meldung nennt die Option), gleiche Hostnamen, ein Apps-Hostname, unter dem ein anderer
+  liegt, ein nicht leeres Verzeichnis. Nichts davon legt etwas an.
+- **Eigenes Zertifikat**, mit dafür erzeugten Zertifikaten: abgelehnt werden ein Hostname, den
+  das Zertifikat nicht nennt (die Meldung nennt ihn), ein `*`, das zwei Namensteile abdecken
+  müsste, ein abgelaufenes und ein erst künftig gültiges Zertifikat, eines ohne Namen, eine
+  Datei, die kein Zertifikat ist, der Schlüssel eines anderen Zertifikats (EC und RSA) und ein
+  Schlüssel mit Passphrase.
+- **Downloads und Ports:** Ein Paket, das nicht zu `SHA256SUMS` passt, und ein Release ohne
+  passenden Eintrag werden abgelehnt; ein belegter Port wird mit dem Programm genannt, das ihn
+  hält. Nichts wird angelegt.
+- **Die Fragen** über ein Pseudo-Terminal, mit dem Installer aus einer Pipe wie in der Anleitung
+  (`curl … | bash`): auf zehn Fragen zuerst eine falsche Antwort (kein Hostname, ein doppelter
+  Name, ein Zertifikat für andere Namen, ein fremder Schlüssel …), jede wird erklärt und erneut
+  erfragt; am Ende die Zusammenfassung, ein „Nein“ – und nichts ist angelegt.
+- **Installation** mit `--yes` und selbstsigniertem Zertifikat: `.env` nur für den Besitzer lesbar
+  und ohne leeres Geheimnis, das Image mit Digest aus dem Paket eingetragen und tatsächlich aus
+  der Registry geholt, weder das Einmalpasswort noch ein Geheimnis im Protokoll oder in der
+  Ausgabe, kein Port außer denen des Proxys veröffentlicht. Variablen in der Umgebung des
+  Aufrufers (`COMPOSE_PROJECT_NAME`, `PUBLIC_PORT_SUFFIX`, `VELYDOCK_HOST`) bleiben ohne Wirkung.
+- **Erste Anmeldung im Browser** mit dem Einmalpasswort des Installers – derselbe Ablauf wie bei
+  der Installation nach Anleitung, bis zum zweiten Faktor.
+- **Zweiter Lauf des Installers:** meldet die Installation, `.env` und Daten unverändert.
+- **`velydock`:** `status`, `doctor` (jede Zeile; und Status 1, sobald `.env` für andere lesbar
+  ist), `logs`, `admin`, drei Backups mit `--keep 2`, eines davon mit fast leerer Umgebung wie aus
+  einem Timer.
+- **Update** auf die zweite Version: Backup vorher, Programmdateien ersetzt, eine auf dem Server
+  geänderte Datei wird genannt und in `.previous/` aufbewahrt, eine Datei, die das neue Release
+  nicht mehr hat, verschwindet, eine fremde Datei im Verzeichnis der Routing-Regeln bleibt; neues
+  Image läuft, Daten vollständig. Ein Update auf dieselbe Version tut nichts, eines auf die
+  ältere wird abgelehnt.
+- **Zurück zur vorigen Version** von Hand, wie [betrieb.md](betrieb.md#update) es beschreibt:
+  alte Programmdateien, altes Image, dann das Backup von vor dem Update (ohne Bestätigung ändert
+  die Wiederherstellung nichts). Danach läuft die alte Version mit den alten Daten – und das
+  Update führt ein zweites Mal vorwärts.
+- **Deinstallation:** ohne `--purge` bleiben Volumes, `.env` und Backups, und nach
+  `velydock start` sind die Daten wieder da. `--purge` verlangt den Hostnamen (ein falscher
+  bricht ab) und entfernt Container, Volumes, Netze und alle eigenen Dateien; eine fremde Datei
+  und ein Backup außerhalb der Installation bleiben.
+- **Neuer Server:** frische Installation, leere Datenbanken verwerfen, `.env` aus dem Backup,
+  Start, Wiederherstellung – der Ablauf aus [betrieb.md](betrieb.md#wiederherstellung). Danach
+  gibt es die Konten des alten Servers in Velydock und in Keycloak.
+
+Gegen eine Attrappe von `docker`, ohne Container, prüft dasselbe Skript, was der Befehl an
+Compose übergibt: `cert add` schickt Zertifikat und Schlüssel als einen PEM-Strom (auch wenn der
+Zertifikatsdatei der Zeilenumbruch am Ende fehlt), `cert list` und `cert remove` rufen das
+Vereinbarte auf, und `backup --keep` entfernt aus einem Verzeichnis voller Sonderfälle genau die
+überzähligen vollständigen Backups. Für `doctor` liefert ein kleiner TLS-Server nacheinander
+verschiedene Zertifikate aus: gültig, für andere Namen, abgelaufen, mit kurzer Restlaufzeit und
+das selbstsignierte des Proxys – `doctor` liest das Ausgelieferte und unterscheidet die Fälle.
+
+**Was root braucht** (`scripts/tests/installer-system.sh`), in Containern ohne Sonderrechte:
+
+- *Docker fehlt:* Unter `debian:13` und `ubuntu:24.04` richtet `install.sh --install-docker`
+  Dockers apt-Repository ein und installiert die Pakete; `docker --version` und
+  `docker compose version` antworten. Den Daemon kann ein Container nicht starten – der
+  Installer endet dort mit einer Meldung. Dass Docker danach läuft, zeigt dieser Test nicht.
+  Außerdem: Die Rückfrage, mit Nein beantwortet, verändert nichts, und auf einem System, das
+  weder Debian noch Ubuntu ist, erklärt der Installer, was fehlt, und endet.
+- *Systemintegration:* der Installer als root unter `debian:13` mit Attrappen für `docker` und
+  `systemctl`: Standardverzeichnis (ein belegtes wird abgelehnt), `/usr/local/bin/velydock`, die
+  Unit-Dateien des Backup-Timers, das Protokoll in `/var/log`; ein Start, der scheitert, und der
+  Lauf, der die Installation mit den ersten Antworten fortsetzt – oder `uninstall --purge`, das
+  sie entfernt; Update über den installierten Befehl; `uninstall` und was der Installer danach
+  wiederherstellt; eine zweite Installation wird abgelehnt; die drei Zertifikatsarten in `.env`;
+  ein fremder Befehl gleichen Namens bleibt unangetastet. Hier startet kein Container des Stacks.
+
+Der Browser-Schritt verträgt es schlecht, wenn auf demselben Rechner währenddessen jemand
+Container startet oder beendet: Chromium bemerkt die wechselnden Netzwerkschnittstellen und bricht
+laufende Anfragen ab (`net::ERR_NETWORK_CHANGED`). Das ist beim Bau dieses Tests zweimal
+aufgetreten, auf einem Rechner, den sich mehrere Docker-Nutzer teilen. Zeigt die Aufzeichnung der
+gescheiterten Anmeldung genau diesen Fehler, wiederholt `scripts/tests/installer.sh` sie mit einem
+weiteren Administrator, höchstens dreimal; jeder andere Fehler beendet den Test sofort. Die
+beiden Skripte dieses Abschnitts gehören nacheinander ausgeführt, nicht gleichzeitig.
+
+Als root mit echtem systemd, im Standardverzeichnis und auf den Ports 80 und 443 läuft
+`scripts/tests/installer.sh` nur im CI-Job „Installer“ (`INSTALLER_TEST_MODE=system`); auf einem
+Entwicklerrechner ist dieser Modus nicht vorgesehen.
+
+Nicht getestet: der Import eines eigenen Zertifikats in einen laufenden Stack, solange das Image
+den Befehl `velydock cert` nicht enthält (der Test überspringt den Schritt dann und sagt das),
+und die Ausstellung durch Let's Encrypt, die öffentliches DNS braucht.
+
 ## Continuous Integration
 
-`.github/workflows/ci.yml` führt bei jedem Push auf `main` und bei jedem Pull Request drei Jobs
+`.github/workflows/ci.yml` führt bei jedem Push auf `main` und bei jedem Pull Request vier Jobs
 aus:
 
 1. **Backend:** Lint, Formatierung, Typprüfung (mypy strict), Aktualität der API-Beschreibung, alle
@@ -393,10 +493,17 @@ aus:
 2. **Frontend:** Aktualität der erzeugten API-Typen, `svelte-check`, Lint, Unit-Tests, Build.
 3. **End-to-End:** Image bauen, Stack starten, Browser-Tests, Backup-Rundlauf, Installation nach
    Anleitung.
+4. **Installer:** `shellcheck` über alle Skripte, `scripts/tests/installer-system.sh`, dann
+   `scripts/tests/installer.sh` als root auf dem Runner: Standardverzeichnis `/opt/velydock`,
+   Ports 80 und 443, `/usr/local/bin/velydock`, der systemd-Timer (der Backup-Dienst wird einmal
+   gestartet), erste Anmeldung im Browser, Backup, Update, Wiederherstellung, Deinstallation.
 
-`.github/workflows/release.yml` veröffentlicht bei einem Versions-Tag das Image auf GHCR. Das Tag
-`latest` wandert nur bei einem vollständigen Release mit (`v1.2.3`), nicht bei einer Vorabversion
-(`v1.3.0-rc.1`).
+`.github/workflows/release.yml` veröffentlicht bei einem Versions-Tag das Image auf GHCR und
+danach ein GitHub-Release mit `install.sh`, dem Paket `velydock-<Version>.tar.gz` (darin das
+Image mit seinem Digest) und `SHA256SUMS` – gebaut von `scripts/make-bundle.sh`, demselben
+Skript, mit dem die Tests ihr lokales Release bauen. Das Tag `latest` des Images und „latest“
+unter den Releases wandern nur bei einem vollständigen Release mit (`v1.2.3`); eine Vorabversion
+(`v1.3.0-rc.1`) wird als Pre-Release veröffentlicht.
 
 ## Was nicht getestet ist
 

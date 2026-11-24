@@ -5,11 +5,15 @@
 #
 # Runs as its own Compose project ("velydock-install") on local ports and removes it afterwards.
 # Uses the image velydock:dev (build it first: ./scripts/dev-stack.sh build), or the one named by
-# VELYDOCK_DEV_IMAGE.
+# VELYDOCK_DEV_IMAGE. Where that project name or the ports are taken, name others with
+# INSTALL_PROJECT, INSTALL_HTTPS_PORT (9443) and INSTALL_HTTP_PORT (363 below the HTTPS port).
+#
+# The installer (install.sh in the repository root) has its own test: scripts/tests/installer.sh.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 port=${INSTALL_HTTPS_PORT:-9443}
-project=velydock-install
+http_port=${INSTALL_HTTP_PORT:-$((port - 363))}
+project=${INSTALL_PROJECT:-velydock-install}
 image=${VELYDOCK_DEV_IMAGE:-velydock:dev}
 
 work=$(mktemp -d)
@@ -44,7 +48,7 @@ fi
 cat >> .env <<ENV
 VELYDOCK_IMAGE=$image
 TLS_RESOLVER=
-HTTP_BIND=127.0.0.1:$((port - 363))
+HTTP_BIND=127.0.0.1:$http_port
 HTTPS_BIND=127.0.0.1:$port
 PUBLIC_PORT_SUFFIX=:$port
 ENV

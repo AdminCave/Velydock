@@ -1,0 +1,1301 @@
+#!/usr/bin/env bash
+# Velydock management command, for an installation made by install.sh.
+#
+#   velydock <command> [options]            ("velydock help" lists the commands)
+#
+# The installer puts a small launcher into /usr/local/bin that runs this file from the
+# installation directory (<directory>/scripts/velydock), so an update replaces it together with
+# the other program files. Without the launcher, call it by its path.
+#
+# The installation directory holds the program files of one release (listed in MANIFEST), the
+# configuration (.env), backups/ and .previous/ (program files of the version before the last
+# update). Settings this command reads from .env besides those of docker-compose.yml:
+#
+#   VELYDOCK_BACKUP_DIR    where "velydock backup" writes when no directory is given
+#   VELYDOCK_BACKUP_KEEP   how many backups "velydock backup" keeps there
+#
+# Nothing of the caller's environment reaches Docker Compose: every variable the Compose file
+# reads is taken from .env only.
+#
+# For tests and mirrors:
+#
+#   VELYDOCK_RELEASE_BASE_URL   where releases are fetched from (default
+#                               https://github.com/AdminCave/Velydock/releases); read are
+#                               <base>/latest/download/<file> and <base>/download/v<version>/<file>
+#   VELYDOCK_PULL_POLICY        "always" (default): fetch every image of the stack anew before
+#                               an update or "start --pull"; "missing": fetch only images the
+#                               server does not have
+#
+# Internal, used by install.sh and by the update of an older version (not for manual use):
+#
+#   __place-files <installation-directory> <unpacked-bundle>
+#   __continue-update <installation-directory> <unpacked-bundle> <backup: yes|no> <image or "">
+#
+# The whole file is read before anything runs (see the last line), so replacing it during an
+# update cannot disturb the run that replaces it.
+set -euo pipefail
+
+# Output of other programs is read here and there; it must not depend on the caller's language.
+export LC_ALL=C
+
+readonly LAUNCHER=/usr/local/bin/velydock
+readonly UNIT_DIR=/etc/systemd/system
+readonly TIMER=velydock-backup.timer
+readonly SERVICE=velydock-backup.service
+readonly DEFAULT_BASE_URL=https://github.com/AdminCave/Velydock/releases
+
+dir=""            # installation directory
+work=""           # temporary directory of this run
+pending=()        # files written under another name first; none of them may stay behind
+compose_env=()    # "env" arguments that keep the caller's environment away from Compose
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Velydock management command
+
+  velydock status                          what is running, and whether it is healthy
+  velydock start [--pull]                  start everything and wait until it is ready
+                                           (also applies a changed .env); --pull fetches
+                                           the images anew first
+  velydock stop                            stop everything; data stays
+  velydock restart [service ...]           restart everything or single services
+  velydock logs [-f] [--tail N] [service ...]
+                                           show logs (default: the last 200 lines of each)
+  velydock update [--version X] [--no-backup] [--image REF] [--yes]
+                                           install a newer release (default: the latest)
+  velydock backup [directory] [--keep N]   back up both databases and .env
+  velydock restore <backup-directory> [--yes]
+                                           replace all data with the content of a backup
+  velydock admin --username NAME [--email ADDRESS]
+                                           create an administrator or restore access
+  velydock cert list
+  velydock cert add <cert.pem> <key.pem> [--name N] [--replace]
+  velydock cert remove <name>              own TLS certificates
+  velydock doctor                          read-only diagnosis, one line per check
+  velydock uninstall [--purge] [--yes]     remove the containers; --purge also removes
+                                           the data, the configuration and the backups
+                                           inside the installation directory
+  velydock version
+  velydock help
+
+Services: velydock, keycloak, postgres, traefik.
+Exit status: 0 on success. "status" and "doctor" end with 1 when something is wrong.
+USAGE
+}
+
+# ---- helpers ---------------------------------------------------------------------------------
+
+cleanup() {
+  local status=$? file
+  trap - EXIT
+  for file in "${pending[@]}"; do
+    if [[ -e $file ]]; then rm -f -- "$file"; fi
+  done
+  if [[ -n $work && -d $work ]]; then rm -rf -- "$work"; fi
+  exit "$status"
+}
+
+make_work() {
+  [[ -z $work ]] || return 0
+  work=$(mktemp -d)
+}
+
+# Removes a file or a directory tree, but only strictly below the given base directory.
+remove_below() {
+  local base=$1 path=$2
+  if [[ -z $base || $base != /* || $base == / || $path != "$base"/?* || $path == *"/../"* || $path == */.. ]]; then
+    die "refusing to remove '$path' (not below '$base')"
+  fi
+  if [[ -L $path || ! -d $path ]]; then
+    rm -f -- "$path"
+  else
+    rm -rf -- "$path"
+  fi
+}
+
+# The value of a variable in .env (the last assignment wins, as in Compose); empty if unset.
+env_get() {
+  local key=$1 line value=""
+  [[ -r $dir/.env ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line == "$key="* ]] || continue
+    value=${line#*=}
+  done < "$dir/.env"
+  if [[ ${#value} -ge 2 && ( $value == \"*\" || $value == \'*\' ) ]]; then
+    value=${value:1:${#value}-2}
+  fi
+  printf '%s' "$value"
+}
+
+# Sets one variable in .env and leaves every other line as it is.
+env_set() {
+  local key=$1 value=$2 tmp line found=0
+  tmp=$(mktemp "$dir/.env.XXXXXX")
+  pending+=("$tmp")
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == "$key="* ]]; then
+      if (( ! found )); then printf '%s=%s\n' "$key" "$value"; fi
+      found=1
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$dir/.env" > "$tmp"
+  if (( ! found )); then printf '%s=%s\n' "$key" "$value" >> "$tmp"; fi
+  chmod --reference="$dir/.env" "$tmp"
+  chown --reference="$dir/.env" "$tmp" 2>/dev/null || true
+  mv -fT -- "$tmp" "$dir/.env"
+}
+
+need_installation() {
+  [[ -f $dir/docker-compose.yml && -f $dir/VERSION ]] ||
+    die "$dir is not a Velydock installation made by the installer."
+  if [[ ! -e $dir/.env ]]; then
+    die "$dir/.env is missing: the installation is not finished. Run the installer again, or remove it with 'uninstall --purge'."
+  fi
+  [[ -r $dir/.env ]] || die "cannot read $dir/.env - run this command as root (sudo velydock ...)."
+}
+
+need_docker() {
+  command -v docker >/dev/null 2>&1 || die "docker was not found."
+  docker info >/dev/null 2>&1 || die "the Docker daemon does not answer (is it running, and may this user use it?)."
+}
+
+# Every variable docker-compose.yml reads comes from .env, never from the caller's environment:
+# there it would silently take precedence over the configuration of this installation.
+init_compose_env() {
+  local name
+  compose_env=(-u COMPOSE_PROJECT_NAME -u COMPOSE_FILE -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES
+    -u VELYDOCK_COMPOSE_ARGS -u VELYDOCK_ENV_FILE -u VELYDOCK_RESTORE_CONFIRM)
+  [[ -f $dir/docker-compose.yml ]] || return 0
+  while IFS= read -r name; do
+    compose_env+=(-u "$name")
+  done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' "$dir/docker-compose.yml" | cut -c3- | sort -u)
+}
+
+compose() {
+  ( cd "$dir" && env "${compose_env[@]}" docker compose "$@" )
+}
+
+# Runs one of the installation's own scripts with the same clean environment.
+run_script() {
+  local script=$1
+  shift
+  ( cd "$dir" && env "${compose_env[@]}" "./scripts/$script" "$@" )
+}
+
+lock() {
+  command -v flock >/dev/null 2>&1 || return 0
+  exec 9>"$dir/.lock"
+  flock -n 9 || die "another velydock command is working on this installation; try again when it has finished."
+}
+
+# Reads an answer from the terminal, also when standard input is something else.
+ask() {
+  local prompt=$1 answer
+  if [[ -t 0 ]]; then
+    read -r -p "$prompt" answer || return 1
+  elif ( exec 3</dev/tty ) 2>/dev/null; then
+    printf '%s' "$prompt" > /dev/tty
+    read -r answer < /dev/tty || return 1
+  else
+    return 1
+  fi
+  printf '%s' "$answer"
+}
+
+confirm() {
+  local answer
+  answer=$(ask "$1 [y/N] ") || die "nobody can be asked here (no terminal); repeat the command with --yes."
+  answer=${answer,,}
+  [[ $answer == y || $answer == yes || $answer == j || $answer == ja ]]
+}
+
+installed_version() {
+  local version=""
+  if [[ -r $dir/VERSION ]]; then IFS= read -r version < "$dir/VERSION" || true; fi
+  printf '%s' "$version"
+}
+
+public_url() {
+  printf 'https://%s%s' "$(env_get VELYDOCK_HOST)" "$(env_get PUBLIC_PORT_SUFFIX)"
+}
+
+proxy_enabled() {
+  local profiles
+  profiles=,$(env_get COMPOSE_PROFILES),
+  [[ $profiles == *,proxy,* ]]
+}
+
+# The services of the stack as Compose sees them with this .env (a switched-off proxy is not
+# among them).
+services() {
+  compose config --services | sort
+}
+
+# "status|health|exit code|restart policy" of a service's container, or "missing".
+service_state() {
+  local id
+  id=$(compose ps --all -q "$1" 2>/dev/null | sed -n 1p) || true
+  if [[ -z $id ]]; then
+    printf 'missing'
+    return 0
+  fi
+  docker inspect --format \
+    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.State.ExitCode}}|{{.HostConfig.RestartPolicy.Name}}' \
+    "$id" 2>/dev/null || printf 'missing'
+}
+
+# Running (and healthy where a health check exists), or a one-time job that finished well.
+state_ok() {
+  local status health code restart
+  IFS='|' read -r status health code restart <<<"$1"
+  case $status in
+    running) [[ -z $health || $health == healthy ]] ;;
+    exited) [[ $code == 0 && $restart == no ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+describe_state() {
+  local status health code restart
+  IFS='|' read -r status health code restart <<<"$1"
+  case $status in
+    running) printf 'running%s' "${health:+, $health}" ;;
+    exited)
+      if [[ $code == 0 && $restart == no ]]; then
+        printf 'finished (runs once per start)'
+      else
+        printf 'exited with status %s' "$code"
+      fi
+      ;;
+    *) printf '%s' "$status" ;;
+  esac
+}
+
+stack_ok() {
+  local service list
+  list=$(services) || return 1
+  [[ -n $list ]] || return 1
+  while IFS= read -r service; do
+    state_ok "$(service_state "$service")" || return 1
+  done <<<"$list"
+}
+
+# The address and port a local client reaches a published port at ("0.0.0.0:443" -> 127.0.0.1 443).
+local_endpoint() {
+  local bind=$1 default_port=$2 address port
+  bind=${bind:-0.0.0.0:$default_port}
+  if [[ $bind == *:* ]]; then
+    address=${bind%:*}
+    port=${bind##*:}
+  else
+    address=0.0.0.0
+    port=$bind
+  fi
+  case $address in
+    0.0.0.0 | "" | "[::]") address=127.0.0.1 ;;
+  esac
+  printf '%s %s' "$address" "$port"
+}
+
+tcp_open() {
+  local address=${1#[} port=$2
+  address=${address%]}
+  # shellcheck disable=SC2016  # $0 and $1 belong to the inner shell
+  timeout 5 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$address" "$port" 2>/dev/null
+}
+
+fetch() {
+  local url=$1 target=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --proto '=https,http' --retry 2 --connect-timeout 20 -o "$target" -- "$url" </dev/null
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$target" -- "$url" </dev/null
+  else
+    die "curl or wget is needed to download a release."
+  fi
+}
+
+valid_version() {
+  [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]
+}
+
+release_base() {
+  local base=${VELYDOCK_RELEASE_BASE_URL:-$DEFAULT_BASE_URL}
+  printf '%s' "${base%/}"
+}
+
+# The version of the latest release, taken from the name of the bundle in its SHA256SUMS.
+latest_version() {
+  local sums=$1 version
+  fetch "$(release_base)/latest/download/SHA256SUMS" "$sums" || return 1
+  version=$(sed -nE 's/^[0-9a-f]{64}[ *]+velydock-([0-9A-Za-z.-]+)\.tar\.gz$/\1/p' "$sums" | sed -n 1p)
+  valid_version "$version" || return 1
+  printf '%s' "$version"
+}
+
+# 0: equal, 1: the first is newer, 2: the first is older. A pre-release is older than its release.
+compare_versions() {
+  local a=$1 b=$2 core_a core_b pre_a="" pre_b="" first
+  [[ $a != "$b" ]] || return 0
+  core_a=${a%%-*}
+  core_b=${b%%-*}
+  if [[ $a == *-* ]]; then pre_a=${a#*-}; fi
+  if [[ $b == *-* ]]; then pre_b=${b#*-}; fi
+  if [[ $core_a != "$core_b" ]]; then
+    first=$(printf '%s\n%s\n' "$core_a" "$core_b" | sort -V | sed -n 1p)
+    [[ $first != "$core_b" ]] || return 1
+    return 2
+  fi
+  [[ -n $pre_a ]] || return 1
+  [[ -n $pre_b ]] || return 2
+  first=$(printf '%s\n%s\n' "$pre_a" "$pre_b" | sort -V | sed -n 1p)
+  [[ $first != "$pre_b" ]] || return 1
+  return 2
+}
+
+# The paths a MANIFEST names, one per line. Refuses anything that is not a plain relative path:
+# these names are used to copy and to remove files.
+manifest_paths() {
+  local manifest=$1 line path
+  [[ -f $manifest ]] || die "$manifest is missing."
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -n $line ]] || continue
+    [[ $line =~ ^[0-9a-f]{64}[[:space:]][[:space:]*](.+)$ ]] || die "unexpected line in $manifest"
+    path=${BASH_REMATCH[1]}
+    if [[ ! $path =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || /$path/ == */../* || /$path/ == */./* ]]; then
+      die "unexpected file name in $manifest: $path"
+    fi
+    printf '%s\n' "$path"
+  done < "$manifest"
+}
+
+# Downloads the bundle of a version, verifies it against SHA256SUMS of the same release and
+# unpacks it. Prints the directory of the unpacked bundle. Nothing of it has been executed.
+download_bundle() {
+  local version=$1 target=$2 base name expected actual entry kinds unpacked
+  base=$(release_base)/download/v$version
+  name=velydock-$version.tar.gz
+  fetch "$base/SHA256SUMS" "$target/SHA256SUMS" || die "could not download $base/SHA256SUMS - is there a release $version?"
+  fetch "$base/$name" "$target/$name" || die "could not download $base/$name"
+  expected=$(awk -v file="$name" '$2 == file || $2 == "*" file { print $1; exit }' "$target/SHA256SUMS")
+  actual=$(sha256sum < "$target/$name" | cut -d' ' -f1)
+  if [[ -z $expected || $expected != "$actual" ]]; then
+    die "the checksum of $name does not match SHA256SUMS of the release. Nothing was changed."
+  fi
+  while IFS= read -r entry; do
+    case $entry in
+      "velydock-$version" | "velydock-$version/"*) ;;
+      *) die "unexpected entry in $name: $entry" ;;
+    esac
+    [[ /$entry/ != */../* ]] || die "unexpected entry in $name: $entry"
+  done < <(tar -tzf "$target/$name")
+  kinds=$(tar -tvzf "$target/$name" | cut -c1 | sort -u | tr -d '\n')
+  [[ $kinds == "-" || $kinds == "-d" ]] || die "$name contains something other than files and directories."
+  tar -xzf "$target/$name" -C "$target" --no-same-owner --no-same-permissions
+  unpacked=$target/velydock-$version
+  check_bundle "$unpacked" "$version"
+  printf '%s' "$unpacked"
+}
+
+check_bundle() {
+  local unpacked=$1 version=$2 file found=""
+  for file in VERSION IMAGE MANIFEST docker-compose.yml scripts/velydock scripts/backup.sh scripts/restore.sh; do
+    [[ -f $unpacked/$file && ! -L $unpacked/$file ]] || die "the bundle lacks $file."
+  done
+  IFS= read -r found < "$unpacked/VERSION" || true
+  [[ $found == "$version" ]] || die "the bundle says it is version '$found', expected $version."
+  ( cd "$unpacked" && sha256sum --check --quiet --strict MANIFEST >/dev/null 2>&1 ) ||
+    die "the files of the bundle do not match its MANIFEST."
+}
+
+bundle_image() {
+  local image=""
+  IFS= read -r image < "$1/IMAGE" || true
+  [[ $image =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "the bundle names no usable image in IMAGE."
+  printf '%s' "$image"
+}
+
+# ---- program files ---------------------------------------------------------------------------
+
+# Copies the program files of an unpacked bundle into the installation directory. Each file is
+# written under another name and renamed into place: Traefik watches deploy/traefik/dynamic and
+# must never read a half-written file, and a running copy of this script keeps its old content.
+# The directory itself is never replaced (Traefik has it mounted).
+place_files() {
+  local target=$1 source=$2 path mode paths
+  [[ -d $target ]] || die "$target does not exist."
+  paths=$(manifest_paths "$source/MANIFEST")
+  umask 022
+  while IFS= read -r path; do
+    [[ -f $source/$path && ! -L $source/$path ]] || die "the bundle lacks $path."
+    mkdir -p -- "$target/$(dirname -- "$path")"
+    mode=644
+    if [[ -x $source/$path ]]; then mode=755; fi
+    pending+=("$target/$path.new.$$")
+    install -m "$mode" -- "$source/$path" "$target/$path.new.$$"
+    mv -fT -- "$target/$path.new.$$" "$target/$path"
+  done <<<"$paths"$'\nMANIFEST'
+  # PostgreSQL and Traefik read these as other users (see scripts/install.sh in the repository).
+  chmod a+rX "$target/deploy" "$target/deploy/postgres" "$target/deploy/traefik" \
+    "$target/deploy/traefik/dynamic" 2>/dev/null || true
+}
+
+# Program files of the installed version that differ from what the release shipped.
+modified_files() {
+  [[ -f $dir/MANIFEST ]] || return 0
+  ( cd "$dir" && sha256sum --check --quiet MANIFEST 2>/dev/null | sed -nE 's/^(.*): FAILED.*$/\1/p' ) || true
+}
+
+keep_previous() {
+  local old_version=$1 path keep=$dir/.previous
+  if [[ -e $keep || -L $keep ]]; then remove_below "$dir" "$keep"; fi
+  mkdir -p -- "$keep/$old_version"
+  while IFS= read -r path; do
+    [[ -f $dir/$path ]] || continue
+    mkdir -p -- "$keep/$old_version/$(dirname -- "$path")"
+    cp -p -- "$dir/$path" "$keep/$old_version/$path"
+  done < <(manifest_paths "$dir/MANIFEST"; printf 'MANIFEST\n')
+  printf '%s\n' "$(env_get VELYDOCK_IMAGE)" > "$keep/$old_version.image"
+}
+
+# Removes program files of the old version that the new one no longer has.
+remove_obsolete() {
+  local old_manifest=$1 path current
+  current=$(manifest_paths "$dir/MANIFEST")
+  while IFS= read -r path; do
+    if grep -qxF -- "$path" <<<"$current"; then continue; fi
+    remove_below "$dir" "$dir/$path"
+    echo "  removed $path (not part of the new version)"
+  done < <(manifest_paths "$old_manifest")
+}
+
+pull_images() {
+  if [[ ${VELYDOCK_PULL_POLICY:-always} == missing ]]; then
+    echo "fetching only images this server does not have (VELYDOCK_PULL_POLICY=missing) ..."
+    return 0
+  fi
+  echo "fetching the images ..."
+  compose pull --quiet </dev/null
+}
+
+start_stack() {
+  echo "starting and waiting until everything is ready ..."
+  # Bounded: a daemon that hangs must not keep this command waiting for ever.
+  ( cd "$dir" && timeout 1800 env "${compose_env[@]}" docker compose up -d --wait --quiet-pull </dev/null )
+}
+
+# ---- commands --------------------------------------------------------------------------------
+
+cmd_status() {
+  local service state list failed=0
+  (($# == 0)) || die "status takes no arguments."
+  need_installation
+  need_docker
+  echo "Velydock $(installed_version) in $dir"
+  echo "Address: $(public_url)"
+  echo
+  list=$(services)
+  while IFS= read -r service; do
+    state=$(service_state "$service")
+    if state_ok "$state"; then
+      printf '  %-10s %s\n' "$service" "$(describe_state "$state")"
+    else
+      printf '  %-10s %s   <- not ready\n' "$service" "$(describe_state "$state")"
+      failed=1
+    fi
+  done <<<"$list"
+  echo
+  if (( failed )); then
+    echo "Not everything is running. 'velydock doctor' looks closer, 'velydock logs <service>' shows why."
+    return 1
+  fi
+  echo "Everything is running."
+}
+
+cmd_start() {
+  local pull=0
+  while (($#)); do
+    case $1 in
+      --pull) pull=1 ;;
+      *) die "start: unknown argument '$1'" ;;
+    esac
+    shift
+  done
+  need_installation
+  need_docker
+  if (( pull )); then pull_images; fi
+  start_stack
+  echo "Velydock is running: $(public_url)"
+}
+
+cmd_stop() {
+  (($# == 0)) || die "stop takes no arguments."
+  need_installation
+  need_docker
+  compose stop
+}
+
+cmd_restart() {
+  local waited=0
+  need_installation
+  need_docker
+  compose restart "$@"
+  echo "waiting until everything is ready ..."
+  until stack_ok; do
+    (( waited < 600 )) || die "not everything became ready within ten minutes; see 'velydock status'."
+    sleep 5
+    waited=$((waited + 5))
+  done
+  echo "Velydock is running: $(public_url)"
+}
+
+cmd_logs() {
+  local follow=() tail=200 selected=()
+  while (($#)); do
+    case $1 in
+      -f | --follow) follow=(--follow) ;;
+      --tail)
+        [[ $# -ge 2 && $2 =~ ^[0-9]+$ ]] || die "logs: --tail needs a number."
+        tail=$2
+        shift
+        ;;
+      -*) die "logs: unknown option '$1'" ;;
+      *) selected+=("$1") ;;
+    esac
+    shift
+  done
+  need_installation
+  need_docker
+  compose logs --tail "$tail" "${follow[@]}" "${selected[@]}"
+}
+
+cmd_admin() {
+  (($#)) || die "usage: velydock admin --username NAME [--email ADDRESS]"
+  need_installation
+  need_docker
+  compose exec -T velydock velydock setup-admin "$@" </dev/null
+}
+
+# A name for a certificate when none is given: its first DNS name, in letters, digits and "-".
+certificate_label() {
+  local name
+  command -v openssl >/dev/null 2>&1 || die "openssl is needed to name the certificate; give a name with --name."
+  name=$(openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' |
+    sed -nE 's/^[[:space:]]*DNS:(.*)$/\1/p' | sed -n 1p) || true
+  [[ -n $name ]] || die "the certificate names no host (subjectAltName); give a name with --name."
+  name=${name,,}
+  name=${name//\*/wildcard}
+  name=${name//[^a-z0-9]/-}
+  printf '%s' "$name"
+}
+
+cmd_cert() {
+  local action=${1:-} files=() name="" replace=()
+  [[ -n $action ]] || die "usage: velydock cert list | add <cert.pem> <key.pem> [--name N] [--replace] | remove <name>"
+  shift
+  case $action in
+    list)
+      (($# == 0)) || die "cert list takes no arguments."
+      need_installation
+      need_docker
+      compose exec -T velydock velydock cert list </dev/null
+      ;;
+    remove)
+      (($# == 1)) || die "usage: velydock cert remove <name>"
+      need_installation
+      need_docker
+      compose exec -T velydock velydock cert remove "$1" </dev/null
+      ;;
+    add)
+      while (($#)); do
+        case $1 in
+          --name)
+            [[ $# -ge 2 && -n $2 ]] || die "cert add: --name needs a value."
+            name=$2
+            shift
+            ;;
+          --replace) replace=(--replace) ;;
+          -*) die "cert add: unknown option '$1'" ;;
+          *) files+=("$1") ;;
+        esac
+        shift
+      done
+      ((${#files[@]} == 2)) || die "usage: velydock cert add <cert.pem> <key.pem> [--name N] [--replace]"
+      [[ -f ${files[0]} && -r ${files[0]} ]] || die "cannot read the certificate file ${files[0]}"
+      [[ -f ${files[1]} && -r ${files[1]} ]] || die "cannot read the key file ${files[1]}"
+      need_installation
+      need_docker
+      [[ -n $name ]] || name=$(certificate_label "${files[0]}")
+      # One PEM stream on standard input: certificate, chain and key. The line break between
+      # the two files is there for a certificate file that does not end with one.
+      { cat -- "${files[0]}"; printf '\n'; cat -- "${files[1]}"; } |
+        compose exec -T velydock velydock cert add --name "$name" "${replace[@]}"
+      ;;
+    *) die "cert: unknown action '$action' (list, add, remove)" ;;
+  esac
+}
+
+# True for a directory that backup.sh wrote completely: named like one, with checksums, and
+# holding nothing but the files backup.sh writes.
+complete_backup() {
+  local path=$1 entry
+  [[ ${path##*/} =~ ^velydock-[0-9]{8}T[0-9]{6}Z$ ]] || return 1
+  [[ -d $path && ! -L $path && -f $path/SHA256SUMS ]] || return 1
+  grep -qE '^[0-9a-f]{64}[[:space:]][[:space:]*]velydock\.dump$' "$path/SHA256SUMS" || return 1
+  grep -qE '^[0-9a-f]{64}[[:space:]][[:space:]*]keycloak\.dump$' "$path/SHA256SUMS" || return 1
+  for entry in "$path"/* "$path"/.[!.]* "$path"/..?*; do
+    [[ -e $entry || -L $entry ]] || continue
+    case ${entry##*/} in
+      velydock.dump | keycloak.dump | env | SHA256SUMS) [[ -f $entry && ! -L $entry ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+# The complete backups below a directory, newest first (the names sort by time).
+list_backups() {
+  local root=$1 path
+  [[ -d $root ]] || return 0
+  for path in "$root"/velydock-*; do
+    if complete_backup "$path"; then printf '%s\n' "${path##*/}"; fi
+  done | sort -r
+}
+
+backup_target() {
+  local target
+  target=$(env_get VELYDOCK_BACKUP_DIR)
+  printf '%s' "${target:-$dir/backups}"
+}
+
+cmd_backup() {
+  local target="" keep="" name count=0
+  while (($#)); do
+    case $1 in
+      --keep)
+        [[ $# -ge 2 ]] || die "backup: --keep needs a number."
+        keep=$2
+        shift
+        ;;
+      -*) die "backup: unknown option '$1'" ;;
+      *)
+        [[ -z $target ]] || die "backup: only one target directory."
+        target=$1
+        ;;
+    esac
+    shift
+  done
+  need_installation
+  need_docker
+  [[ -n $keep ]] || keep=$(env_get VELYDOCK_BACKUP_KEEP)
+  [[ -z $keep || $keep =~ ^[1-9][0-9]*$ ]] || die "backup: the number of backups to keep must be 1 or more, not '$keep'."
+  if [[ -z $target ]]; then
+    target=$(backup_target)
+  elif [[ $target != /* ]]; then
+    target=${PWD%/}/$target
+  fi
+  lock
+  run_script backup.sh "$target"
+  [[ -n $keep ]] || return 0
+  # Only what backup.sh made and what is complete is ever removed.
+  while IFS= read -r name; do
+    count=$((count + 1))
+    (( count > keep )) || continue
+    remove_below "$target" "$target/$name"
+    echo "removed old backup $target/$name"
+  done < <(list_backups "$target")
+}
+
+cmd_restore() {
+  local source="" confirmed=()
+  while (($#)); do
+    case $1 in
+      --yes) confirmed=(VELYDOCK_RESTORE_CONFIRM=yes) ;;
+      -*) die "restore: unknown option '$1'" ;;
+      *)
+        [[ -z $source ]] || die "restore: only one backup directory."
+        source=$1
+        ;;
+    esac
+    shift
+  done
+  [[ -n $source ]] || die "usage: velydock restore <backup-directory> [--yes]"
+  [[ $source == /* ]] || source=${PWD%/}/$source
+  need_installation
+  need_docker
+  lock
+  ( cd "$dir" && env "${compose_env[@]}" "${confirmed[@]}" ./scripts/restore.sh "$source" )
+  start_stack
+}
+
+cmd_version() {
+  [[ -f $dir/VERSION ]] || die "$dir is not a Velydock installation made by the installer."
+  echo "Velydock $(installed_version)"
+  echo "installation: $dir"
+  if [[ -r $dir/.env ]]; then echo "image: $(env_get VELYDOCK_IMAGE)"; fi
+}
+
+cmd_update() {
+  local target="" backup=yes image="" yes=0 installed unpacked order=0
+  while (($#)); do
+    case $1 in
+      --version)
+        [[ $# -ge 2 ]] || die "update: --version needs a value."
+        target=${2#v}
+        shift
+        ;;
+      --image)
+        [[ $# -ge 2 && $2 =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "update: --image needs an image reference."
+        image=$2
+        shift
+        ;;
+      --no-backup) backup=no ;;
+      --yes) yes=1 ;;
+      *) die "update: unknown argument '$1'" ;;
+    esac
+    shift
+  done
+  need_installation
+  need_docker
+  [[ -f $dir/MANIFEST ]] || die "$dir/MANIFEST is missing; this installation cannot be updated by this command."
+  installed=$(installed_version)
+  make_work
+  if [[ -z $target ]]; then
+    target=$(latest_version "$work/latest") ||
+      die "could not find out the latest release at $(release_base). Name one with --version."
+  fi
+  valid_version "$target" || die "update: '$target' is not a version (1.2.3)."
+  compare_versions "$target" "$installed" || order=$?
+  if (( order == 0 )); then
+    echo "Velydock $installed is installed, and that is the version asked for. Nothing to do."
+    return 0
+  fi
+  if (( order == 2 )); then
+    die "version $target is older than the installed $installed. Going back is not an update: the database keeps the changes the newer version made. The way back is the backup made before the update (docs/betrieb.md)."
+  fi
+  echo "Update: Velydock $installed -> $target"
+  echo "Sign-in and interface are unavailable for about a minute while the containers are replaced."
+  if (( ! yes )); then
+    confirm "Update now?" || die "aborted; nothing was changed."
+  fi
+  lock
+  echo "downloading and verifying version $target ..."
+  unpacked=$(download_bundle "$target" "$work")
+  # From here the new version does the work with its own code: it knows what it needs.
+  bash "$unpacked/scripts/velydock" __continue-update "$dir" "$unpacked" "$backup" "$image"
+}
+
+# Second half of an update, run from the unpacked bundle of the new version.
+continue_update() {
+  local unpacked=$2 backup=$3 image=$4 old_version new_version="" old_manifest changed backup_dir made=""
+  dir=$1
+  [[ -n $dir && $dir != / && -f $dir/VERSION && -f $dir/MANIFEST && -f $dir/.env ]] ||
+    die "$dir is not a Velydock installation."
+  umask 022
+  init_compose_env
+  old_version=$(installed_version)
+  IFS= read -r new_version < "$unpacked/VERSION" || true
+  [[ -n $image ]] || image=$(bundle_image "$unpacked")
+  backup_dir=$(backup_target)
+
+  if [[ $backup == yes ]]; then
+    echo "backing up before the update ..."
+    run_script backup.sh "$backup_dir" ||
+      die "the backup failed, so nothing was changed. Is Velydock running ('velydock start')? To update without a backup: --no-backup."
+    made=$backup_dir/$(list_backups "$backup_dir" | sed -n 1p)
+  else
+    echo "no backup before this update (--no-backup)."
+  fi
+
+  changed=$(modified_files)
+  if [[ -n $changed ]]; then
+    echo "these program files were changed on this server; your versions are kept in $dir/.previous/$old_version/:"
+    printf '  %s\n' "${changed//$'\n'/$'\n'  }"
+  fi
+
+  make_work
+  old_manifest=$work/MANIFEST.old
+  cp -- "$dir/MANIFEST" "$old_manifest"
+  keep_previous "$old_version"
+  echo "replacing the program files ..."
+  place_files "$dir" "$unpacked"
+  remove_obsolete "$old_manifest"
+  env_set VELYDOCK_IMAGE "$image"
+  # The Compose file may read other variables now.
+  init_compose_env
+
+  if pull_images && start_stack && stack_ok; then
+    echo
+    echo "Velydock was updated: $old_version -> $new_version"
+    echo "Running: $(public_url)"
+    echo "Program files of $old_version: $dir/.previous/$old_version/"
+    if [[ -n $made ]]; then
+      echo "Backup made before the update: $made"
+      echo "Should you have to go back to $old_version: the old program files alone do not undo what the new"
+      echo "version changed in the database. The way back is that backup (docs/betrieb.md, \"Update\")."
+    else
+      echo "No backup was made. The old program files alone do not undo what the new version changed in"
+      echo "the database: without a backup of your own from before this update there is no way back."
+    fi
+    return 0
+  fi
+  {
+    echo
+    echo "error: version $new_version is in place but did not start cleanly."
+    echo "Look at 'velydock status' and 'velydock logs velydock'; 'velydock start' tries again."
+    echo "The way back: put the files from $dir/.previous/$old_version/ back, set VELYDOCK_IMAGE in"
+    echo ".env to the line in $dir/.previous/$old_version.image and restore a backup made before"
+    echo "the update${made:+ ($made)} with 'velydock restore'. The old program files alone do not"
+    echo "undo what the new version changed in the database (docs/betrieb.md)."
+  } >&2
+  return 1
+}
+
+# ---- doctor ----------------------------------------------------------------------------------
+
+checks_ok=0
+checks_warn=0
+checks_fail=0
+
+report() {
+  case $1 in
+    ok)
+      checks_ok=$((checks_ok + 1))
+      printf '[ ok ] %s\n' "$2"
+      ;;
+    warn)
+      checks_warn=$((checks_warn + 1))
+      printf '[warn] %s\n' "$2"
+      ;;
+    fail)
+      checks_fail=$((checks_fail + 1))
+      printf '[FAIL] %s\n' "$2"
+      ;;
+    info) printf '[info] %s\n' "$2" ;;
+  esac
+}
+
+# True if one of the DNS names (one per line) covers the host; "*" stands for exactly one label.
+names_cover() {
+  local names=$1 host=${2,,} name
+  while IFS= read -r name; do
+    name=${name,,}
+    [[ -n $name ]] || continue
+    [[ $name != "$host" ]] || return 0
+    if [[ $name == \*.* && $host == *.* && ${host#*.} == "${name#\*.}" && -n ${host%%.*} ]]; then
+      return 0
+    fi
+  done <<<"$names"
+  return 1
+}
+
+local_addresses() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'
+  else
+    printf '127.0.0.1\n::1\n'
+    hostname -I 2>/dev/null | tr ' ' '\n'
+  fi
+}
+
+doctor_containers() {
+  local service state list
+  list=$(services)
+  while IFS= read -r service; do
+    state=$(service_state "$service")
+    if state_ok "$state"; then
+      report ok "container $service: $(describe_state "$state")"
+    else
+      report fail "container $service: $(describe_state "$state") (velydock logs $service)"
+    fi
+  done <<<"$list"
+}
+
+doctor_env() {
+  local mode
+  mode=$(stat -c %a "$dir/.env")
+  if [[ $mode == 600 || $mode == 400 ]]; then
+    report ok ".env is readable only by its owner (mode $mode)"
+  else
+    report fail ".env has mode $mode: others on this server can read every secret (chmod 600 $dir/.env)"
+  fi
+}
+
+doctor_names() {
+  local host resolved mine found address
+  if ! command -v getent >/dev/null 2>&1; then
+    report info "host names not checked (getent is missing)"
+    return 0
+  fi
+  mine=$(local_addresses)
+  for host in "$@"; do
+    resolved=$(getent ahosts "$host" 2>/dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ') || true
+    resolved=${resolved% }
+    if [[ -z $resolved ]]; then
+      report warn "$host does not resolve to an address"
+      continue
+    fi
+    found=0
+    for address in $resolved; do
+      if grep -qxF -- "$address" <<<"$mine"; then found=1; fi
+    done
+    if (( found )); then
+      report ok "$host resolves to this server ($resolved)"
+    else
+      report warn "$host resolves to $resolved, which is no address of this server (fine behind NAT or a load balancer)"
+    fi
+  done
+}
+
+doctor_ports() {
+  local address port host body
+  read -r address port <<<"$(local_endpoint "$(env_get HTTP_BIND)" 80)"
+  if tcp_open "$address" "$port"; then
+    report ok "port $port (HTTP) answers on $address"
+  else
+    report fail "port $port (HTTP) does not answer on $address"
+  fi
+  read -r address port <<<"$(local_endpoint "$(env_get HTTPS_BIND)" 443)"
+  if ! tcp_open "$address" "$port"; then
+    report fail "port $port (HTTPS) does not answer on $address"
+    return 0
+  fi
+  report ok "port $port (HTTPS) answers on $address"
+  command -v curl >/dev/null 2>&1 || return 0
+  host=$(env_get VELYDOCK_HOST)
+  body=$(curl -ksS --max-time 15 --resolve "$host:$port:$address" "https://$host:$port/api/health" 2>/dev/null </dev/null) || body=""
+  if [[ $body == *'"status"'* ]]; then
+    report ok "Velydock answers through the proxy (https://$host/api/health)"
+  else
+    report fail "Velydock does not answer through the proxy (https://$host/api/health)"
+  fi
+}
+
+doctor_certificates() {
+  local address port host pem subject issuer end names left resolver apps end_seconds
+  if ! command -v openssl >/dev/null 2>&1; then
+    report info "certificates not checked (openssl is missing)"
+    return 0
+  fi
+  read -r address port <<<"$(local_endpoint "$(env_get HTTPS_BIND)" 443)"
+  # As in docker-compose.yml: unset means Let's Encrypt, set but empty means none.
+  resolver=letsencrypt
+  if grep -q '^TLS_RESOLVER=' "$dir/.env"; then resolver=$(env_get TLS_RESOLVER); fi
+  apps=$(env_get APPS_HOST)
+  for host in "$@"; do
+    pem=$(timeout 20 openssl s_client -connect "$address:$port" -servername "$host" </dev/null 2>/dev/null |
+      openssl x509 2>/dev/null) || pem=""
+    if [[ -z $pem ]]; then
+      report fail "$host: no certificate could be read from $address:$port"
+      continue
+    fi
+    subject=$(openssl x509 -noout -subject -nameopt RFC2253 <<<"$pem" | sed 's/^subject=//')
+    issuer=$(openssl x509 -noout -issuer -nameopt RFC2253 <<<"$pem" | sed 's/^issuer=//')
+    end=$(openssl x509 -noout -enddate <<<"$pem" | sed 's/^notAfter=//')
+    names=$(openssl x509 -noout -ext subjectAltName <<<"$pem" 2>/dev/null | tr ',' '\n' |
+      sed -nE 's/^[[:space:]]*DNS:(.*)$/\1/p') || names=""
+    if [[ $subject == *"TRAEFIK DEFAULT CERT"* ]]; then
+      if [[ -n $apps && $host == "$apps" ]]; then
+        report info "$host: no certificate of its own yet (the proxy needs one once an app is published there)"
+      elif [[ -n $resolver ]]; then
+        report fail "$host: served with the proxy's self-signed stand-in - Let's Encrypt has not issued a certificate (velydock logs traefik)"
+      else
+        report warn "$host: served with the proxy's self-signed certificate; browsers warn. Expected for a test installation; with own certificates it means none of them covers this name (velydock cert list)"
+      fi
+      continue
+    fi
+    if ! openssl x509 -noout -checkend 0 <<<"$pem" >/dev/null 2>&1; then
+      report fail "$host: the certificate expired on $end (issuer: $issuer)"
+    elif ! names_cover "$names" "$host"; then
+      report fail "$host: the certificate served does not cover this name (it names: $(tr '\n' ' ' <<<"$names"))"
+    elif ! openssl x509 -noout -checkend $((14 * 86400)) <<<"$pem" >/dev/null 2>&1; then
+      report warn "$host: the certificate expires on $end, in less than 14 days (issuer: $issuer)"
+    else
+      left=""
+      if end_seconds=$(date -d "$end" +%s 2>/dev/null); then
+        left=", $(( (end_seconds - $(date +%s)) / 86400 )) days left"
+      fi
+      report ok "$host: certificate valid until $end$left (issuer: $issuer)"
+    fi
+  done
+}
+
+doctor_disk() {
+  local path label free
+  for label in "Docker data" "installation" "backups"; do
+    case $label in
+      "Docker data") path=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null) || path="" ;;
+      installation) path=$dir ;;
+      *) path=$(backup_target) ;;
+    esac
+    [[ -n $path && -d $path ]] || continue
+    free=$(df -Pk -- "$path" 2>/dev/null | awk 'NR == 2 { print int($4 / 1024) }') || free=""
+    [[ -n $free ]] || continue
+    if (( free < 1024 )); then
+      report fail "$label ($path): only $free MB free"
+    elif (( free < 5120 )); then
+      report warn "$label ($path): $free MB free"
+    else
+      report ok "$label ($path): $((free / 1024)) GB free"
+    fi
+  done
+}
+
+doctor_backups() {
+  local target newest stamp seconds age
+  target=$(backup_target)
+  newest=$(list_backups "$target" | sed -n 1p)
+  if [[ -z $newest ]]; then
+    report warn "no backup found in $target (velydock backup)"
+  else
+    stamp=${newest#velydock-}
+    seconds=$(date -u -d "${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2}" +%s 2>/dev/null) || seconds=""
+    if [[ -z $seconds ]]; then
+      report info "last backup: $target/$newest"
+    else
+      age=$(( ($(date -u +%s) - seconds) / 3600 ))
+      if (( age > 48 )); then
+        report warn "the last backup is $((age / 24)) days old: $target/$newest"
+      else
+        report ok "last backup $age hours ago: $target/$newest"
+      fi
+    fi
+  fi
+  if [[ -f $UNIT_DIR/$TIMER ]] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "$TIMER" 2>/dev/null; then
+      report ok "nightly backups are scheduled ($TIMER)"
+    else
+      report warn "$TIMER is installed but not active (systemctl enable --now $TIMER)"
+    fi
+  elif [[ -n $(env_get VELYDOCK_BACKUP_DIR) ]]; then
+    report info "no backup timer on this server: 'velydock backup' has to be scheduled by other means"
+  else
+    report info "nightly backups were not set up"
+  fi
+}
+
+doctor_version() {
+  local installed latest order=0 changed image shipped="" known path extra=""
+  installed=$(installed_version)
+  changed=$(modified_files)
+  if [[ -n $changed ]]; then
+    report warn "program files differ from release $installed (an update replaces them and keeps yours in .previous/): $(tr '\n' ' ' <<<"$changed")"
+  else
+    report ok "program files are those of release $installed"
+  fi
+  # The proxy loads every file in this directory, whoever put it there - also one that a newer
+  # version brought and that stayed behind when the program files were put back by hand.
+  known=$(manifest_paths "$dir/MANIFEST")
+  for path in "$dir"/deploy/traefik/dynamic/*; do
+    [[ -f $path ]] || continue
+    if ! grep -qxF -- "${path#"$dir"/}" <<<"$known"; then extra+="${path##*/} "; fi
+  done
+  if [[ -n $extra ]]; then
+    report info "routing rules that are not part of release $installed, loaded by the proxy all the same: $extra"
+  fi
+  image=$(env_get VELYDOCK_IMAGE)
+  if [[ -r $dir/IMAGE ]]; then IFS= read -r shipped < "$dir/IMAGE" || true; fi
+  if [[ $image == "$shipped" ]]; then
+    report ok "image is the one release $installed names ($image)"
+  else
+    report warn "VELYDOCK_IMAGE in .env ($image) is not the image release $installed names ($shipped); fine if set on purpose"
+  fi
+  make_work
+  if latest=$(latest_version "$work/latest" 2>/dev/null); then
+    compare_versions "$latest" "$installed" || order=$?
+    if (( order == 1 )); then
+      report warn "version $installed is installed, $latest is available (velydock update)"
+    else
+      report ok "version $installed is installed; the latest release is $latest"
+    fi
+  else
+    report warn "version $installed is installed; the latest release could not be found out ($(release_base))"
+  fi
+}
+
+cmd_doctor() {
+  local hosts=() apps
+  (($# == 0)) || die "doctor takes no arguments."
+  need_installation
+  need_docker
+  hosts=("$(env_get VELYDOCK_HOST)" "$(env_get KEYCLOAK_HOST)" "$(env_get SANDBOX_HOST)")
+  apps=$(env_get APPS_HOST)
+  [[ -z $apps ]] || hosts+=("$apps")
+  echo "Velydock $(installed_version) in $dir"
+  doctor_containers
+  doctor_env
+  doctor_names "${hosts[@]}"
+  if proxy_enabled; then
+    doctor_ports
+    doctor_certificates "${hosts[@]}"
+  else
+    report info "the bundled proxy is switched off (COMPOSE_PROFILES): ports and certificates are those of your own proxy and are not checked"
+  fi
+  doctor_disk
+  doctor_backups
+  doctor_version
+  echo
+  echo "$checks_ok ok, $checks_warn warnings, $checks_fail failures"
+  (( checks_fail == 0 ))
+}
+
+# ---- uninstall -------------------------------------------------------------------------------
+
+launcher_is_ours() {
+  [[ -f $LAUNCHER ]] && grep -qxF "exec '$dir/scripts/velydock' \"\$@\"" "$LAUNCHER" 2>/dev/null
+}
+
+remove_system_parts() {
+  local unit
+  if launcher_is_ours; then
+    if rm -f -- "$LAUNCHER" 2>/dev/null; then
+      echo "removed $LAUNCHER"
+    else
+      echo "warning: could not remove $LAUNCHER (run as root)" >&2
+    fi
+  fi
+  if [[ -f $UNIT_DIR/$SERVICE ]] && grep -qF -- "$dir/scripts/velydock" "$UNIT_DIR/$SERVICE" 2>/dev/null; then
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
+    fi
+    for unit in "$TIMER" "$SERVICE"; do
+      rm -f -- "$UNIT_DIR/$unit" 2>/dev/null || echo "warning: could not remove $UNIT_DIR/$unit (run as root)" >&2
+    done
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    echo "removed the backup timer"
+  fi
+}
+
+cmd_uninstall() {
+  local purge=0 yes=0 host answer path parent paths backups
+  while (($#)); do
+    case $1 in
+      --purge) purge=1 ;;
+      --yes) yes=1 ;;
+      *) die "uninstall: unknown argument '$1'" ;;
+    esac
+    shift
+  done
+  [[ -f $dir/docker-compose.yml && -f $dir/MANIFEST ]] || die "$dir is not a Velydock installation made by the installer."
+  [[ ! -e $dir/.env || -r $dir/.env ]] || die "cannot read $dir/.env - run this command as root (sudo velydock ...)."
+  host=$(env_get VELYDOCK_HOST)
+  backups=$(backup_target)
+  paths=$(manifest_paths "$dir/MANIFEST")
+  if (( purge )); then
+    echo "This removes Velydock from this server for good: its containers, both databases, the"
+    echo "configuration with all secrets ($dir/.env) and the backups in $dir/backups."
+    if (( ! yes )) && [[ -n $host ]]; then
+      answer=$(ask "Type the host name of this installation ($host) to continue: ") ||
+        die "nobody can be asked here (no terminal); repeat the command with --yes."
+      [[ $answer == "$host" ]] || die "aborted; nothing was changed."
+    elif (( ! yes )); then
+      confirm "Remove everything?" || die "aborted; nothing was changed."
+    fi
+  elif (( ! yes )); then
+    echo "This stops Velydock and removes its containers. The databases (Docker volumes), .env and"
+    echo "the backups stay."
+    confirm "Uninstall?" || die "aborted; nothing was changed."
+  fi
+  lock
+
+  if [[ -e $dir/.env ]]; then
+    need_docker
+    if (( purge )); then
+      compose down --volumes
+    else
+      compose down
+    fi
+  fi
+  remove_system_parts
+
+  if (( ! purge )); then
+    echo
+    echo "Velydock was removed from the running system. Kept: the Docker volumes, $dir/.env, the"
+    echo "program files and the backups. To bring it back, run the installer again (it restores the"
+    echo "command and the backup timer) and then 'velydock start'."
+    echo "To remove everything: $dir/scripts/velydock uninstall --purge"
+    return 0
+  fi
+
+  cd /
+  while IFS= read -r path; do
+    rm -f -- "$dir/$path"
+  done <<<"$paths"
+  for path in MANIFEST .env .install-state .lock install.log .previous backups; do
+    if [[ -e $dir/$path || -L $dir/$path ]]; then remove_below "$dir" "$dir/$path"; fi
+  done
+  # Of the directories only those that held program files go, and only if they are empty now.
+  while IFS= read -r path; do
+    parent=$(dirname -- "$path")
+    while [[ $parent != . && $parent != / ]]; do
+      rmdir -- "$dir/$parent" 2>/dev/null || break
+      parent=$(dirname -- "$parent")
+    done
+  done <<<"$paths"
+  echo
+  if rmdir -- "$dir" 2>/dev/null; then
+    echo "Velydock was removed; $dir is gone."
+  else
+    echo "Velydock was removed. Not from Velydock and therefore left in place:"
+    find "$dir" -mindepth 1 ! -type d | sed -n 1,10p | sed 's/^/  /'
+  fi
+  if [[ $backups != "$dir/backups" && -d $backups ]]; then
+    echo "Backups outside the installation directory were not touched: $backups"
+  fi
+}
+
+# ---- entry -----------------------------------------------------------------------------------
+
+main() {
+  local command=${1:-help} self
+  if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+    die "bash 4.4 or newer is needed."
+  fi
+  [[ $# -eq 0 ]] || shift
+  trap cleanup EXIT
+  case $command in
+    __place-files)
+      (($# == 2)) || die "__place-files: wrong number of arguments."
+      place_files "$1" "$2"
+      return 0
+      ;;
+    __continue-update)
+      (($# == 4)) || die "__continue-update: wrong number of arguments."
+      continue_update "$@"
+      return 0
+      ;;
+  esac
+  self=$(readlink -f -- "${BASH_SOURCE[0]}")
+  dir=$(dirname -- "$(dirname -- "$self")")
+  [[ -n $dir && $dir != / ]] || die "this command must lie in <installation directory>/scripts/."
+  init_compose_env
+  case $command in
+    status) cmd_status "$@" ;;
+    start) cmd_start "$@" ;;
+    stop) cmd_stop "$@" ;;
+    restart) cmd_restart "$@" ;;
+    logs) cmd_logs "$@" ;;
+    update) cmd_update "$@" ;;
+    backup) cmd_backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    admin) cmd_admin "$@" ;;
+    cert) cmd_cert "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    version | --version) cmd_version "$@" ;;
+    help | --help | -h) usage ;;
+    *)
+      usage >&2
+      die "unknown command '$command'"
+      ;;
+  esac
+}
+
+main "$@"

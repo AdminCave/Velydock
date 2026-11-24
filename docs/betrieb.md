@@ -16,7 +16,94 @@ Dazu kommt die Datei `.env` mit allen Geheimnissen.
 Nur `traefik` veröffentlicht Ports. PostgreSQL ist ausschließlich im internen Docker-Netz
 erreichbar.
 
+## Der Befehl `velydock`
+
+Der Installer ([installation.md](installation.md#installation-mit-dem-installer)) richtet den
+Befehl `velydock` ein. Er arbeitet immer auf der Installation, in deren Verzeichnis er liegt
+(`/opt/velydock/scripts/velydock`; `/usr/local/bin/velydock` ruft ihn dort auf), und braucht
+root, weil `.env` nur für root lesbar ist.
+
+| Befehl | Was er tut |
+|---|---|
+| `velydock status` | Version, Adresse und der Zustand jedes Containers. Status 1, wenn etwas nicht läuft. |
+| `velydock start [--pull]` | Startet alles und kehrt zurück, wenn es bereit ist. Übernimmt auch eine geänderte `.env`. Mit `--pull` werden vorher alle Images neu geholt. |
+| `velydock stop` | Hält alles an. Daten bleiben. |
+| `velydock restart [Dienst …]` | Startet alles oder einzelne Dienste neu und wartet, bis alles bereit ist. |
+| `velydock logs [-f] [--tail N] [Dienst …]` | Protokolle; ohne Angabe die letzten 200 Zeilen jedes Dienstes. |
+| `velydock update [--version X] [--no-backup] [--yes]` | [Update](#update) auf das neueste oder ein genanntes Release. |
+| `velydock backup [Verzeichnis] [--keep N]` | [Backup](#backup) beider Datenbanken und der `.env`. |
+| `velydock restore <Backup-Verzeichnis> [--yes]` | [Wiederherstellung](#wiederherstellung). |
+| `velydock admin --username NAME [--email ADRESSE]` | Legt einen Administrator an oder stellt einen Zugang wieder her ([installation.md](installation.md#ersten-administrator-anlegen)). |
+| `velydock cert list`, `cert add <Zertifikat> <Schlüssel> [--name N] [--replace]`, `cert remove <Name>` | Eigene Zertifikate. |
+| `velydock doctor` | [Diagnose](#protokolle-und-diagnose), eine Zeile je Prüfung. Verändert nichts. |
+| `velydock uninstall [--purge] [--yes]` | [Deinstallation](#deinstallation). |
+| `velydock version`, `velydock help` | Installierte Version; alle Befehle. |
+
+Dienste heißen `velydock`, `keycloak`, `postgres` und `traefik`. Die Meldungen des Befehls sind
+englisch, wie die der Skripte und des Backends, die er aufruft.
+
+Der Befehl liest die Konfiguration ausschließlich aus `.env`. Variablen aus der Umgebung des
+Aufrufers, die Compose sonst vorziehen würde (`VELYDOCK_HOST`, `COMPOSE_PROJECT_NAME` …), haben
+keine Wirkung.
+
+Bei einer [Installation von Hand](installation.md#installation-von-hand) aus dem Git-Checkout
+gibt es den Befehl nicht. Dort gelten die `docker compose`-Befehle und Skripte, die in den
+folgenden Abschnitten jeweils unter „Von Hand“ stehen – sie funktionieren im
+Installationsverzeichnis des Installers ebenso.
+
 ## Update
+
+### Mit dem Befehl
+
+```bash
+sudo velydock update                     # auf das neueste Release
+sudo velydock update --version 1.2.3     # auf ein bestimmtes
+```
+
+Der Befehl
+
+1. ermittelt die Zielversion und fragt nach (`--yes` unterdrückt die Rückfrage);
+2. lädt das Paket des Releases und prüft es gegen dessen `SHA256SUMS` – passt die Prüfsumme
+   nicht, ist nichts verändert;
+3. legt ein [Backup](#backup) an (`--no-backup` lässt es weg). Schlägt das Backup fehl, bricht
+   das Update ab, bevor etwas verändert ist;
+4. bewahrt die bisherigen Programmdateien in `.previous/<alte Version>/` auf und die bisherige
+   Zeile `VELYDOCK_IMAGE` in `.previous/<alte Version>.image`. Es bleibt immer nur der Stand vor
+   dem letzten Update;
+5. ersetzt die Programmdateien an Ort und Stelle, Datei für Datei. Dateien, die das neue Release
+   nicht mehr enthält, entfernt er; alles, was nicht aus einem Release stammt, bleibt
+   unangetastet. Wurde eine Programmdatei auf dem Server geändert, nennt er sie – deine Fassung
+   liegt dann in `.previous/`;
+6. trägt das Image des neuen Releases in `.env` ein, holt die Images, startet
+   (`docker compose up -d --wait`), prüft, dass alle Container laufen, und meldet
+   „alte Version -> neue Version“.
+
+Ist die gewünschte Version schon installiert, tut er nichts. Eine ältere Version lehnt er ab.
+
+**Zurück zur vorigen Version** führt über das Backup, nicht über die alten Programmdateien
+allein: Die neue Version hat beim Start womöglich die Datenbank verändert (Migrationen), und mit
+diesem Stand kann die alte dann nicht arbeiten. Der Weg von Hand:
+
+```bash
+cd /opt/velydock
+sudo cp -a .previous/1.2.2/. .                 # Programmdateien der vorigen Version
+# das Image der vorigen Version wieder in .env eintragen
+sudo sed -i "s|^VELYDOCK_IMAGE=.*|VELYDOCK_IMAGE=$(sudo cat .previous/1.2.2.image)|" .env
+sudo velydock restore backups/velydock-…       # das Backup, das vor dem Update angelegt wurde
+sudo velydock doctor
+```
+
+Alles, was seit dem Backup geändert wurde, ist danach verloren. Dateien, die erst die neuere
+Version mitgebracht hat, bleiben beim Zurückkopieren liegen; Routing-Regeln darunter lädt der
+Proxy weiterhin. `velydock doctor` nennt sie („routing rules that are not part of release …“) –
+lösche, was nicht von dir stammt. Später führt `velydock update` wieder vorwärts.
+
+Wer einen eigenen Spiegel für das Image verwendet, gibt es bei jedem Update an:
+`velydock update --image registry.example.com/velydock:1.2.3`.
+
+### Von Hand
+
+Im Git-Checkout:
 
 ```bash
 git pull                      # neue Compose-Datei, Skripte und Routing-Regeln
@@ -27,6 +114,8 @@ docker compose up -d
 
 Wer das Image selbst baut (kein veröffentlichtes Release): statt `docker compose pull` erneut
 `docker build -t ghcr.io/admincave/velydock:latest .` ausführen.
+
+### Was bei jedem Update geschieht
 
 Beim Start wendet Velydock ausstehende Datenbankmigrationen an und gleicht Keycloak mit dem
 eigenen Stand ab:
@@ -46,15 +135,17 @@ eigenen Stand ab:
   `could not add … to organization` und bleibt in Velydock sichtbar, bis es dort gelöscht wird
   ([administration.md](administration.md#aktionen-je-benutzer)).
 
-**Checkout und Image gehören zusammen.** Ein Update besteht immer aus beidem, und keines der
-beiden meldet, wenn das andere fehlt – alle Dienste starten und sind „healthy“:
+**Programmdateien und Image gehören zusammen.** `velydock update` tauscht beides in einem
+Schritt. Von Hand besteht ein Update immer aus beidem, und keines der beiden meldet, wenn das
+andere fehlt – alle Dienste starten und sind „healthy“:
 
 - Ohne `git pull` läuft das neue Image mit der alten Compose-Datei und den alten Routing-Regeln.
   Korrekturen, die dort liegen (Ratenbegrenzung, abgewiesene Pfade, Health-Checks), fehlen dann.
 - Ohne neues Image läuft der alte Stand weiter. Das betrifft vor allem eine feste Version in
   `.env`: `docker compose pull` holt nichts Neues, solange `VELYDOCK_IMAGE` nicht angehoben ist.
 
-Welches Image läuft, zeigt `docker compose ps` in der Spalte IMAGE.
+Welches Image läuft, zeigt `docker compose ps` in der Spalte IMAGE. `velydock doctor` meldet, wenn
+`VELYDOCK_IMAGE` in `.env` nicht das Image des installierten Releases ist.
 
 **Wartungsfenster einplanen:** Jedes neue Velydock-Image startet auch Keycloak neu, nicht nur
 eines mit geändertem Login-Theme. Der Dienst `theme` verwendet dasselbe Image wie `velydock`;
@@ -67,8 +158,8 @@ beobachtet es. Geänderte Regeln gelten deshalb schon wenige Sekunden nach `git 
 Neustart von Traefik – die drei Befehle also zusammen ausführen.
 
 Auf Servern mit restriktiver umask (027, 077) nach `git pull` und **vor** `docker compose up -d`
-die Leserechte wiederherstellen: `chmod -R o+rX deploy`. Was sonst geschieht, hängt davon ab, ob
-Traefik gerade läuft:
+die Leserechte wiederherstellen: `chmod -R o+rX deploy` (`velydock update` setzt sie selbst). Was
+sonst geschieht, hängt davon ab, ob Traefik gerade läuft:
 
 - Kann ein laufender Traefik eine geänderte Datei nicht lesen, behält es die bisherigen Regeln
   und meldet den Fehler in `docker compose logs traefik`.
@@ -76,8 +167,9 @@ Traefik gerade läuft:
   Adressen antworten mit 404, im Log steht `Cannot start the provider`. Das `chmod` allein
   bemerkt Traefik dann nicht mehr – danach `docker compose restart traefik` ausführen.
 
-Empfehlung: in `.env` eine feste Version eintragen (`VELYDOCK_IMAGE=ghcr.io/admincave/velydock:0.1.0`)
-und vor jedem Update ein Backup anlegen.
+Empfehlung für den Git-Checkout: in `.env` eine feste Version eintragen
+(`VELYDOCK_IMAGE=ghcr.io/admincave/velydock:0.1.0`) und vor jedem Update ein Backup anlegen. Der
+Installer und `velydock update` tragen von sich aus das Image des Releases mit seinem Digest ein.
 
 Keycloak selbst wird über `KEYCLOAK_IMAGE` in `.env` aktualisiert
 (`KEYCLOAK_IMAGE=quay.io/keycloak/keycloak:<Version>`, danach `docker compose up -d`). Ohne die
@@ -89,9 +181,29 @@ Updates zur regelmäßigen Wartung.
 ## Backup
 
 ```bash
-./scripts/backup.sh               # schreibt nach backups/velydock-<Zeitstempel>/ im Checkout
+sudo velydock backup                     # nach VELYDOCK_BACKUP_DIR, sonst backups/ der Installation
+sudo velydock backup /mnt/backup         # anderes Zielverzeichnis
+sudo velydock backup --keep 14           # danach nur die 14 neuesten Backups dort behalten
+```
+
+Von Hand, im Git-Checkout oder im Installationsverzeichnis:
+
+```bash
+./scripts/backup.sh               # schreibt nach backups/velydock-<Zeitstempel>/
 ./scripts/backup.sh /mnt/backup   # anderes Zielverzeichnis
 ```
+
+`velydock backup` ruft dasselbe Skript auf. Ohne `--keep` gilt `VELYDOCK_BACKUP_KEEP` aus `.env`;
+steht auch dort nichts, wird nichts gelöscht. Aufgeräumt wird nur nach einem gelungenen Backup,
+und entfernt wird nur, was ein vollständiges Backup dieses Skripts ist: ein Verzeichnis
+`velydock-<Zeitstempel>` mit `SHA256SUMS`, das nichts als die vier Dateien eines Backups enthält.
+Alles andere im Zielverzeichnis bleibt liegen, auch ein Backup, in das jemand eine eigene Datei
+gelegt hat.
+
+Hat der Installer nächtliche Backups eingerichtet, startet der systemd-Timer
+`velydock-backup.timer` jede Nacht `velydock backup` mit den Werten aus `.env`. Ob es lief:
+`systemctl list-timers velydock-backup.timer`, `journalctl -u velydock-backup.service`;
+`velydock doctor` warnt, wenn das letzte Backup älter als zwei Tage ist.
 
 Das Skript sichert im laufenden Betrieb beide Datenbanken (`pg_dump`, Custom-Format) und kopiert
 `.env`. Ein relativer Pfad gilt – wie bei `restore.sh` – ab dem Verzeichnis, aus dem das Skript
@@ -106,7 +218,9 @@ zurück, und das Skript endet mit einer Fehlermeldung und einem Status ungleich 
 `velydock-<Zeitstempel>` heißt, ist ein vollständiges Backup.
 
 Das Backup enthält alle Geheimnisse und die Passwort-Hashes aller Benutzer. Es gehört
-verschlüsselt und nicht auf denselben Server. Für regelmäßige Sicherungen genügt ein Cron-Eintrag:
+verschlüsselt und nicht auf denselben Server – auch die nächtlichen Backups des Installers liegen
+zunächst nur auf dem Server selbst und müssen von dort weiterkopiert werden. Ohne den Timer des
+Installers genügt für regelmäßige Sicherungen ein Cron-Eintrag:
 
 ```
 30 2 * * *  cd /opt/velydock && ./scripts/backup.sh /mnt/backup >> /var/log/velydock-backup.log 2>&1
@@ -120,10 +234,40 @@ beide sichern und beide zurückspielen.
 Auf dem bestehenden Server:
 
 ```bash
-./scripts/restore.sh backups/velydock-20261120T020000Z
+sudo velydock restore /opt/velydock/backups/velydock-20261120T020000Z     # mit dem Befehl
+./scripts/restore.sh backups/velydock-20261120T020000Z                    # von Hand
 ```
 
-Auf einem neuen Server:
+`velydock restore` ruft dasselbe Skript auf und wartet danach, bis alles wieder bereit ist;
+`--yes` ersetzt die Rückfrage.
+
+Auf einem neuen Server, mit dem Installer. Die Datenbanken des Backups funktionieren nur mit der
+`.env` des alten Servers; sie muss deshalb an ihrem Platz liegen, bevor die Datenbanken angelegt
+werden. Der Installer legt aber eine neue `.env` und neue, leere Datenbanken an – die werden
+verworfen:
+
+```bash
+# 1. Normal installieren, und zwar die Version des Backups: Sie steht in der Zeile
+#    VELYDOCK_IMAGE der Datei "env" im Backup. Hostnamen wie auf dem alten Server.
+curl -fsSL https://github.com/AdminCave/Velydock/releases/latest/download/install.sh |
+  sudo bash -s -- --version 1.2.3
+
+# 2. Die eben angelegten, leeren Datenbanken verwerfen
+cd /opt/velydock && sudo docker compose down --volumes
+
+# 3. Konfiguration und Geheimnisse des alten Servers einsetzen
+sudo install -m 600 /mnt/backup/velydock-20261120T020000Z/env /opt/velydock/.env
+
+# 4. Starten (legt leere Datenbanken mit den alten Geheimnissen an), dann zurückspielen
+sudo velydock start
+sudo velydock restore /mnt/backup/velydock-20261120T020000Z
+```
+
+Danach gilt wieder, was in der alten `.env` stand – auch das Verzeichnis und die Anzahl der
+Backups. Der Administrator, den der Installer in Schritt 1 angelegt hat, ist mit den verworfenen
+Datenbanken verschwunden; es gelten die Konten des Backups.
+
+Auf einem neuen Server, von Hand:
 
 ```bash
 git clone https://github.com/AdminCave/Velydock.git && cd Velydock
@@ -133,9 +277,9 @@ docker compose up -d --wait               # legt leere Datenbanken an
 ./scripts/restore.sh /mnt/backup/velydock-20261120T020000Z
 ```
 
-Das `chmod` übernimmt bei einer Neuinstallation `install.sh`, das auf diesem Weg nicht läuft: Mit
-restriktiver umask geklonte Dateien unter `deploy/` können die Container nicht lesen. Ist der
-erste Start daran schon gescheitert (PostgreSQL meldet `Permission denied` für
+Das `chmod` übernimmt bei einer Neuinstallation `scripts/install.sh`, das auf diesem Weg nicht
+läuft: Mit restriktiver umask geklonte Dateien unter `deploy/` können die Container nicht lesen.
+Ist der erste Start daran schon gescheitert (PostgreSQL meldet `Permission denied` für
 `10-init-databases.sh`, danach fehlen die Rollen `velydock` und `keycloak`), genügt das `chmod`
 nicht mehr, denn das Datenverzeichnis ist dann ohne Datenbanken angelegt. Auf dem noch leeren
 Server `docker compose down --volumes` ausführen und neu starten.
@@ -346,9 +490,11 @@ Funktion ist aus, solange `APPS_HOST` in `.env` leer ist.
    oder der Anmeldung bilden lassen. Velydock verweigert sonst den Start.
 2. DNS: `apps.example.com` auf den Server zeigen lassen. Für Apps mit eigener Subdomain
    zusätzlich `*.apps.example.com` (Wildcard) oder je App ein eigener Eintrag.
-3. In `.env` `APPS_HOST=apps.example.com` eintragen. `VELYDOCK_PROXY_SECRET` hat `install.sh`
-   bereits erzeugt; in einer älteren `.env` ergänzen (`openssl rand -hex 32`).
-4. `docker compose up -d`.
+3. In `.env` `APPS_HOST=apps.example.com` eintragen – der Installer hat das bereits getan, wenn
+   bei der Installation ein Hostname für veröffentlichte Apps gewählt wurde.
+   `VELYDOCK_PROXY_SECRET` haben der Installer und `scripts/install.sh` bereits erzeugt; in einer
+   älteren `.env` ergänzen (`openssl rand -hex 32`).
+4. `sudo velydock start` oder `docker compose up -d`.
 5. Als Systemadministrator je Organisation freigeben, welche internen Adressen sie
    veröffentlichen darf (*System → Organisationen*). Ohne Freigabe lässt sich nichts
    veröffentlichen.
@@ -448,6 +594,14 @@ eigene Authentifizierungsabläufe – bleibt ebenfalls unangetastet.
 ## Protokolle und Diagnose
 
 ```bash
+sudo velydock doctor              # Diagnose, eine Zeile je Prüfung
+sudo velydock status
+sudo velydock logs -f velydock
+```
+
+Von Hand, im Verzeichnis der Installation:
+
+```bash
 docker compose ps
 docker compose logs -f velydock
 docker compose logs -f keycloak
@@ -455,6 +609,27 @@ docker compose logs -f keycloak
 
 Docker bewahrt je Container höchstens fünf Protokolldateien zu 10 MB auf (`logging` in
 `docker-compose.yml`); ältere Zeilen fallen weg.
+
+`velydock doctor` verändert nichts. Jede Zeile beginnt mit `[ ok ]`, `[warn]`, `[FAIL]` oder
+`[info]`; der Befehl endet mit Status 1, wenn mindestens eine Prüfung fehlgeschlagen ist
+(Warnungen ändern den Status nicht). Geprüft wird:
+
+- jeder Container: läuft er, und ist er „healthy“;
+- `.env` ist nur für ihren Besitzer lesbar;
+- jeder Hostname lässt sich auflösen und zeigt auf eine Adresse dieses Servers (sonst Warnung);
+- die Ports des Proxys antworten lokal, und Velydock antwortet durch den Proxy (`/api/health`);
+- mit welchem Zertifikat jeder Hostname tatsächlich ausgeliefert wird (`openssl s_client`), bis
+  wann es gilt und ob es den Namen abdeckt. Weniger als 14 Tage Restlaufzeit sind eine Warnung,
+  ein abgelaufenes Zertifikat ein Fehler. Liefert der Proxy sein selbstsigniertes Zertifikat aus,
+  ist das mit Let's Encrypt ein Fehler (es wurde keines ausgestellt), sonst eine Warnung;
+- freier Speicherplatz für Docker, die Installation und die Backups (Warnung unter 5 GB, Fehler
+  unter 1 GB);
+- das letzte Backup (Warnung, wenn es fehlt oder älter als zwei Tage ist) und der Backup-Timer;
+- ob die Programmdateien und das Image in `.env` die des installierten Releases sind;
+- die installierte Version gegenüber dem neuesten Release.
+
+Mit eigenem Reverse Proxy (`COMPOSE_PROFILES` ohne `proxy`) entfallen die Prüfungen der Ports
+und Zertifikate.
 
 | Symptom | Ursache und Abhilfe |
 |---|---|
@@ -467,6 +642,28 @@ Docker bewahrt je Container höchstens fünf Protokolldateien zu 10 MB auf (`log
 | `429 Too Many Requests` | Die Ratenbegrenzung des mitgelieferten Traefik für diese Client-Adresse hat gegriffen ([Eigener Reverse Proxy](#eigener-reverse-proxy) nennt die Grenzen); kurz warten. |
 | Anmeldeseite ohne Velydock-Aussehen | Der Dienst `theme` ist fehlgeschlagen: `docker compose logs theme`. |
 | Eingebettete App bleibt leer | Die App verbietet das Einbetten oder liegt unter einer fremden Domain; siehe [anwendungsintegration.md](anwendungsintegration.md). |
+
+## Deinstallation
+
+```bash
+sudo velydock uninstall            # Container entfernen; alle Daten bleiben
+sudo velydock uninstall --purge    # alles entfernen
+```
+
+Ohne `--purge` hält der Befehl Velydock an und entfernt die Container, den Befehl in
+`/usr/local/bin` und den Backup-Timer. Die Datenbanken (Docker-Volumes), `.env`, die
+Programmdateien und die Backups bleiben. Zurück führt ein erneuter Lauf des Installers – er legt
+Befehl und Timer wieder an und verändert sonst nichts – und danach `velydock start`.
+
+Mit `--purge` verlangt der Befehl, dass der Hostname der Installation eingetippt wird (`--yes`
+ersetzt das). Dann entfernt er zusätzlich die Volumes mit beiden Datenbanken, `.env`, die
+Programmdateien, `.previous/` und die Backups im Installationsverzeichnis. Was dort liegt und
+nicht von Velydock stammt, bleibt und wird genannt. Nicht angefasst werden ein
+Backup-Verzeichnis außerhalb der Installation, das Protokoll `/var/log/velydock-install.log` und
+Docker selbst.
+
+Bei einer Installation von Hand: `docker compose down` beziehungsweise
+`docker compose down --volumes` im Checkout.
 
 ## Hinweise für den Produktivbetrieb
 
