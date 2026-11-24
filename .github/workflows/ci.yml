@@ -131,7 +131,14 @@ jobs:
           cache: npm
           cache-dependency-path: e2e/package-lock.json
       - name: Shell scripts are clean
-        run: shellcheck install.sh scripts/velydock scripts/*.sh scripts/tests/*.sh
+        run: |
+          # Usually part of the runner image; installed when it is not.
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version
+          shellcheck install.sh scripts/velydock scripts/*.sh scripts/tests/*.sh
       - name: Build the image
         run: docker build -t velydock:dev .
       - name: Install Playwright

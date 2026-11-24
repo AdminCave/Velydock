@@ -2,6 +2,11 @@ name: Release
 
 # A version tag (v1.2.3) publishes the container image to GHCR and a GitHub release with what an
 # installation needs: install.sh, the bundle velydock-<version>.tar.gz and SHA256SUMS.
+#
+# Nothing is built or pushed before the job "gate" has passed: the tag has the form of a version,
+# the tagged commit is on main, CI succeeded for exactly that commit, and the release files can
+# be built from it. A tag that was pushed too early (CI still running) fails there; run the
+# workflow again once CI is through.
 on:
   push:
     tags: ["v*.*.*"]
@@ -10,10 +15,57 @@ permissions:
   contents: read
 
 jobs:
+  gate:
+    name: May this tag be released?
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history: the question below is whether the tagged commit is part of main.
+          fetch-depth: 0
+      - name: The tag has the form of a version
+        run: |
+          # The same form scripts/make-bundle.sh accepts; "v*.*.*" above lets more through.
+          if [[ ! $GITHUB_REF_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$GITHUB_REF_NAME' is not a version tag (v1.2.3 or v1.2.3-rc.1)."
+            exit 1
+          fi
+      - name: The tagged commit is on main
+        run: |
+          # The commit that was checked out for the tag (for an annotated tag, not the tag object).
+          commit=$(git rev-parse 'HEAD^{commit}')
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points to $commit, which is not on main."
+            exit 1
+          fi
+      - name: CI succeeded for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(git rev-parse 'HEAD^{commit}')
+          succeeded=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$commit" \
+            --status success --json databaseId --jq length)
+          if [[ ! $succeeded =~ ^[0-9]+$ ]] || (( succeeded < 1 )); then
+            echo "::error::no successful run of the CI workflow for $commit."
+            exit 1
+          fi
+      - name: The release files can be built
+        run: |
+          # With a digest of zeros in place of the real one, which exists only after the image
+          # is pushed. Whatever make-bundle.sh would refuse, it refuses here - before the push.
+          version=${GITHUB_REF_NAME#v}
+          ./scripts/make-bundle.sh "$version" "ghcr.io/admincave/velydock:$version@sha256:$(printf '%064d' 0)" "$RUNNER_TEMP/dry-run"
+
   image:
     name: Build and publish the image
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    needs: gate
     permissions:
       contents: read
       packages: write
