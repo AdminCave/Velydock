@@ -40,7 +40,10 @@ RUN pip install --no-deps . \
 COPY --from=frontend /src/dist /app/static
 COPY deploy/keycloak/theme /opt/velydock/keycloak-theme
 
-RUN useradd --system --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin velydock
+# /certs: where uploaded certificates are written for the proxy (a volume in docker-compose.yml,
+# which takes owner and mode from this directory when it is first created).
+RUN useradd --system --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin velydock \
+    && install -d -o 10001 -g 10001 -m 0750 /certs
 USER 10001:10001
 
 EXPOSE 8000

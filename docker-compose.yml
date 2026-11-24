@@ -30,9 +30,10 @@ services:
     profiles: ["proxy"]
     command:
       - --providers.file.directory=/etc/traefik/dynamic
-      # The routes of apps published through this proxy are not in a file: Traefik fetches them
-      # from Velydock every few seconds, with a secret only the two share. While Velydock is
-      # away it keeps the routes it has. Without APPS_HOST Velydock answers with no routes.
+      # The routes of apps published through this proxy and the names of uploaded certificates
+      # are not in a file: Traefik fetches them from Velydock every few seconds, with a secret
+      # only the two share. While Velydock is away it keeps what it has. Without APPS_HOST and
+      # without uploaded certificates Velydock answers with nothing.
       - --providers.http.endpoint=http://velydock:8000/internal/proxy/traefik
       - --providers.http.pollinterval=5s
       - --providers.http.headers.X-Velydock-Proxy-Secret=${VELYDOCK_PROXY_SECRET:-}
@@ -49,6 +50,9 @@ services:
       # such names: drop these headers instead of passing them on. Applies to both entry points.
       - --global.aliasheadersstrategy=delete
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
+      # Another ACME directory than Let's Encrypt's: its staging environment while trying an
+      # installation out (no rate limits, certificates browsers do not trust), or a CA of one's own.
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
       - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
       - --log.level=INFO
@@ -58,8 +62,6 @@ services:
       KEYCLOAK_HOST: ${KEYCLOAK_HOST:?set KEYCLOAK_HOST in .env}
       SANDBOX_HOST: ${SANDBOX_HOST:?set SANDBOX_HOST in .env}
       KEYCLOAK_REALM: velydock
-      # Empty: Traefik serves its self-signed default certificate (local testing only).
-      TLS_RESOLVER: ${TLS_RESOLVER-letsencrypt}
     ports:
       - "${HTTP_BIND:-0.0.0.0:80}:80"
       - "${HTTPS_BIND:-0.0.0.0:443}:443"
@@ -68,8 +70,13 @@ services:
       # is a new file, which a single-file mount would never show to the running container.
       - ./deploy/traefik/dynamic:/etc/traefik/dynamic:ro
       - traefik-acme:/acme
+      # Uploaded certificates: written by Velydock, read here.
+      - velydock-certs:/certs:ro
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
+    # The group of the Velydock container: the certificate files are readable by their owner and
+    # that group only, and without capabilities root is nobody special to the file system.
+    group_add: ["10001"]
     read_only: true
     depends_on:
       # Healthy, not merely started: Traefik fetches routes from Velydock right away, and
@@ -91,7 +98,14 @@ services:
       # host (https://APPS_HOST/<name>/) or below it as a sub-domain (https://<name>.APPS_HOST/).
       VELYDOCK_APPS_URL: ${APPS_HOST:+https://${APPS_HOST}${PUBLIC_PORT_SUFFIX:-}}
       VELYDOCK_PROXY_SECRET: ${VELYDOCK_PROXY_SECRET:-}
+      # Which resolver of the proxy fetches certificates for names without an uploaded one.
+      # Empty: none - such names get the proxy's self-signed stand-in (local testing, or an
+      # installation that runs on own certificates only).
       VELYDOCK_PROXY_TLS_RESOLVER: ${TLS_RESOLVER-letsencrypt}
+      # Own certificates (System → Zertifikate): stored in the database, written here for the
+      # proxy. The second value is where the proxy is asked which certificate a name really gets.
+      VELYDOCK_CERTS_DIR: /certs
+      VELYDOCK_PROXY_TLS_ADDRESS: traefik:443
       VELYDOCK_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       VELYDOCK_BACKCHANNEL_BASE_URL: http://velydock:8000
       VELYDOCK_DATABASE_URL: postgresql+asyncpg://velydock:${VELYDOCK_DB_PASSWORD:?}@postgres:5432/velydock
@@ -115,6 +129,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
+    volumes:
+      - velydock-certs:/certs
     cap_drop: [ALL]
     read_only: true
     tmpfs:
@@ -208,6 +224,8 @@ volumes:
   postgres-data:
   keycloak-themes:
   traefik-acme:
+  # Copies of the uploaded certificates for the proxy; rewritten from the database when empty.
+  velydock-certs:
 
 networks:
   edge:

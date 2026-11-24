@@ -5,6 +5,11 @@
 # file (for example after `git pull`) is applied without restarting Traefik. Only files directly
 # in this directory are watched, so routes must not move into a sub-directory.
 
+# Certificates: none of the routers below names a certificate resolver. Which names the proxy
+# fetches a certificate for (Let's Encrypt) and which are served with an uploaded one is decided
+# by Velydock and reaches the proxy with the configuration it fetches there
+# (backend/velydock/services/certificates.py). A name must never have both.
+
 http:
   routers:
     velydock:
@@ -14,12 +19,7 @@ http:
       entryPoints: [websecure]
       service: velydock
       middlewares: [compress]
-      tls:
-{{- if env "TLS_RESOLVER" }}
-        certResolver: {{ env "TLS_RESOLVER" }}
-{{- else }}
-        {}
-{{- end }}
+      tls: {}
 
     velydock-api:
       # The API additionally gets a per-client rate limit (sign-in attempts themselves are
@@ -33,12 +33,7 @@ http:
       entryPoints: [websecure]
       service: velydock
       middlewares: [api-ratelimit, compress]
-      tls:
-{{- if env "TLS_RESOLVER" }}
-        certResolver: {{ env "TLS_RESOLVER" }}
-{{- else }}
-        {}
-{{- end }}
+      tls: {}
 
     keycloak:
       # Only what browsers need: the Velydock realm and static resources. The admin console, the
@@ -47,12 +42,7 @@ http:
       entryPoints: [websecure]
       service: keycloak
       middlewares: [compress]
-      tls:
-{{- if env "TLS_RESOLVER" }}
-        certResolver: {{ env "TLS_RESOLVER" }}
-{{- else }}
-        {}
-{{- end }}
+      tls: {}
 
     keycloak-signin:
       # Where Keycloak checks passwords, one-time codes and client secrets: the steps of the
@@ -67,12 +57,7 @@ http:
       entryPoints: [websecure]
       service: keycloak
       middlewares: [signin-ratelimit, compress]
-      tls:
-{{- if env "TLS_RESOLVER" }}
-        certResolver: {{ env "TLS_RESOLVER" }}
-{{- else }}
-        {}
-{{- end }}
+      tls: {}
 
   middlewares:
     compress:
