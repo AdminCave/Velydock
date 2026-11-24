@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import stat
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -88,6 +88,27 @@ class TestWhatIsAccepted:
         )
         assert parsed.chain == ["CN=a.example.com", "CN=Test Intermediate"]
 
+    def test_a_key_kept_at_a_renewal_means_the_newer_certificate(self, authority: Authority) -> None:
+        key = new_key()
+        old, _ = authority.leaf("a.example.com", key=key, days=5)
+        new, _ = authority.leaf("a.example.com", key=key, days=300)
+        for text_ in (pem(old) + pem(new), pem(new) + pem(old)):
+            parsed = parse(certificate=text_ + pem(authority.intermediate[0]), private_key=key_pem(key))
+            assert parsed.not_after == new.not_valid_after_utc
+            assert parsed.chain == ["CN=a.example.com", "CN=Test Intermediate"]
+
+    def test_the_files_for_the_proxy_are_named_by_what_is_stored(self, authority: Authority) -> None:
+        certificate, key = authority.leaf("a.example.com")
+        alone = parse(certificate=pem(certificate), private_key=key_pem(key))
+        complete = parse(certificate=authority.fullchain(certificate), private_key=key_pem(key))
+        # The same certificate, with and without its chain: one fingerprint, two files.
+        assert alone.fingerprint == complete.fingerprint
+        assert alone.files_key != complete.files_key and len(complete.files_key) == 64
+        assert (
+            parse(certificate=authority.fullchain(certificate), private_key=key_pem(key)).files_key
+            == complete.files_key
+        )
+
     def test_a_certificate_signed_by_itself(self) -> None:
         certificate, key = issue("intern.example", names=["intern.example", "10.1.2.3"])
         parsed = parse(certificate=pem(certificate), private_key=key_pem(key))
@@ -155,15 +176,46 @@ class TestWhatIsRefused:
         certificate, key = issue("a.example.com", names=None)
         assert refused(certificate=pem(certificate), private_key=key_pem(key)) == "no_names"
 
-    def test_an_expired_certificate_but_not_one_that_starts_tomorrow(self, authority: Authority) -> None:
+    def test_an_expired_certificate_and_one_that_is_not_valid_yet(self, authority: Authority) -> None:
         certificate, key = authority.leaf("a.example.com", days=10, starts_in_days=-20)
         assert refused(certificate=pem(certificate), private_key=key_pem(key)) == "expired"
+        # Stored, it would be served at once, and no other certificate fetched for its name.
         later, later_key = authority.leaf("a.example.com", starts_in_days=1)
-        assert parse(certificate=pem(later), private_key=key_pem(later_key)).not_before > datetime.now(UTC)
+        assert refused(certificate=pem(later), private_key=key_pem(later_key)) == "not_yet_valid"
         # Judged at the moment of the upload.
-        at = later.not_valid_after_utc + timedelta(seconds=1)
+        on_the_day = later.not_valid_before_utc + timedelta(seconds=1)
+        assert parse(certificate=pem(later), private_key=key_pem(later_key), now=on_the_day).names == [
+            "a.example.com"
+        ]
+        at_the_end = later.not_valid_after_utc + timedelta(seconds=1)
         with pytest.raises(ApiError):
-            parse(certificate=pem(later), private_key=key_pem(later_key), now=at)
+            parse(certificate=pem(later), private_key=key_pem(later_key), now=at_the_end)
+
+    def test_a_common_name_that_is_a_host_the_certificate_is_not_valid_for(self) -> None:
+        # The proxy takes the common name for a host name too: this one would be served for
+        # dock.example.com, and browsers would refuse it there.
+        certificate, key = issue("dock.example.com", names=["intranet.example.com"])
+        assert refused(certificate=pem(certificate), private_key=key_pem(key)) == "common_name_not_listed"
+        # A common name that is one of the names, or covered by a wildcard among them, or no
+        # host name at all, is fine.
+        for common, names in (
+            ("dock.example.com", ["dock.example.com", "auth.example.com"]),
+            ("DOCK.example.com", ["dock.example.com"]),
+            ("dock.example.com", ["*.example.com"]),
+            ("*.example.com", ["*.example.com"]),
+            ("Firma GmbH", ["dock.example.com"]),
+            ("intranet", ["dock.example.com"]),
+        ):
+            certificate, key = issue(common, names=names)
+            assert parse(certificate=pem(certificate), private_key=key_pem(key)).names == names
+
+    def test_names_with_control_characters(self) -> None:
+        for common, names in (
+            ("dock\x00.example.com", ["dock.example.com"]),
+            ("Firma\nGmbH", ["dock.example.com"]),
+        ):
+            certificate, key = issue(common, names=names)
+            assert refused(certificate=pem(certificate), private_key=key_pem(key)) == "certificate_unreadable"
 
     def test_what_is_missing_or_too_much(self, authority: Authority) -> None:
         chain, key = authority.bundle("a.example.com")

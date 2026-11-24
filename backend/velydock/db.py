@@ -39,6 +39,9 @@ def init_engine(database_url: str, **engine_options: Any) -> AsyncEngine:
     """Create the engine explicitly (the application factory and tests do this)."""
     global _engine, _sessionmaker
     engine_options.setdefault("pool_pre_ping", True)
+    # A statement that fails is logged with its text, never with its values: among them can be
+    # the private key of a certificate that was just uploaded.
+    engine_options.setdefault("hide_parameters", True)
     _engine = create_async_engine(database_url, **engine_options)
     _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine

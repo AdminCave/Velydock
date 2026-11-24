@@ -715,6 +715,10 @@
           },
           "served": {
             "$ref": "#/components/schemas/ServedCertificate"
+          },
+          "takeover": {
+            "title": "Takeover",
+            "type": "boolean"
           }
         },
         "required": [
@@ -722,6 +726,7 @@
           "purpose",
           "label",
           "certificate_id",
+          "takeover",
           "served"
         ],
         "title": "CertificateHost",
@@ -808,6 +813,13 @@
             "title": "Created At",
             "type": "string"
           },
+          "fetched_before": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fetched Before",
+            "type": "array"
+          },
           "fingerprint": {
             "title": "Fingerprint",
             "type": "string"
@@ -892,6 +904,7 @@
           "not_after",
           "status",
           "warnings",
+          "fetched_before",
           "created_at",
           "updated_at"
         ],

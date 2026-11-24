@@ -61,6 +61,8 @@ const API_CODES = [
   'too_large',
   'no_names',
   'expired',
+  'not_yet_valid',
+  'common_name_not_listed',
   'pkcs12_unreadable',
   'ambiguous',
   'validation',
@@ -202,6 +204,8 @@ describe('what the API refuses about an upload', () => {
       'certificate_missing.pkcs12',
       'key_missing.pkcs12',
       'expired.undated',
+      'not_yet_valid.undated',
+      'common_name_not_listed.unnamed',
       'names_taken.unnamed',
     ];
     const known = [...API_CODES, ...LOCAL_ERRORS, ...variants].map(
@@ -223,6 +227,8 @@ describe('what the API refuses about an upload', () => {
       too_many_certificates: 'certificate',
       no_names: 'certificate',
       expired: 'certificate',
+      not_yet_valid: 'certificate',
+      common_name_not_listed: 'certificate',
       names_taken: 'certificate',
       certificate_exists: 'certificate',
       too_large: 'certificate',
@@ -423,6 +429,7 @@ describe('what the page shows', () => {
     purpose: 'velydock',
     label: '',
     certificate_id: certificateId,
+    takeover: false,
     served: served(answer),
   });
   const overview = (hosts: CertificateHost[]): CertificatesOverview => ({

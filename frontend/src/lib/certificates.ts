@@ -135,6 +135,8 @@ export const UPLOAD_ERRORS: Readonly<Record<string, CertificateField>> = {
   too_many_certificates: 'certificate',
   no_names: 'certificate',
   expired: 'certificate',
+  not_yet_valid: 'certificate',
+  common_name_not_listed: 'certificate',
   names_taken: 'certificate',
   certificate_exists: 'certificate',
   too_large: 'certificate',
@@ -220,6 +222,14 @@ export function uploadFailure(
     const date = formatDate(text(details.not_after), lang);
     if (date) failure.vars = { date };
     else failure.key = 'certificates.error.expired.undated';
+  } else if (code === 'not_yet_valid') {
+    const date = formatDate(text(details.not_before), lang);
+    if (date) failure.vars = { date };
+    else failure.key = 'certificates.error.not_yet_valid.undated';
+  } else if (code === 'common_name_not_listed') {
+    const name = text(details.common_name);
+    if (name) failure.vars = { name };
+    else failure.key = 'certificates.error.common_name_not_listed.unnamed';
   } else if (code === 'names_taken') {
     const names = Array.isArray(details.names)
       ? details.names.filter((name): name is string => typeof name === 'string')
@@ -317,6 +327,11 @@ function servesGone(host: CertificateHost, gone: readonly string[]): boolean {
  * always loses. Only removing the fetched one on the server helps.
  */
 export function shadowed(host: CertificateHost, gone: readonly string[] = []): boolean {
+  // `takeover`: the proxy served a certificate from elsewhere for this name when the stored
+  // one was uploaded, and its own store has not been pruned since. That holds whatever it
+  // serves at this moment - with the same list of names in both, which of the two it takes
+  // changes with every reload of its configuration, so one look proves nothing.
+  if (host.certificate_id !== null && host.takeover) return true;
   return awaited(host) && host.served.source === 'other' && !servesGone(host, gone);
 }
 

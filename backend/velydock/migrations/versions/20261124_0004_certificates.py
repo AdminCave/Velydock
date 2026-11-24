@@ -34,6 +34,10 @@ def upgrade() -> None:
         sa.Column("issuer", sa.String(500), nullable=False, server_default=""),
         sa.Column("chain", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column("proxy_key", sa.Text(), nullable=False, server_default=""),
+        sa.Column("files_key", sa.String(64), nullable=False, server_default=""),
+        sa.Column(
+            "fetched_before", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
+        ),
         sa.Column("warnings", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column("serial", sa.String(80), nullable=False, server_default=""),
         sa.Column("key_type", sa.String(20), nullable=False, server_default=""),

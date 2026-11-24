@@ -139,8 +139,8 @@ export const certificates = {
     'The proxy takes over “{name}” within a few seconds.',
   ],
   'certificates.served.shadowed': [
-    'Der Proxy liefert für diesen Namen weiter ein Zertifikat aus, das er selbst geholt hat. Damit „{name}“ gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
-    'For this name the proxy keeps serving a certificate it fetched itself. For “{name}” to apply, the fetched one has to be removed on the server: operations manual (Betriebshandbuch), section “Zertifikate (TLS)”.',
+    'Der Proxy hält für diesen Namen noch ein Zertifikat, das er selbst geholt hat. Welches von beiden er ausliefert, ist nicht verlässlich – auch wenn es gerade das richtige ist. Damit „{name}“ sicher gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
+    'For this name the proxy still holds a certificate it fetched itself. Which of the two it serves is not reliable – even if it is the right one at the moment. For “{name}” to apply for sure, the fetched one has to be removed on the server: operations manual (Betriebshandbuch), section “Zertifikate (TLS)”.',
   ],
   'certificates.served.expected': ['Vorgesehen: „{name}“', 'Meant for it: “{name}”'],
   'certificates.hosts.unreachable.title': [
@@ -271,6 +271,22 @@ export const certificates = {
   'certificates.error.expired.undated': [
     'Dieses Zertifikat ist abgelaufen.',
     'This certificate has expired.',
+  ],
+  'certificates.error.not_yet_valid': [
+    'Dieses Zertifikat gilt erst ab dem {date}. Hinterlege es an diesem Tag: Der Proxy würde es sofort ausliefern, und Browser lehnen es bis dahin ab.',
+    'This certificate is valid from {date} only. Store it on that day: the proxy would serve it at once, and browsers refuse it until then.',
+  ],
+  'certificates.error.not_yet_valid.undated': [
+    'Dieses Zertifikat ist noch nicht gültig. Hinterlege es, sobald es gilt.',
+    'This certificate is not valid yet. Store it once it is.',
+  ],
+  'certificates.error.common_name_not_listed': [
+    'Der „Common Name“ {name} steht nicht unter den Namen, für die das Zertifikat gilt. Der Proxy würde es für {name} ausliefern, und Browser lehnten es dort ab.',
+    'The common name {name} is not among the names the certificate is valid for. The proxy would serve it for {name}, and browsers would refuse it there.',
+  ],
+  'certificates.error.common_name_not_listed.unnamed': [
+    'Der „Common Name“ des Zertifikats steht nicht unter den Namen, für die es gilt. Der Proxy würde es für diesen Namen ausliefern, und Browser lehnten es dort ab.',
+    'The common name of the certificate is not among the names it is valid for. The proxy would serve it for that name, and browsers would refuse it there.',
   ],
   'certificates.error.pkcs12_unreadable': [
     'Die Datei lässt sich nicht lesen: Sie ist beschädigt, oder die Passphrase stimmt nicht.',

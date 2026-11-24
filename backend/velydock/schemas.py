@@ -781,6 +781,9 @@ class CertificateOut(Model):
     not_after: datetime
     status: Literal["valid", "expires_soon", "expired", "not_yet_valid"]
     warnings: list[Literal["no_intermediate"]]
+    # Names of this installation for which the proxy held a certificate it fetched itself when
+    # this one was stored (see CertificateHost.takeover).
+    fetched_before: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -807,6 +810,10 @@ class CertificateHost(Model):
     label: str
     # The stored certificate that is valid for this name, if there is one.
     certificate_id: uuid.UUID | None
+    # The proxy holds a certificate it fetched itself for this name, next to the stored one.
+    # Which of the two it serves is not reliable - whatever `served` shows right now - until
+    # the fetched one is taken out of its store on the server.
+    takeover: bool
     served: ServedCertificate
 
 

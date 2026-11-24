@@ -354,6 +354,16 @@ class Certificate(Base):
     # The key the proxy files this certificate under: by it, it decides which of two certificates
     # for the same name it serves (see services/certificates.py, `proxy_key`).
     proxy_key: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # SHA-256 over what is stored (chain and key): the name of its files for the proxy. Not the
+    # fingerprint above - the same certificate stored again with its chain must be a new file,
+    # or the proxy would never read it.
+    files_key: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
+    # Names of this installation that the proxy served with a certificate from elsewhere when
+    # this one was stored: it holds a fetched one for them, and which of the two it serves is
+    # not reliable until that one is pruned (services/certificates.py, `prune_fetched`).
+    fetched_before: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     # What was noticed about the upload that the administrator should know (see the service).
     warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     serial: Mapped[str] = mapped_column(String(80), nullable=False, server_default="")

@@ -20,6 +20,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import hashlib
 import ipaddress
 import json
 import logging
@@ -92,6 +93,7 @@ class Parsed:
     not_after: datetime
     warnings: list[str]
     proxy_key: str
+    files_key: str
 
 
 # ---- reading an upload ---------------------------------------------------------------------------
@@ -274,11 +276,13 @@ def parse(
     key_type = _key_type(key)
 
     own = _public(key)
-    leaf = next((cert for cert in certificates if _public(cert) == own), None)
-    if leaf is None:
+    belonging = [cert for cert in certificates if _public(cert) == own]
+    if not belonging:
         raise _problem(
             "key_mismatch", "The private key does not belong to the certificate (or to any of those given)."
         )
+    # A key that was kept at a renewal fits the old certificate and the new one: the new one is meant.
+    leaf = max(belonging, key=lambda cert: cert.not_valid_after_utc)
 
     # The certificates that lead from it to its issuer, in that order; the others are left out.
     # A root at the end is left out as well: clients have their own copy and ignore one sent.
@@ -311,6 +315,30 @@ def parse(
         raise _problem(
             "expired", f"The certificate expired on {not_after:%Y-%m-%d}.", not_after=not_after.isoformat()
         )
+    if not_before > now:
+        # Stored, it would be served at once - and no other certificate fetched for its names.
+        raise _problem(
+            "not_yet_valid",
+            f"The certificate is valid from {not_before:%Y-%m-%d} only. Store it on that day.",
+            not_before=not_before.isoformat(),
+        )
+    # The proxy takes the common name for a host name too. One that is a host name and not
+    # among the certificate's names would be served for that host - and refused by browsers.
+    common = [str(item.value) for item in leaf.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)]
+    for name in common:
+        candidate = name.strip().lower().rstrip(".")
+        if "." in candidate and _DNS_NAME.fullmatch(candidate) and matching_name(names, candidate) is None:
+            raise _problem(
+                "common_name_not_listed",
+                f"The common name {candidate} is not among the names the certificate is valid for "
+                f"({', '.join(names)}). The proxy would serve it for {candidate}, and browsers would "
+                "refuse it.",
+                common_name=candidate,
+            )
+    key_for_proxy = proxy_key(leaf)
+    described = [key_for_proxy, leaf.subject.rfc4514_string(), leaf.issuer.rfc4514_string()]
+    if any(ord(char) < 32 or ord(char) == 127 for text_ in described for char in text_):
+        raise _problem("certificate_unreadable", "The names in the certificate contain control characters.")
 
     def pem(cert: x509.Certificate) -> str:
         return cert.public_bytes(serialization.Encoding.PEM).decode()
@@ -318,8 +346,9 @@ def parse(
     stored_key: bytes = key.private_bytes(  # type: ignore[attr-defined]
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     )
+    stored_chain = "".join(pem(cert) for cert in chain)
     return Parsed(
-        certificate="".join(pem(cert) for cert in chain),
+        certificate=stored_chain,
         private_key=stored_key.decode(),
         fingerprint=leaf.fingerprint(hashes.SHA256()).hex(),
         names=names,
@@ -331,7 +360,8 @@ def parse(
         not_before=not_before,
         not_after=not_after,
         warnings=warnings,
-        proxy_key=proxy_key(leaf),
+        proxy_key=key_for_proxy,
+        files_key=hashlib.sha256(stored_chain.encode() + b"\n" + stored_key).hexdigest(),
     )
 
 
@@ -420,6 +450,7 @@ def _out(row: Certificate, now: datetime | None = None) -> CertificateOut:
         not_after=row.not_after,
         status=_status(row, now),
         warnings=list(row.warnings),
+        fetched_before=list(row.fetched_before),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -461,6 +492,7 @@ def _apply(row: Certificate, parsed: Parsed) -> None:
     row.not_after = parsed.not_after
     row.warnings = parsed.warnings
     row.proxy_key = parsed.proxy_key
+    row.files_key = parsed.files_key
 
 
 def _details(row: Certificate) -> dict[str, object]:
@@ -495,6 +527,7 @@ async def add(
         await _check_names(db, parsed, besides=None)
         row = Certificate(name=data.name)
         _apply(row, parsed)
+        row.fetched_before = await _served_from_elsewhere(db, settings, parsed)
         db.add(row)
         try:
             async with db.begin_nested():
@@ -525,7 +558,11 @@ async def replace(
             raise not_found("Certificate")
         await _check_names(db, parsed, besides=row.id)
         before = _details(row)
+        # What was noted for the certificate it replaces still holds: the proxy's own store
+        # has not changed.
+        kept = [host for host in row.fetched_before if key_matches(parsed.proxy_key, host)]
         _apply(row, parsed)
+        row.fetched_before = sorted({*kept, *await _served_from_elsewhere(db, settings, parsed)})
         if data.name:
             row.name = data.name
         try:
@@ -645,26 +682,31 @@ async def files_for_proxy(db: AsyncSession, settings: Settings) -> list[dict[str
         return []
     directory = Path(settings.certs_dir)
     stored = (
-        await db.execute(select(Certificate.fingerprint, Certificate.name, Certificate.not_after))
+        await db.execute(
+            select(Certificate.fingerprint, Certificate.name, Certificate.not_after, Certificate.files_key)
+        )
     ).all()
     _warn_about_expiry([(row[0], row[1], row[2]) for row in stored], datetime.now(UTC))
-    fingerprints = sorted(row[0] for row in stored)
-    expected = {f"{fingerprint}.{kind}" for fingerprint in fingerprints for kind in ("crt", "key")}
+    # Named by what is stored, not by the certificate alone: the same certificate stored again
+    # with its chain is another file and another configuration - the proxy only reads anew what
+    # changes its configuration.
+    stems = sorted(row[3] for row in stored)
+    expected = {f"{stem}.{kind}" for stem in stems for kind in ("crt", "key")}
     try:
         present = {name for name in os.listdir(directory) if _FILE.fullmatch(name)}
         if present != expected:
             wanted: dict[str, str] = {}
             for row in (await db.execute(select(Certificate))).scalars():
-                wanted[f"{row.fingerprint}.crt"] = row.certificate
-                wanted[f"{row.fingerprint}.key"] = row.private_key
+                wanted[f"{row.files_key}.crt"] = row.certificate
+                wanted[f"{row.files_key}.key"] = row.private_key
             await asyncio.to_thread(_sync, directory, wanted)
     except OSError:
         # The routes must still go out: say it, and name only the files that are there.
         log.exception("could not write the certificates for the proxy to %s", directory)
     return [
-        {"certFile": str(directory / f"{fingerprint}.crt"), "keyFile": str(directory / f"{fingerprint}.key")}
-        for fingerprint in fingerprints
-        if (directory / f"{fingerprint}.crt").is_file() and (directory / f"{fingerprint}.key").is_file()
+        {"certFile": str(directory / f"{stem}.crt"), "keyFile": str(directory / f"{stem}.key")}
+        for stem in stems
+        if (directory / f"{stem}.crt").is_file() and (directory / f"{stem}.key").is_file()
     ]
 
 
@@ -799,26 +841,59 @@ async def _served(address: str, host: str, stored: dict[str, uuid.UUID]) -> Serv
     )
 
 
+async def _hosts(db: AsyncSession, settings: Settings) -> list[tuple[str, str, str]]:
+    """Every name of this installation: (host, what it is, the name of a published app)."""
+    apps_host = hostname(settings.apps_url)
+    hosts: list[tuple[str, str, str]] = [
+        (hostname(settings.public_url), "velydock", ""),
+        (hostname(settings.keycloak_public_url), "keycloak", ""),
+        (hostname(settings.sandbox_url), "sandbox", ""),
+    ]
+    if apps_host:
+        hosts.append((apps_host, "apps", ""))
+        published = await db.execute(
+            select(AppPublication.name)
+            .where(AppPublication.mode == PublicationMode.SUBDOMAIN.value)
+            .order_by(AppPublication.name)
+            .limit(40)
+        )
+        hosts.extend((f"{name}.{apps_host}", "app", name) for name in published.scalars())
+    return hosts
+
+
+async def _served_from_elsewhere(db: AsyncSession, settings: Settings, parsed: Parsed) -> list[str]:
+    """The names of this installation a new certificate is for that the proxy serves with one from elsewhere.
+
+    Asked at the moment of the upload, before the proxy knows the new certificate: what it
+    presents then and is not stored here is one it fetched itself. Next to that one the new
+    certificate is not reliably served - with the same list of names, which of the two the proxy
+    takes changes with every reload of its configuration - so one look at what is served later
+    proves nothing. The note stays until the fetched ones are pruned.
+    """
+    if not settings.proxy_tls_address:
+        return []
+    hosts = [host for host, _, _ in await _hosts(db, settings) if key_matches(parsed.proxy_key, host)]
+    stored = {row.fingerprint: row.id for row in (await db.execute(select(Certificate))).scalars()}
+    stored.setdefault(parsed.fingerprint, uuid.uuid4())
+    answers = await asyncio.gather(*(_served(settings.proxy_tls_address, host, stored) for host in hosts))
+    return sorted(host for host, answer in zip(hosts, answers, strict=True) if answer.source == "other")
+
+
+async def forget_fetched(db: AsyncSession) -> None:
+    """After the proxy's own store was pruned: no name has a fetched certificate next to a stored one."""
+    async with system_scope(db):
+        for row in (await db.execute(select(Certificate))).scalars():
+            if row.fetched_before:
+                row.fetched_before = []
+        await db.flush()
+
+
 async def overview(db: AsyncSession, settings: Settings) -> CertificatesOut:
     """The stored certificates, and for every name of this installation what it is served with."""
     now = datetime.now(UTC)
     async with system_scope(db):
         rows = list((await db.execute(select(Certificate).order_by(func.lower(Certificate.name)))).scalars())
-        apps_host = hostname(settings.apps_url)
-        hosts: list[tuple[str, str, str]] = [
-            (hostname(settings.public_url), "velydock", ""),
-            (hostname(settings.keycloak_public_url), "keycloak", ""),
-            (hostname(settings.sandbox_url), "sandbox", ""),
-        ]
-        if apps_host:
-            hosts.append((apps_host, "apps", ""))
-            published = await db.execute(
-                select(AppPublication.name)
-                .where(AppPublication.mode == PublicationMode.SUBDOMAIN.value)
-                .order_by(AppPublication.name)
-                .limit(40)
-            )
-            hosts.extend((f"{name}.{apps_host}", "app", name) for name in published.scalars())
+        hosts = await _hosts(db, settings)
     stored = {row.fingerprint: row.id for row in rows}
     if settings.proxy_tls_address:
         served = await asyncio.gather(
@@ -835,6 +910,7 @@ async def overview(db: AsyncSession, settings: Settings) -> CertificatesOut:
                 purpose=purpose,
                 label=label,
                 certificate_id=expected.id if expected else None,
+                takeover=expected is not None and host in expected.fetched_before,
                 served=answer,
             )
         )

@@ -50,6 +50,7 @@ const stored = (overrides: Partial<Certificate> = {}): Certificate => ({
   not_after: '2027-10-01T00:00:00Z',
   status: 'valid',
   warnings: [],
+  fetched_before: [],
   created_at: '2026-11-20T09:00:00Z',
   updated_at: '2026-11-20T09:00:00Z',
   ...overrides,
@@ -605,6 +606,8 @@ describe('CertificateModal: what the API refuses', () => {
   // The answers with details, as the API sends them.
   const DETAILS: Record<string, Record<string, unknown>> = {
     expired: { not_after: '2025-03-01T12:00:00+00:00' },
+    not_yet_valid: { not_before: '2027-03-01T12:00:00+00:00' },
+    common_name_not_listed: { common_name: 'dock.example.com' },
     names_taken: { names: ['example.com'], certificate: 'Wildcard', certificate_id: 'c-1' },
     validation: {
       fields: [{ field: 'name', message: 'String should have at most 80 characters' }],
@@ -618,6 +621,10 @@ describe('CertificateModal: what the API refuses', () => {
   };
   const TEXT: Record<string, string> = {
     expired: 'Dieses Zertifikat ist am 01.03.2025 abgelaufen.',
+    not_yet_valid:
+      'Dieses Zertifikat gilt erst ab dem 01.03.2027. Hinterlege es an diesem Tag: Der Proxy würde es sofort ausliefern, und Browser lehnen es bis dahin ab.',
+    common_name_not_listed:
+      'Der „Common Name“ dock.example.com steht nicht unter den Namen, für die das Zertifikat gilt. Der Proxy würde es für dock.example.com ausliefern, und Browser lehnten es dort ab.',
     too_large: 'Zu groß für ein Zertifikat: Möglich sind hier höchstens 64 KB.',
     names_taken:
       'Für example.com ist schon das Zertifikat „Wildcard“ gespeichert. Ein Name darf nur in einem gespeicherten Zertifikat stehen: Ersetz „Wildcard“, statt ein zweites hinzuzufügen.',

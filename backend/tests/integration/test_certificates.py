@@ -28,7 +28,7 @@ from tests.support.mini_idp import MiniIdp
 from velydock import cli
 from velydock.app import create_app
 from velydock.config import Settings
-from velydock.db import Scope, transaction
+from velydock.db import Scope, get_engine, transaction
 from velydock.errors import ApiError
 from velydock.models import AuditLog, Certificate, ProxyTarget, Role, User
 from velydock.security.oidc import OidcClient
@@ -98,6 +98,18 @@ def sent_back(body: dict[str, Any], answer: httpx.Response) -> bool:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text())
+
+
+def read_text(path: Path) -> str:
+    return path.read_text()
+
+
+def write_text(path: Path, content: str) -> None:
+    path.write_text(content)
+
+
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 def files_in(directory: Path) -> set[str]:
@@ -291,9 +303,11 @@ class TestStoring:
         alone_certificate, alone_key = authority.leaf("c.test")
         own_certificate, own_key = issue("d.test", names=["d.test"])
         async with await world.login(root) as client:
+            # Not valid yet: stored, it would be served at once, and nothing else fetched for its name.
+            refused = await client.post(URL, json=later)
+            assert (refused.status_code, refused.json()["error"]["code"]) == (422, "not_yet_valid")
             for body in (
                 soon,
-                later,
                 # Without the certificate of its issuer: browsers that do not know it refuse.
                 {"name": "Allein", "certificate": pem(alone_certificate), "private_key": key_pem(alone_key)},
                 # Signed by itself: there is no issuer to send.
@@ -303,13 +317,11 @@ class TestStoring:
             listed = {item["name"]: item for item in (await client.get(URL)).json()["certificates"]}
         assert {name: item["status"] for name, item in listed.items()} == {
             "Bald": "expires_soon",
-            "Morgen": "not_yet_valid",
             "Allein": "valid",
             "Selbst": "valid",
         }
         assert {name: item["warnings"] for name, item in listed.items()} == {
             "Bald": [],
-            "Morgen": [],
             "Allein": ["no_intermediate"],
             "Selbst": [],
         }
@@ -400,6 +412,12 @@ class TestWhoMay:
             assert line not in str(shown)
 
 
+async def file_names() -> dict[str, str]:
+    """Certificate name -> the name of its files for the proxy (without the ending)."""
+    async with transaction(Scope.SYSTEM) as db:
+        return {row.name: row.files_key for row in (await db.execute(select(Certificate))).scalars()}
+
+
 class TestWhatTheProxyIsTold:
     async def test_files_in_its_directory_named_in_its_configuration(
         self, world: World, root: User, authority: Authority, directory: Path
@@ -409,16 +427,17 @@ class TestWhatTheProxyIsTold:
         async with await world.login(root) as client:
             stored = (await client.post(URL, json=body)).json()
         told = await document(world)
-        name = stored["fingerprint"]
+        name = (await file_names())["Firma"]
+        assert len(name) == 64 and name != stored["fingerprint"]
         assert told["tls"] == {
             "certificates": [{"certFile": f"{directory}/{name}.crt", "keyFile": f"{directory}/{name}.key"}]
         }
         # The key is in a file only the proxy's group reads - not in what goes over the network.
         assert "PRIVATE KEY" not in str(told)
-        assert (directory / f"{name}.key").read_text() == body["private_key"]
-        assert (directory / f"{name}.crt").read_text() == body["certificate"]
+        assert read_text(directory / f"{name}.key") == body["private_key"]
+        assert read_text(directory / f"{name}.crt") == body["certificate"]
         for kind in ("crt", "key"):
-            assert stat.S_IMODE((directory / f"{name}.{kind}").stat().st_mode) == 0o640
+            assert mode_of(directory / f"{name}.{kind}") == 0o640
 
         # Removed: gone from the configuration and from the directory at the next fetch.
         async with await world.login(root) as client:
@@ -430,25 +449,21 @@ class TestWhatTheProxyIsTold:
         self, world: World, root: User, authority: Authority, directory: Path
     ) -> None:
         async with await world.login(root) as client:
-            one = (await client.post(URL, json=upload(authority, "Eins", ["one.test"]))).json()["fingerprint"]
-            two = (await client.post(URL, json=upload(authority, "Zwei", ["two.test"]))).json()["fingerprint"]
+            assert (await client.post(URL, json=upload(authority, "Eins", ["one.test"]))).status_code == 201
+            assert (await client.post(URL, json=upload(authority, "Zwei", ["two.test"]))).status_code == 201
+        names = await file_names()
+        one, two = names["Eins"], names["Zwei"]
         await document(world)
         # A new, empty volume (or a restored database on a fresh server): everything is written again.
         empty(directory)
         # Something that is none of ours stays; something of an earlier certificate goes.
-        (directory / "README").write_text("x")
-        (directory / f"{'d' * 64}.key").write_text("stale")
+        write_text(directory / "README", "x")
+        write_text(directory / f"{'d' * 64}.key", "stale")
         told = await document(world)
         assert [Path(item["certFile"]).name for item in told["tls"]["certificates"]] == sorted(
             [f"{one}.crt", f"{two}.crt"]
         )
-        assert files_in(directory) == {
-            "README",
-            f"{one}.crt",
-            f"{one}.key",
-            f"{two}.crt",
-            f"{two}.key",
-        }
+        assert files_in(directory) == {"README", f"{one}.crt", f"{one}.key", f"{two}.crt", f"{two}.key"}
 
     async def test_a_renewal_is_a_new_file_so_the_proxy_notices(
         self, world: World, root: User, authority: Authority, directory: Path
@@ -458,13 +473,35 @@ class TestWhatTheProxyIsTold:
         async with await world.login(root) as client:
             old = (await client.post(URL, json=upload(authority, "Dock", ["dock.test"]))).json()
             before = await document(world)
-            new = (await client.put(f"{URL}/{old['id']}", json=renewed)).json()
+            await client.put(f"{URL}/{old['id']}", json=renewed)
         after = await document(world)
         assert before != after
-        assert files_in(directory) == {
-            f"{new['fingerprint']}.crt",
-            f"{new['fingerprint']}.key",
-        }
+        name = (await file_names())["Dock"]
+        assert files_in(directory) == {f"{name}.crt", f"{name}.key"}
+
+    async def test_the_same_certificate_stored_again_with_its_chain_reaches_the_proxy(
+        self, world: World, root: User, authority: Authority, directory: Path
+    ) -> None:
+        # What the warning about a missing issuer tells the administrator to do. The certificate
+        # is the same, so is its fingerprint - but the proxy must get the chain.
+        certificate, key = authority.leaf("dock.test")
+        alone = {"certificate": pem(certificate), "private_key": key_pem(key)}
+        complete = {"certificate": authority.fullchain(certificate), "private_key": key_pem(key)}
+        async with await world.login(root) as client:
+            first = (await client.post(URL, json={"name": "Dock", **alone})).json()
+            assert first["warnings"] == ["no_intermediate"]
+            before = await document(world)
+            name_before = (await file_names())["Dock"]
+            assert read_text(directory / f"{name_before}.crt") == pem(certificate)
+
+            second = (await client.put(f"{URL}/{first['id']}", json=complete)).json()
+            assert (second["warnings"], second["fingerprint"]) == ([], first["fingerprint"])
+        after = await document(world)
+        name_after = (await file_names())["Dock"]
+        # Another file, another configuration: this is what makes the proxy read it.
+        assert name_after != name_before and after["tls"] != before["tls"]
+        assert read_text(directory / f"{name_after}.crt") == authority.fullchain(certificate)
+        assert files_in(directory) == {f"{name_after}.crt", f"{name_after}.key"}
 
     async def test_a_published_name_with_a_certificate_of_its_own_is_not_fetched_one(
         self, world: World, root: User, authority: Authority
@@ -795,6 +832,59 @@ class TestWhatIsReallyServed:
         assert (fallback["subject"], fallback["valid_for_host"]) == ("CN=TRAEFIK DEFAULT CERT", False)
         assert own["not_after"] == stored["not_after"]
 
+    async def test_a_name_the_proxy_served_from_elsewhere_needs_the_takeover_whatever_is_served_later(
+        self,
+        served: tuple[World, dict[str, str]],
+        authority: Authority,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        world, uploaded = served
+        main = await world.tenant("Admin Cave", "main")
+        root = await world.user(main, "root", Role.TENANT_ADMIN, system_admin=True)
+        async with await world.login(root) as client:
+            # dock.test is served with this very certificate: nothing from elsewhere there.
+            own = (await client.post(URL, json=uploaded)).json()
+            assert own["fetched_before"] == []
+            # auth.test is served with a certificate of another authority - one the proxy fetched.
+            # A stored one next to it is not reliably served, whatever one look shows afterwards.
+            second = (await client.post(URL, json=upload(authority, "Anmeldung", ["auth.test"]))).json()
+            assert second["fetched_before"] == ["auth.test"]
+            hosts = {item["host"]: item for item in (await client.get(URL)).json()["hosts"]}
+            assert {host: item["takeover"] for host, item in hosts.items()} == {
+                "dock.test": False,
+                "auth.test": True,
+                "sandbox.test": False,
+                "apps.test": False,
+            }
+            # A renewal keeps the note: the proxy's own store has not changed.
+            renewed = upload(authority, "x", ["auth.test", "sandbox.test"])
+            del renewed["name"]
+            again = (await client.put(f"{URL}/{second['id']}", json=renewed)).json()
+            assert again["fetched_before"] == ["auth.test"]
+
+        # Pruning the proxy's store settles it - also when there was nothing left to remove.
+        storage = tmp_path / "acme.json"
+        storage.write_text(json.dumps({"letsencrypt": {"Certificates": [{"domain": {"main": "auth.test"}}]}}))
+        arguments = argparse.Namespace(command="cert", cert_command="prune-fetched", storage=str(storage))
+        assert await cli.certificates(world.settings, arguments) == 0
+        assert capsys.readouterr().out == "Removed the fetched certificate for auth.test.\n"
+        async with await world.login(root) as client:
+            state = (await client.get(URL)).json()
+        assert [item["fetched_before"] for item in state["certificates"]] == [[], []]
+        assert not any(item["takeover"] for item in state["hosts"])
+
+    async def test_the_command_line_says_when_a_takeover_is_needed(
+        self, served: tuple[World, dict[str, str]], authority: Authority, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        world, _ = served
+        certificate, key = authority.bundle("auth.test")
+        add = argparse.Namespace(command="cert", cert_command="add", name="Anmeldung", replace=False)
+        assert await cli.certificates(world.settings, add, certificate + key) == 0
+        printed = capsys.readouterr()
+        assert "warning: for auth.test the proxy holds a certificate it fetched itself" in printed.err
+        assert "velydock cert takeover" in printed.err
+
     async def test_a_proxy_that_does_not_answer_and_an_installation_that_cannot_ask(
         self, settings: Settings, clean_db: None, directory: Path
     ) -> None:
@@ -808,6 +898,36 @@ class TestWhatIsReallyServed:
                 state = (await client.get(URL)).json()
             assert {item["served"]["source"] for item in state["hosts"]} == {source}
             assert [item["purpose"] for item in state["hosts"]] == ["velydock", "keycloak", "sandbox"]
+
+
+class TestTheKeyStaysOutOfTheLog:
+    async def test_a_statement_that_fails_is_reported_without_its_values(
+        self, world: World, authority: Authority
+    ) -> None:
+        # A failing INSERT carries the key among its values; SQLAlchemy prints values unless told not to.
+        assert get_engine().sync_engine.hide_parameters is True
+        certificate, key = authority.bundle("dock.test")
+        secret = key.splitlines()[1]
+        with pytest.raises(DBAPIError) as caught:
+            async with transaction(Scope.SYSTEM) as db:
+                await db.execute(
+                    text(
+                        "INSERT INTO certificates (id, name, certificate, private_key, fingerprint, not_before) "
+                        "VALUES (gen_random_uuid(), 'x', :certificate, :key, 'f', now())"
+                    ),
+                    {"certificate": certificate, "key": key},
+                )
+        assert secret not in str(caught.value) and "PRIVATE KEY" not in str(caught.value)
+
+    async def test_names_with_control_characters_are_refused_before_the_database_sees_them(
+        self, world: World, root: User
+    ) -> None:
+        certificate, key = issue("dock\x00.test", names=["dock.test"])
+        async with await world.login(root) as client:
+            answer = await client.post(
+                URL, json={"name": "a", "certificate": pem(certificate), "private_key": key_pem(key)}
+            )
+        assert (answer.status_code, answer.json()["error"]["code"]) == (422, "certificate_unreadable")
 
 
 class TestCommandLine:

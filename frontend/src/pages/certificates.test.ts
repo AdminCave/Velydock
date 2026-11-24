@@ -71,6 +71,7 @@ const certificate = (
   not_after: '2027-10-01T12:00:00Z',
   status: 'valid',
   warnings: [],
+  fetched_before: [],
   created_at: '2026-11-20T12:00:00Z',
   updated_at: '2026-11-21T12:00:00Z',
   ...overrides,
@@ -123,7 +124,14 @@ const host = (
   served: ServedCertificate,
   purpose: CertificateHost['purpose'] = 'velydock',
   label = '',
-): CertificateHost => ({ host: name, purpose, label, certificate_id: expected, served });
+): CertificateHost => ({
+  host: name,
+  purpose,
+  label,
+  certificate_id: expected,
+  takeover: false,
+  served,
+});
 
 const overview = (overrides: Partial<CertificatesOverview> = {}): CertificatesOverview => ({
   available: true,
@@ -589,7 +597,7 @@ describe('System administration: certificates', () => {
       await hosts(EXPECTING, [wildcard, mail]);
       // No change was just made: this is not a matter of seconds, and the page says what is.
       expect(shadowedAt('auth.example.com')).toBe(
-        'Der Proxy liefert für diesen Namen weiter ein Zertifikat aus, das er selbst geholt hat. Damit „Wildcard“ gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
+        'Der Proxy hält für diesen Namen noch ein Zertifikat, das er selbst geholt hat. Welches von beiden er ausliefert, ist nicht verlässlich – auch wenn es gerade das richtige ist. Damit „Wildcard“ sicher gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
       );
       expect(pending('auth.example.com')).toBeUndefined();
       expect(hostRow('auth.example.com')).toHaveAttribute('data-source', 'other');
@@ -613,12 +621,27 @@ describe('System administration: certificates', () => {
       expect(screen.queryByTestId('certificate-host-pending')).toBeNull();
     });
 
+    it('warn where the server noted a fetched certificate at upload time, whatever is served right now', async () => {
+      // The stored one is served at this moment - by luck: with the same list of names in
+      // both, the proxy's choice changes with every reload of its configuration.
+      const noted = EXPECTING.map((item) => ({ ...item }));
+      noted[0].takeover = true;
+      await hosts(noted, [wildcard, mail]);
+      expect(shadowedAt('velydock.example.com')).toContain(
+        'Welches von beiden er ausliefert, ist nicht verlässlich',
+      );
+      expect(pending('velydock.example.com')).toBeUndefined();
+      expect(hostRow('velydock.example.com')).toHaveAttribute('data-source', 'uploaded');
+      // The others are as before: only what the server noted is said without looking.
+      expect(shadowedAt('mail.example.com')).toBeUndefined();
+    });
+
     it('say the warning in English on an English page', async () => {
       await hosts(EXPECTING, [wildcard, mail]);
       setLanguage('en', { persist: false });
       await waitFor(() =>
         expect(shadowedAt('auth.example.com')).toBe(
-          'For this name the proxy keeps serving a certificate it fetched itself. For “Wildcard” to apply, the fetched one has to be removed on the server: operations manual (Betriebshandbuch), section “Zertifikate (TLS)”.',
+          'For this name the proxy still holds a certificate it fetched itself. Which of the two it serves is not reliable – even if it is the right one at the moment. For “Wildcard” to apply for sure, the fetched one has to be removed on the server: operations manual (Betriebshandbuch), section “Zertifikate (TLS)”.',
         ),
       );
     });
@@ -957,7 +980,7 @@ describe('System administration: certificates', () => {
       }
       // Asked five times, and it is still the other certificate: this does not pass by itself.
       expect(within(row()).getByTestId('certificate-host-shadowed')).toHaveTextContent(
-        'Damit „Neu“ gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
+        'Damit „Neu“ sicher gilt, muss das geholte auf dem Server entfernt werden: Betriebshandbuch, Abschnitt „Zertifikate (TLS)“.',
       );
       expect(within(row()).queryByTestId('certificate-host-pending')).toBeNull();
       expect(row()).toHaveAttribute('data-source', 'other');

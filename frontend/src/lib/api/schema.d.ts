@@ -953,6 +953,8 @@ export interface components {
        */
       purpose: 'velydock' | 'keycloak' | 'sandbox' | 'apps' | 'app';
       served: components['schemas']['ServedCertificate'];
+      /** Takeover */
+      takeover: boolean;
     };
     /**
      * CertificateIn
@@ -982,6 +984,8 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /** Fetched Before */
+      fetched_before: string[];
       /** Fingerprint */
       fingerprint: string;
       /**

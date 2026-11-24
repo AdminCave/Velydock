@@ -488,7 +488,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
                       {$t('certificates.served.mismatch')}
                     </span>
                   {/if}
-                  {#if awaited(host)}
+                  {#if expected && host.takeover}
+                    <!-- The proxy held a fetched certificate for this name when the stored one
+                         came, and its store has not been pruned since: said whatever it
+                         serves right now, because that can change with its next reload. -->
+                    <span class="flag" data-testid="certificate-host-shadowed">
+                      <TriangleAlert size={14} />
+                      {$t('certificates.served.shadowed', { name: expected })}
+                    </span>
+                  {:else if awaited(host)}
                     <!-- Stored for this name, and the proxy answers with something else. -->
                     {#if !following && shadowed(host, gone)}
                       <!-- Not a matter of seconds: the proxy prefers one it fetched itself. -->

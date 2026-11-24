@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError
 
 from velydock import __version__
 from velydock.config import Settings, get_settings
@@ -328,6 +329,9 @@ async def certificates(settings: Settings, args: argparse.Namespace, stdin: str 
         except (OSError, ValueError) as exc:
             print(f"error: {args.storage} cannot be rewritten: {exc}", file=sys.stderr)
             return 1
+        # What was noted at upload time is settled now, whether something had to go or not.
+        async with transaction(Scope.SYSTEM) as db:
+            await certificates_service.forget_fetched(db)
         if not removed:
             print(
                 "Nothing to remove: the proxy holds no fetched certificate for a name with an uploaded one."
@@ -366,6 +370,13 @@ async def certificates(settings: Settings, args: argparse.Namespace, stdin: str 
         print(
             "warning: the certificate of its issuer is not with it. Browsers that do not know the issuer "
             'will refuse the connection; add the chain ("fullchain") and store it again with --replace.',
+            file=sys.stderr,
+        )
+    if stored.fetched_before:
+        print(
+            f"warning: for {', '.join(stored.fetched_before)} the proxy holds a certificate it fetched "
+            "itself. Which of the two it serves is not reliable until that one is taken out of its store: "
+            "velydock cert takeover (docs/betrieb.md, Zertifikate).",
             file=sys.stderr,
         )
     print("The proxy serves it within a few seconds.")
@@ -460,6 +471,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except ApiError as exc:
             print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except DBAPIError as exc:
+            # What failed, never the values of the statement: among them is the key.
+            print(f"error: the database refused it ({type(exc.orig).__name__})", file=sys.stderr)
             return 1
     if args.command == "keycloak-admin":
         try:
