@@ -30,6 +30,9 @@ const apps = [
 
 let open: ReturnType<typeof vi.fn>;
 
+/** Somebody who switched the bar on: by default an open app has none. */
+const withBar = (app_bar: AppBar) => setMe(makeMe({ settings: { ...SETTINGS, app_bar } }));
+
 async function setup(appId: string | null) {
   stubApi({
     'GET /api/v1/workspace/apps': () => apps,
@@ -67,6 +70,7 @@ afterEach(() => {
 
 describe('AppStage', () => {
   it('shows an embedded app in a frame with reload and open-in-new-tab', async () => {
+    withBar('top');
     await setup('wiki');
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     expect(screen.getByRole('heading', { level: 1, name: 'Wiki' })).toBeInTheDocument();
@@ -96,6 +100,7 @@ describe('AppStage', () => {
   });
 
   it('offers no "open in new tab" for a custom app', async () => {
+    withBar('top');
     await setup('sandbox');
     await waitFor(() => expect(visible()).toEqual(['sandbox']));
     expect(screen.getByTestId('app-reload')).toBeInTheDocument();
@@ -139,6 +144,7 @@ describe('AppStage', () => {
   });
 
   it('reloads only the frame in front', async () => {
+    withBar('top');
     const view = await setup('wiki');
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     await view.rerender({ appId: 'a' });
@@ -158,10 +164,20 @@ describe('AppStage', () => {
 });
 
 describe('the bar at an open app', () => {
-  const withBar = (app_bar: AppBar) => setMe(makeMe({ settings: { ...SETTINGS, app_bar } }));
   const stage = () => screen.getByRole('region', { name: 'Wiki' });
 
-  it('is above the app unless something else is set, with the hooks of the browser tests', async () => {
+  it('is not there unless somebody switched it on: the app has the stage to itself', async () => {
+    await setup('wiki');
+    await waitFor(() => expect(visible()).toEqual(['wiki']));
+    expect(screen.queryByTestId('app-bar')).toBeNull();
+    expect(screen.queryByTestId('app-reload')).toBeNull();
+    expect(screen.queryByTestId('app-open-external')).toBeNull();
+    // Its name is still the heading of the page, for assistive technology.
+    expect(screen.getByRole('heading', { level: 1, name: 'Wiki' })).toHaveClass('visually-hidden');
+  });
+
+  it('is above the app when set to the top, with the hooks of the browser tests', async () => {
+    withBar('top');
     await setup('wiki');
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     const bar = screen.getByTestId('app-bar');
@@ -173,6 +189,7 @@ describe('the bar at an open app', () => {
   });
 
   it('can be below the app: placed there by the layout, the frame is not touched', async () => {
+    withBar('top');
     await setup('wiki');
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     const frame = document.querySelector('iframe[data-app-id="wiki"]');
@@ -189,6 +206,7 @@ describe('the bar at an open app', () => {
   });
 
   it('can be hidden: no bar, but the app keeps its name as the heading of the page', async () => {
+    withBar('top');
     await setup('wiki');
     await waitFor(() => expect(visible()).toEqual(['wiki']));
     const frame = document.querySelector('iframe[data-app-id="wiki"]');

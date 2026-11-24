@@ -47,7 +47,7 @@ SETTINGS = [
     ("default_theme", "theme_locked", "theme", "dark", "light", "system"),
     ("accent_color", "accent_locked", "accent_color", "#c2410c", "#0f766e", None),
     ("default_nav_position", "nav_position_locked", "nav_position", "right", "bottom", "left"),
-    ("default_app_bar", "app_bar_locked", "app_bar", "bottom", "hidden", "top"),
+    ("default_app_bar", "app_bar_locked", "app_bar", "bottom", "top", "hidden"),
 ]
 
 
@@ -113,17 +113,17 @@ class TestWhoDecides:
         async with await world.login(anna) as admin:
             await admin.patch(
                 "/api/v1/admin/tenant",
-                json={"accent_color": "#c2410c", "default_app_bar": "hidden", "app_bar_locked": True},
+                json={"accent_color": "#c2410c", "default_app_bar": "bottom", "app_bar_locked": True},
             )
         acme_view, globex_view = await settings_of(world, mia), await settings_of(world, gina)
         assert (acme_view["accent_color"], acme_view["app_bar"], acme_view["app_bar_locked"]) == (
             "#c2410c",
-            "hidden",
+            "bottom",
             True,
         )
         assert (globex_view["accent_color"], globex_view["app_bar"], globex_view["app_bar_locked"]) == (
             None,
-            "top",
+            "hidden",
             False,
         )
 

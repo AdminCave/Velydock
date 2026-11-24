@@ -7,7 +7,7 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 | Unit-Tests Backend | pytest | 324 Tests | nichts |
 | Integrationstests Backend | pytest gegen PostgreSQL | 404 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 857 Tests | nichts |
+| Unit-Tests Frontend | Vitest, Testing Library | 858 Tests | nichts |
 | Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 87 Tests | kompletter Stack |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` (oder `VELYDOCK_DEV_IMAGE`) |
@@ -97,9 +97,10 @@ Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je B
   Frontend-Test aus der WCAG-Formel für Gelb, Weiß, Schwarz, Grautöne, die Palette und 108 weitere
   Farben je Design gegen fünf Flächen (mindestens 4,5:1), im Browser an der ausgelieferten Seite
   aus den Farben, die der Browser tatsächlich berechnet hat.
-- App-Leiste oben, unten, ausgeblendet: Lage am Bildschirm gemessen; ausgeblendet hat die App die
-  ganze Höhe, behält für Hilfstechnik ihren Namen, und „Neu laden“ aus dem Benutzermenü lädt sie
-  wirklich neu.
+- App-Leiste: ohne Einstellung gibt es keine – die App hat die ganze Höhe, behält für
+  Hilfstechnik ihren Namen, und „Neu laden“ aus dem Benutzermenü lädt sie wirklich neu.
+  Eingeschaltet sitzt sie oben oder unten (Lage am Bildschirm gemessen), „Neu laden“ steht dann in
+  ihr und nicht mehr im Menü; „Standard“ nimmt sie wieder weg.
 - Die Anmeldeseite bekommt nichts vom Erscheinungsbild einer Organisation.
 
 ## Apps über den Proxy veröffentlichen
@@ -352,10 +353,11 @@ ohne Netzwerkzugriff über WebRTC dennoch senden kann ([sicherheit.md](sicherhei
 
 Die CI prüft Chromium. Am 22.11.2026 lief die Suite zusätzlich vollständig in Firefox und in
 WebKit, der Engine von Safari (je 68 von 68 Tests), am 23.11.2026 erneut mit dem
-Erscheinungsbild (je 74 von 74) und mit dem Veröffentlichen über den Proxy (je 87 von 87). Dazu kam eine Prüfung von Hand mit echten
-Maus- und Tastaturereignissen in echten Browserfenstern – Chromium, WebKit und der installierte
-Firefox 153 ESR –, weil sich gerade das Verhalten des Tastaturfokus mit simulierten Eingaben
-nicht verlässlich beurteilen lässt.
+Erscheinungsbild (je 74 von 74) und mit dem Veröffentlichen über den Proxy (je 87 von 87), am
+24.11.2026 noch einmal, nachdem die App-Leiste standardmäßig ausgeblendet wurde (je 87 von 87).
+Dazu kam eine Prüfung von Hand mit echten Maus- und Tastaturereignissen in echten
+Browserfenstern – Chromium, WebKit und der installierte Firefox 153 ESR –, weil sich gerade das
+Verhalten des Tastaturfokus mit simulierten Eingaben nicht verlässlich beurteilen lässt.
 
 Was die anderen Browser gezeigt haben:
 

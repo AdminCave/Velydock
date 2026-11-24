@@ -311,8 +311,10 @@ def effective(system: dict[str, Any], tenant: Tenant | None, own: UserSettings |
             system["default_nav_position"],
         ),
         accent_color=_resolve(chosen("accent_color"), default("accent_color"), lock("accent_locked"), None),
+        # Nobody chose anything: no bar, the app has the whole height (its actions are in the
+        # user menu then). Whoever wants the bar switches it on, for themselves or the organization.
         app_bar=_resolve(
-            chosen("app_bar"), default("default_app_bar"), lock("app_bar_locked"), AppBar.TOP.value
+            chosen("app_bar"), default("default_app_bar"), lock("app_bar_locked"), AppBar.HIDDEN.value
         ),
         language=(own.language if own and own.language else system["default_language"]),
         theme_locked=lock("theme_locked"),

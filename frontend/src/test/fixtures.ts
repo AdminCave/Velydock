@@ -31,7 +31,7 @@ export const SETTINGS: Me['settings'] = {
   theme: 'system',
   nav_position: 'left',
   accent_color: null,
-  app_bar: 'top',
+  app_bar: 'hidden',
   language: 'de',
   theme_locked: false,
   nav_position_locked: false,

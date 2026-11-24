@@ -195,7 +195,7 @@ class TestSettings:
                 "theme": "system",
                 "nav_position": "left",
                 "accent_color": None,
-                "app_bar": "top",
+                "app_bar": "hidden",
                 "language": "de",
                 "theme_locked": False,
                 "nav_position_locked": False,

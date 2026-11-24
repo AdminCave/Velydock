@@ -167,43 +167,61 @@ test.describe('Erscheinungsbild je Organisation und je Benutzer', () => {
     });
   }
 
-  test('die App-Leiste sitzt oben, unten oder ist ausgeblendet – die Aktionen bleiben erreichbar', async ({ browser }) => {
+  test('eine App hat keine Leiste, bis jemand sie einschaltet: oben oder unten – die Aktionen bleiben erreichbar', async ({ browser }) => {
     const { apps } = world();
     const context = await contextAs(browser, 'mia');
     const page = await context.newPage();
     const bar = page.getByTestId('app-bar');
     const frame = appFrame(page, apps.notes);
     const top = async (locator: typeof bar) => (await locator.boundingBox())!.y;
+    const viewport = page.viewportSize()!;
 
+    // Nobody chose anything: no bar, the app has the whole height …
     await page.goto(`/app/${apps.notes}`);
     await expect(frame).toBeVisible();
-    await expect(bar).toHaveAttribute('data-position', 'top');
-    expect(await top(bar)).toBeLessThan(await top(frame));
-
-    await page.goto('/settings');
-    await chooseSetting(page, 'setting-app-bar', 'bottom');
-    await dockApp(page, apps.notes).click();
-    await expect(bar).toHaveAttribute('data-position', 'bottom');
-    expect(await top(bar)).toBeGreaterThan(await top(frame));
-
-    await page.goto('/settings');
-    await chooseSetting(page, 'setting-app-bar', 'hidden');
-    await dockApp(page, apps.notes).click();
-    await expect(frame).toBeVisible();
     await expect(bar).toHaveCount(0);
-    // The app has the whole height now …
-    const viewport = page.viewportSize()!;
-    const box = (await frame.boundingBox())!;
-    expect(box.height).toBeGreaterThan(viewport.height - 4);
+    expect((await frame.boundingBox())!.height).toBeGreaterThan(viewport.height - 4);
     // … it still has its name for assistive technology …
     await expect(page.getByRole('heading', { level: 1, name: 'Notizen' })).toBeAttached();
-    // … and "reload" has moved into the user menu: the counter in the app starts over.
+    // … and "reload" is in the user menu: the counter in the app starts over.
     const app = frame.contentFrame().frameLocator('body > iframe');
     await app.locator('#count').click();
     await expect(app.locator('#count')).toHaveText('Geklickt: 1');
     await page.getByTestId('user-menu').click();
     await page.getByRole('menuitem', { name: 'App neu laden' }).click();
     await expect(app.locator('#count')).not.toHaveText('Geklickt: 1');
+
+    // Switched on, it sits above the app, and "reload" is in it …
+    await page.goto('/settings');
+    await expect(page.getByTestId('setting-app-bar')).toHaveAttribute('data-value', 'default');
+    await chooseSetting(page, 'setting-app-bar', 'top');
+    await dockApp(page, apps.notes).click();
+    await expect(bar).toHaveAttribute('data-position', 'top');
+    expect(await top(bar)).toBeLessThan(await top(frame));
+    await app.locator('#count').click();
+    await expect(app.locator('#count')).toHaveText('Geklickt: 1');
+    await page.getByTestId('app-reload').click();
+    await expect(app.locator('#count')).not.toHaveText('Geklickt: 1');
+    // … and no longer in the user menu.
+    await page.getByTestId('user-menu').click();
+    await expect(page.getByRole('menuitem', { name: 'Abmelden' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'App neu laden' })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    // … or below it …
+    await page.goto('/settings');
+    await chooseSetting(page, 'setting-app-bar', 'bottom');
+    await dockApp(page, apps.notes).click();
+    await expect(bar).toHaveAttribute('data-position', 'bottom');
+    expect(await top(bar)).toBeGreaterThan(await top(frame));
+
+    // … and "Standard" takes it away again.
+    await page.goto('/settings');
+    await chooseSetting(page, 'setting-app-bar', 'default');
+    await dockApp(page, apps.notes).click();
+    await expect(frame).toBeVisible();
+    await expect(bar).toHaveCount(0);
+    expect((await frame.boundingBox())!.height).toBeGreaterThan(viewport.height - 4);
     await context.close();
   });
 

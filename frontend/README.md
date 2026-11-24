@@ -322,7 +322,8 @@ switch of the organization, a lock that is set or lifted, a saved setting.
   as high as the mark and never distorted; if the image does not load, the mark is shown.
 - _App bar_ (`me.settings.app_bar`). The bar of the app view sits above the app, below it
   (placed by the layout: the bar stays first in the document, and no frame is moved), or is
-  not rendered. Hidden, the name of the app remains the `h1` of the page (visually hidden),
+  not rendered. Not rendered is what the API answers where neither the user nor the
+  organization chose anything. Hidden, the name of the app remains the `h1` of the page (visually hidden),
   and "App neu laden" and "In neuem Tab öffnen" are in the user menu of the dock while a
   framed app is on screen. Reload is a counter per app in the workspace store
   (`reloadFrame()`), so both places create the frame anew the same way.

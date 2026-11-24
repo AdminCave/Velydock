@@ -564,7 +564,7 @@ describe('the appearance of the organization and the user', () => {
     expect(frameOf('wiki')).not.toBeNull();
   });
 
-  it('follows a setting the user changes: the bar moves under the open app without loading it anew', async () => {
+  it('follows a setting the user changes: the bar appears under the open app without loading it anew', async () => {
     const server = { me: dressed(ACME, null, {}) };
     serve(server, {
       'PATCH /api/v1/me/settings': ({ body }) =>
@@ -576,7 +576,8 @@ describe('the appearance of the organization and the user', () => {
     await open('/app/wiki', server);
     await waitFor(() => expect(frameOf('wiki')).not.toBeNull());
     const frame = frameOf('wiki');
-    expect(screen.getByTestId('app-bar')).toHaveAttribute('data-position', 'top');
+    // Nobody chose anything: no bar at all.
+    expect(screen.queryByTestId('app-bar')).toBeNull();
     await api.patch('/api/v1/me/settings', { body: { app_bar: 'bottom' } });
     await revalidateSession({ force: true });
     await waitFor(() =>

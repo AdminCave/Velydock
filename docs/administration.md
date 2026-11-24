@@ -207,10 +207,11 @@ Hier legt eine Organisation ihr Erscheinungsbild fest.
 | **Design** | Hell, Dunkel oder dem Gerät folgen. |
 | **Akzentfarbe** | Eine Farbe für Links, Markierungen, aktive Einträge, Hinweise und den Fokusrahmen: aus der Palette oder ein eigener Farbwert. Velydock hellt sie im dunklen und dunkelt sie im hellen Design so weit ab, dass Text lesbar bleibt (Kontrast mindestens 4,5:1); die Vorschau zeigt beide Ergebnisse. Schaltflächen behalten ihre Farbe. |
 | **Dock-Position** | Links, Rechts, Oben oder Unten. |
-| **App-Leiste** | Die Leiste mit Name, „Neu laden“ und „In neuem Tab öffnen“ über einer geöffneten App: oben, unten oder ausgeblendet. Ausgeblendet gehört der ganze Platz der App; die beiden Aktionen stehen dann im Benutzermenü. |
+| **App-Leiste** | Die Leiste mit Name, Adresse, „Neu laden“ und „In neuem Tab öffnen“ an einer geöffneten App: oben, unten oder ausgeblendet. Ohne Vorgabe ist sie ausgeblendet: Der ganze Platz gehört der App; die beiden Aktionen stehen dann im Benutzermenü. |
 
 Jede der vier Einstellungen außer dem Logo ist eine **Vorgabe**: Sie gilt für alle, die nichts
-Eigenes gewählt haben. „Keine Vorgabe“ überlässt die Entscheidung dem Systemstandard.
+Eigenes gewählt haben. „Keine Vorgabe“ überlässt die Entscheidung dem Systemstandard (für die
+App-Leiste: ausgeblendet).
 
 Bei jeder der vier steht ein eigenes **… für alle festlegen**. Damit gilt die Vorgabe für alle
 Mitglieder; die persönliche Einstellung ist dann gesperrt und erklärt, warum. Die eigene Wahl der
@@ -269,10 +270,10 @@ Standard abweicht.
 - **Passwort & Sicherheit:** führt zur Kontoseite von Keycloak – Passwort ändern, zweiten Faktor
   (Authenticator-App) einrichten, angemeldete Geräte ansehen.
 - **Einstellungen:** Design (System, Hell, Dunkel), Akzentfarbe, Position des Docks, App-Leiste
-  (oben, unten, ausgeblendet) und Sprache. Die Wahl wird am Konto gespeichert und gilt auf jedem
-  Gerät. „Standard“ heißt jeweils: was die Organisation vorgibt – die Seite nennt, was das gerade
-  ist. Was die Organisation für alle festgelegt hat, lässt sich nicht umstellen; die Seite sagt
-  es bei der jeweiligen Einstellung.
+  (oben, unten, ausgeblendet; ohne eigene Wahl und ohne Vorgabe ausgeblendet) und Sprache. Die
+  Wahl wird am Konto gespeichert und gilt auf jedem Gerät. „Standard“ heißt jeweils: was die
+  Organisation vorgibt – die Seite nennt, was das gerade ist. Was die Organisation für alle
+  festgelegt hat, lässt sich nicht umstellen; die Seite sagt es bei der jeweiligen Einstellung.
 
 ## Was nur in Keycloak geht
 

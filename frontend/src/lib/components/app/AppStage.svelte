@@ -46,7 +46,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   // shown at all (the user's choice, or what their organization fixed). Hidden, the app has
   // the whole height; its actions are in the user menu of the dock then (Dock.svelte), and
   // its name stays the heading of the page for assistive technology.
-  const bar = $derived($me?.settings.app_bar ?? 'top');
+  const bar = $derived($me?.settings.app_bar ?? 'hidden');
 
   // The app on screen, if it was unloaded for taking the keyboard focus (see below). It
   // then stays unloaded until the user asks for it again or comes back to it.

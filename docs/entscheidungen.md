@@ -228,7 +228,7 @@ Technisch folgt daraus:
 ## 16. Erscheinungsbild je Organisation und je Benutzer (23.11.2026)
 
 Logo, Design, Akzentfarbe, Dock-Position und App-Leiste lassen sich je Organisation und je
-Benutzer einstellen; das Logo gibt es nur je Organisation. Zwei Punkte hat der Auftraggeber
+Benutzer einstellen; das Logo gibt es nur je Organisation. Drei Punkte hat der Auftraggeber
 entschieden:
 
 - **Wie tief das Design geht:** hell oder dunkel und *eine* Akzentfarbe – keine eigenen
@@ -237,6 +237,11 @@ entschieden:
   könnte eine Organisation die Oberfläche unlesbar machen oder Teile verstecken.
 - **Wer bestimmt:** Benutzer dürfen jede Einstellung selbst wählen; die Organisation gibt
   Vorgaben und kann jede einzeln für alle festlegen. Standardmäßig ist nichts festgelegt.
+- **Keine Leiste an eingebetteten Apps, solange niemand sie einschaltet:** Die Leiste mit Name,
+  Adresse, „Neu laden“ und „In neuem Tab öffnen“ ist ohne eigene Wahl und ohne Vorgabe der
+  Organisation ausgeblendet; die App hat die ganze Fläche. Zuerst saß sie standardmäßig oben –
+  das war nicht gewollt und wurde am 24.11.2026 umgestellt. Die beiden Aktionen stehen ohne Leiste
+  im Benutzermenü des Docks.
 
 Technisch folgt daraus:
 

@@ -434,8 +434,8 @@ export const admin = {
   ],
   'tenantSettings.appBar.default': ['Standard für die App-Leiste', 'Default for the app bar'],
   'tenantSettings.appBar.hint': [
-    'Gilt für alle, die in ihren eigenen Einstellungen nichts anderes gewählt haben. Ohne Vorgabe sitzt die Leiste oben.',
-    'Applies to everyone who has not chosen something else in their own settings. Without a default the bar is at the top.',
+    'Gilt für alle, die in ihren eigenen Einstellungen nichts anderes gewählt haben. Ohne Vorgabe ist die Leiste ausgeblendet.',
+    'Applies to everyone who has not chosen something else in their own settings. Without a default the bar is hidden.',
   ],
   'tenantSettings.appBar.lock': ['App-Leiste für alle festlegen', 'Fix the app bar for everyone'],
   'tenantSettings.appBar.lockText': [

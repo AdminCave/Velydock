@@ -333,7 +333,7 @@ describe('Personal settings: app bar', () => {
         ),
     ).toEqual(['default=Standard', 'top=Oben', 'bottom=Unten', 'hidden=Ausgeblendet']);
     expect(
-      screen.getByText('„Standard“ folgt der Vorgabe deiner Organisation. Derzeit: Oben.'),
+      screen.getByText('„Standard“ folgt der Vorgabe deiner Organisation. Derzeit: Ausgeblendet.'),
     ).toBeVisible();
   });
 
