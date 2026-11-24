@@ -13,8 +13,10 @@
 #          directory, /usr/local/bin/velydock, the unit files of the backup timer, the log in
 #          /var/log, a second run, the three TLS modes in .env, a start that fails and the run
 #          that continues it, update, uninstall, what the installer puts back afterwards, and
-#          purge. No container of the stack is started here: scripts/tests/installer.sh does
-#          that without root, and the CI job "Installer" does it as root with a real systemd.
+#          purge; an old unfinished run on an installation that is in use by now; a directory
+#          that exists already and is anybody's, or a symbolic link; Ctrl-C during a step. No
+#          container of the stack is started here: scripts/tests/installer.sh does that
+#          without root, and the CI job "Installer" does it as root with a real systemd.
 #
 # Needs network access (base images, Debian's and Docker's package repositories). Removes its
 # containers and files also when it fails.
@@ -134,7 +136,8 @@ case "$*" in
   "version --format {{.Server.Version}}") echo 29.0.0 ;;
   "compose version --short") echo 2.40.0 ;;
   "info --format {{.DockerRootDir}}") echo /var/lib/docker ;;
-  "volume inspect "*) exit 1 ;;
+  "volume inspect "*) [[ -e /state/volume-${*: -1} ]] || exit 1 ;;
+  *"count(*) FROM users"*) cat /state/accounts 2>/dev/null || echo 0 ;;
   "compose config --services") printf '%s\n' keycloak postgres theme traefik velydock ;;
   "compose ps --all -q "*) echo "id-${*: -1}" ;;
   "inspect --format "*)
@@ -148,6 +151,11 @@ case "$*" in
     if [[ -e /state/fail-start ]]; then
       echo "stand-in: container velydock is unhealthy" >&2
       exit 1
+    fi
+    if [[ -e /state/slow-start ]]; then
+      # A start that takes its time: the test interrupts the installer meanwhile.
+      echo $$ > /state/up.pid
+      exec sleep 301
     fi
     ;;
   *"cert add"*) cat > /state/cert.stdin ;;
@@ -337,6 +345,113 @@ velydock uninstall --purge --yes > /state/purge2.out
 grep -q 'Backups outside the installation directory were not touched: /srv/backups' /state/purge2.out || fail "purge did not name the outside backups"
 [[ ! -e /opt/velydock && -n $(find /srv/backups -maxdepth 1 -name 'velydock-*Z' -type d) ]] || fail "purge and the outside backups"
 note "Let's Encrypt: resolver left at its default; backups outside the directory survive a purge"
+
+# An installer run that broke off long ago, on an installation that was finished by hand and
+# is in use: a later run must not reset anybody's password.
+setup_admin='compose exec -T velydock velydock setup-admin --username admin --email admin@example.com'
+touch /state/fail-start
+installer --yes "${answers[@]}" --tls selfsigned --no-backup > /state/old.out 2>&1 && fail "a failed start was reported as a success"
+rm /state/fail-start
+cp /opt/velydock/.install-state /state/saved-state
+echo 3 > /state/accounts
+before=$(calls "$setup_admin")
+installer --yes > /state/later.out 2>&1 || { cat /state/later.out; fail "continuing an installation that has accounts failed"; }
+grep -q 'already has accounts (3): no administrator is created and no password is changed' /state/later.out ||
+  { cat /state/later.out; fail "the installer did not say that it leaves the accounts alone"; }
+[[ $(calls "$setup_admin") == "$before" ]] || fail "the installer ran setup-admin on an installation that has accounts"
+if grep -q 'One-time password' /state/later.out; then fail "the installer printed a one-time password although it created nobody"; fi
+[[ ! -e /opt/velydock/.install-state ]] || fail "the state file is still there after the run that continued"
+# Left behind all the same (or back with a restored directory): an update removes it ...
+cp /state/saved-state /opt/velydock/.install-state
+latest 0.1.1
+velydock update --yes --no-backup > /state/update2.out 2>&1 || { cat /state/update2.out; fail "the update failed"; }
+grep -q 'removed /opt/velydock/.install-state' /state/update2.out || fail "the update did not say that it removed the stale state file"
+[[ ! -e /opt/velydock/.install-state ]] || fail "the update left the stale state file"
+# ... and if it is there after that, the installation is at another version than the file says:
+# the installer does not continue, it would put the old version's files under the new image.
+cp /state/saved-state /opt/velydock/.install-state
+ups=$(grep -c '^compose up -d --wait' /state/docker.calls)
+status=0
+installer --yes > /state/refused.out 2>&1 || status=$?
+grep -q 'has been changed since: it is at version 0.1.1 now. The installer does not continue it' /state/refused.out ||
+  { cat /state/refused.out; fail "an unfinished run of another version was not refused"; }
+[[ $status == 1 && $(cat /opt/velydock/VERSION) == 0.1.1 && $(cat /opt/velydock/IMAGE) == example.invalid/velydock:0.1.1 ]] ||
+  fail "a refused continuation changed the program files"
+[[ $(grep -c '^compose up -d --wait' /state/docker.calls) == "$ups" && $(calls "$setup_admin") == "$before" ]] ||
+  fail "a refused continuation started something or touched an account"
+rm /opt/velydock/.install-state /state/accounts
+velydock uninstall --purge --yes >/dev/null
+latest 0.1.0
+note "an old unfinished run: no password is reset where accounts exist; an update removes its file; another version is refused"
+
+# A directory that exists already and is anybody's is taken over before anything goes into it;
+# volumes of an earlier installation that will be used again are named.
+mkdir /srv/velydock
+chown nobody /srv/velydock
+chmod 777 /srv/velydock
+touch /state/volume-velydock_traefik-acme
+installer --yes "${answers[@]}" --tls selfsigned --no-backup --dir /srv/velydock > /state/dir.out 2>&1 ||
+  { cat /state/dir.out; fail "the installation into an existing directory failed"; }
+grep -q '/srv/velydock belongs to nobody and has mode 777' /state/dir.out || { cat /state/dir.out; fail "the installer did not announce that it takes the directory over"; }
+grep -q '/srv/velydock now belongs to root, and nobody else can write to it' /state/dir.out || fail "the installer did not say that it took the directory over"
+[[ $(stat -c '%U %a' /srv/velydock) == "root 755" ]] || fail "the directory is $(stat -c '%U %a' /srv/velydock) after the installation"
+grep -q 'The Docker volume velydock_traefik-acme of an earlier installation still exists and will be used again' /state/dir.out ||
+  fail "a volume of an earlier installation was used again without a word"
+rm /state/volume-velydock_traefik-acme
+velydock uninstall --purge --yes >/dev/null
+# A symbolic link: the installation goes where it points to, and that place is what gets named.
+mkdir -m 777 /srv/real
+ln -s /srv/real /srv/link
+installer --yes "${answers[@]}" --tls selfsigned --no-backup --dir /srv/link > /state/link.out 2>&1 ||
+  { cat /state/link.out; fail "the installation through a symbolic link failed"; }
+grep -q '/srv/link is a symbolic link. Velydock is installed where it points to: /srv/real' /state/link.out || fail "the symbolic link was not named"
+[[ -f /srv/real/VERSION && $(stat -c '%U %a' /srv/real) == "root 755" ]] || fail "the target of the link: $(stat -c '%U %a' /srv/real)"
+grep -qxF "exec '/srv/real/scripts/velydock' \"\$@\"" /usr/local/bin/velydock || fail "the command runs through the link, not from where it points to"
+velydock uninstall --purge --yes >/dev/null
+rm /srv/link
+note "an existing directory of another user, mode 777: taken over; a symbolic link: resolved; a leftover volume: named"
+
+# Ctrl-C while a step runs: the step is ended with what it started, and the installer says how
+# to go on. (The signal goes to the installer alone - at a terminal the step would not get it
+# either, it is a session of its own.)
+curl -fsSL "$VELYDOCK_RELEASE_BASE_URL/latest/download/install.sh" -o /state/install.sh
+touch /state/slow-start
+rm -f /state/up.pid
+python3 - > /state/interrupted.result <<'PY'
+import os
+import signal
+import subprocess
+import time
+
+with open("/state/interrupted.out", "w") as out:
+    installer = subprocess.Popen(
+        ["bash", "/state/install.sh", "--lang", "en", "--yes", "--domain", "itest.example", "--tls", "selfsigned",
+         "--admin-email", "admin@example.com", "--no-backup"],
+        stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    deadline = time.time() + 60
+    while not os.path.exists("/state/up.pid") and time.time() < deadline:
+        time.sleep(0.1)
+    time.sleep(0.5)
+    begun = time.time()
+    installer.send_signal(signal.SIGINT)
+    try:
+        status = installer.wait(timeout=40)
+    except subprocess.TimeoutExpired:
+        installer.kill()
+        status = "none"
+    print(status, int(time.time() - begun))
+PY
+read -r status seconds < /state/interrupted.result
+[[ -s /state/up.pid ]] || { cat /state/interrupted.out; fail "the installer never got to the start"; }
+[[ $status == 130 ]] || { cat /state/interrupted.out; fail "the interrupted installer ended with status $status"; }
+(( seconds < 8 )) || fail "the interrupted installer took $seconds seconds to end"
+if kill -0 "$(cat /state/up.pid)" 2>/dev/null; then fail "the step the installer had started runs on after Ctrl-C"; fi
+grep -q '^Interrupted\.$' /state/interrupted.out || { cat /state/interrupted.out; fail "the installer did not say that it was interrupted"; }
+grep -q 'The installation did not finish. Run the installer again to continue it, or remove what is there with: /usr/local/bin/velydock uninstall --purge' /state/interrupted.out ||
+  { cat /state/interrupted.out; fail "the interrupted installer did not say how to go on"; }
+rm /state/slow-start
+velydock uninstall --purge --yes >/dev/null
+note "Ctrl-C during the start: the step is ended, and the installer says how to go on"
 
 # A start that fails can also be answered with a purge instead of a second run.
 touch /state/fail-start

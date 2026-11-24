@@ -30,6 +30,11 @@
 #
 #   __place-files <installation-directory> <unpacked-bundle>
 #   __continue-update <installation-directory> <unpacked-bundle> <backup: yes|no> <image or "">
+#   __accounts                 prints how many accounts the installation has
+#
+# Two files mark something unfinished: .update-state while an update replaces the program files
+# (it names the versions; "velydock update" finishes an update that was cut off there), and
+# .install-state of the installer. "status" and "doctor" report both.
 #
 # The whole file is read before anything runs (see the last line), so replacing it during an
 # update cannot disturb the run that replaces it.
@@ -47,6 +52,15 @@ readonly DEFAULT_BASE_URL=https://github.com/AdminCave/Velydock/releases
 dir=""            # installation directory
 work=""           # temporary directory of this run
 pending=()        # files written under another name first; none of them may stay behind
+proxy_stopped=0   # 1 while "cert takeover" has the proxy stopped
+backup_made=""    # the directory backup.sh reported for the backup made in this run
+# While an update replaces the program files: the version it started from, the files of the old
+# and of the new release, and the image line as it was - all that taking it back needs.
+switching=""
+update_from=""
+update_old_paths=""
+update_new_paths=""
+update_old_image=""
 compose_env=()    # "env" arguments that keep the caller's environment away from Compose
 
 die() {
@@ -93,9 +107,29 @@ USAGE
 
 # ---- helpers ---------------------------------------------------------------------------------
 
+# Runs whenever the command ends, also after Ctrl-C, a "kill" or a closed terminal (see the
+# traps in main): a proxy that "cert takeover" stopped is started again, and an update that
+# has replaced some program files only takes them back.
 cleanup() {
   local status=$? file
   trap - EXIT
+  # Nothing interrupts the tidying up, and none of it depends on a terminal that may be gone.
+  trap '' INT TERM HUP
+  if (( proxy_stopped )); then
+    proxy_stopped=0
+    if compose start traefik >/dev/null 2>&1; then
+      echo "The proxy is running again." >&2 || true
+    else
+      echo "error: the proxy did not start again: velydock start" >&2 || true
+    fi
+  fi
+  if [[ -n $switching ]]; then
+    if undo_switch; then
+      echo "The update stopped while it replaced the program files. The files and the image of $update_from are back in place; Velydock $update_from is installed as before." >&2 || true
+    else
+      echo "error: the update stopped while it replaced the program files, and they could not all be put back. 'velydock update' finishes the update." >&2 || true
+    fi
+  fi
   for file in "${pending[@]}"; do
     if [[ -e $file ]]; then rm -f -- "$file"; fi
   done
@@ -170,14 +204,18 @@ need_docker() {
 
 # Every variable docker-compose.yml reads comes from .env, never from the caller's environment:
 # there it would silently take precedence over the configuration of this installation.
+# With an argument: also the variables of that Compose file (the one of a release that is not
+# installed yet).
 init_compose_env() {
-  local name
+  local name file
   compose_env=(-u COMPOSE_PROJECT_NAME -u COMPOSE_FILE -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES
     -u VELYDOCK_COMPOSE_ARGS -u VELYDOCK_ENV_FILE -u VELYDOCK_RESTORE_CONFIRM)
-  [[ -f $dir/docker-compose.yml ]] || return 0
-  while IFS= read -r name; do
-    compose_env+=(-u "$name")
-  done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' "$dir/docker-compose.yml" | cut -c3- | sort -u)
+  for file in "$dir/docker-compose.yml" "$@"; do
+    [[ -f $file ]] || continue
+    while IFS= read -r name; do
+      compose_env+=(-u "$name")
+    done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' "$file" | cut -c3- | sort -u)
+  done
 }
 
 compose() {
@@ -251,6 +289,32 @@ service_state() {
   docker inspect --format \
     '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.State.ExitCode}}|{{.HostConfig.RestartPolicy.Name}}' \
     "$id" 2>/dev/null || printf 'missing'
+}
+
+# The image a service's container was created from, as Compose named it then; empty without one.
+running_image() {
+  local id
+  id=$(compose ps --all -q "$1" 2>/dev/null | sed -n 1p) || true
+  [[ -n $id ]] || return 0
+  docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null || true
+}
+
+# A value from .update-state ("from" or "to"); empty when no update is unfinished.
+update_state() {
+  local key=$1 line
+  [[ -f $dir/.update-state ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == "$key="* ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done < "$dir/.update-state"
+}
+
+# Starting a mixture of two releases helps nobody.
+refuse_unfinished_update() {
+  [[ -f $dir/.update-state ]] || return 0
+  die "an update from $(update_state from) to $(update_state to) was cut off while it replaced the program files. 'velydock update' finishes it; until then nothing is started from this mixture."
 }
 
 # Running (and healthy where a health check exists), or a one-time job that finished well.
@@ -426,24 +490,37 @@ bundle_image() {
 
 # ---- program files ---------------------------------------------------------------------------
 
-# Copies the program files of an unpacked bundle into the installation directory. Each file is
-# written under another name and renamed into place: Traefik watches deploy/traefik/dynamic and
-# must never read a half-written file, and a running copy of this script keeps its old content.
-# The directory itself is never replaced (Traefik has it mounted).
+# Copies one program file into place: written under another name first, then renamed. Traefik
+# watches deploy/traefik/dynamic and must never read a half-written file, and a copy of this
+# script that is running keeps its old content.
+put_file() {
+  local source=$1 target=$2 mode=644
+  if [[ -x $source ]]; then mode=755; fi
+  mkdir -p -- "$(dirname -- "$target")" || return 1
+  pending+=("$target.new.$$")
+  install -m "$mode" -- "$source" "$target.new.$$" || return 1
+  mv -fT -- "$target.new.$$" "$target"
+}
+
+# Copies the program files of an unpacked bundle into the installation directory, file by file
+# (see put_file); the directory itself is never replaced, Traefik has it mounted. VERSION comes
+# last: as long as it names the old release, the directory is not the new one. With "hold" as
+# third argument it is left to the caller, who has more to do before the new version is in place.
 place_files() {
-  local target=$1 source=$2 path mode paths
+  local target=$1 source=$2 version=${3:-} path paths
   [[ -d $target ]] || die "$target does not exist."
   paths=$(manifest_paths "$source/MANIFEST")
   umask 022
+  # Nothing is replaced unless everything is there.
   while IFS= read -r path; do
     [[ -f $source/$path && ! -L $source/$path ]] || die "the bundle lacks $path."
-    mkdir -p -- "$target/$(dirname -- "$path")"
-    mode=644
-    if [[ -x $source/$path ]]; then mode=755; fi
-    pending+=("$target/$path.new.$$")
-    install -m "$mode" -- "$source/$path" "$target/$path.new.$$"
-    mv -fT -- "$target/$path.new.$$" "$target/$path"
-  done <<<"$paths"$'\nMANIFEST'
+  done <<<"$paths"
+  while IFS= read -r path; do
+    [[ $path != VERSION ]] || continue
+    put_file "$source/$path" "$target/$path"
+  done <<<"$paths"
+  put_file "$source/MANIFEST" "$target/MANIFEST"
+  if [[ $version != hold ]]; then put_file "$source/VERSION" "$target/VERSION"; fi
   # PostgreSQL and Traefik read these as other users (see scripts/install.sh in the repository).
   chmod a+rX "$target/deploy" "$target/deploy/postgres" "$target/deploy/traefik" \
     "$target/deploy/traefik/dynamic" 2>/dev/null || true
@@ -467,36 +544,67 @@ keep_previous() {
   printf '%s\n' "$(env_get VELYDOCK_IMAGE)" > "$keep/$old_version.image"
 }
 
-# Removes program files of the old version that the new one no longer has.
-remove_obsolete() {
-  local old_manifest=$1 path current
-  current=$(manifest_paths "$dir/MANIFEST")
+# Takes back what an update has replaced so far: the previous program files and the image line
+# return, files only the new release has go. It works from what the update kept in .previous/ and
+# in memory, not from the unpacked bundle, which may be gone by the time this runs.
+undo_switch() {
+  local keep=$dir/.previous/$update_from path failed=0
+  switching=""
+  [[ -n $update_from && -f $keep/MANIFEST ]] || return 1
   while IFS= read -r path; do
-    if grep -qxF -- "$path" <<<"$current"; then continue; fi
-    remove_below "$dir" "$dir/$path"
-    echo "  removed $path (not part of the new version)"
-  done < <(manifest_paths "$old_manifest")
+    [[ -n $path ]] || continue
+    if grep -qxF -- "$path" <<<"$update_old_paths"; then continue; fi
+    rm -f -- "$dir/$path" 2>/dev/null || failed=1
+  done <<<"$update_new_paths"
+  while IFS= read -r path; do
+    [[ -n $path && $path != VERSION && -f $keep/$path ]] || continue
+    put_file "$keep/$path" "$dir/$path" 2>/dev/null || failed=1
+  done <<<"$update_old_paths"
+  put_file "$keep/MANIFEST" "$dir/MANIFEST" 2>/dev/null || failed=1
+  if [[ -f $keep/VERSION ]]; then put_file "$keep/VERSION" "$dir/VERSION" 2>/dev/null || failed=1; fi
+  if [[ -n $update_old_image ]]; then env_set VELYDOCK_IMAGE "$update_old_image" 2>/dev/null || failed=1; fi
+  (( failed == 0 )) || return 1
+  rm -f -- "$dir/.update-state"
 }
 
+# Fetches the images of the stack: all of them anew, or with VELYDOCK_PULL_POLICY=missing only
+# those this server does not have. Without arguments it is about the installation as it is.
+# With a Compose file and an image it is about a release that is not installed yet - an update
+# fetches its images before it changes anything.
 pull_images() {
-  if [[ ${VELYDOCK_PULL_POLICY:-always} == missing ]]; then
-    echo "fetching only images this server does not have (VELYDOCK_PULL_POLICY=missing) ..."
-    return 0
+  local file=${1:-} image=${2:-} options=() override=() list name
+  if [[ -n $file ]]; then options=(--project-directory "$dir" --env-file "$dir/.env" -f "$file"); fi
+  if [[ -n $image ]]; then override=("VELYDOCK_IMAGE=$image"); fi
+  if [[ ${VELYDOCK_PULL_POLICY:-always} != missing ]]; then
+    echo "fetching the images ..."
+    ( cd "$dir" && env "${compose_env[@]}" "${override[@]}" docker compose "${options[@]}" pull --quiet </dev/null )
+    return
   fi
-  echo "fetching the images ..."
-  compose pull --quiet </dev/null
+  echo "fetching only images this server does not have (VELYDOCK_PULL_POLICY=missing) ..."
+  list=$( cd "$dir" && env "${compose_env[@]}" "${override[@]}" docker compose "${options[@]}" config --images </dev/null ) || return 1
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    if docker image inspect "$name" >/dev/null 2>&1; then continue; fi
+    echo "  $name"
+    docker pull --quiet "$name" </dev/null >/dev/null || return 1
+  done < <(sort -u <<<"$list")
 }
 
 start_stack() {
+  local bounded=(timeout 1800)
   echo "starting and waiting until everything is ready ..."
-  # Bounded: a daemon that hangs must not keep this command waiting for ever.
-  ( cd "$dir" && timeout 1800 env "${compose_env[@]}" docker compose up -d --wait --quiet-pull </dev/null )
+  # Bounded: a daemon that hangs must not keep this command waiting for ever. In the foreground:
+  # otherwise "timeout" puts itself and Compose into a process group of their own, where neither
+  # a Ctrl-C at the terminal nor the installer ending this step reaches them - this command would
+  # then wait for Compose to finish before it notices that it was told to stop.
+  if timeout --foreground 1 true >/dev/null 2>&1; then bounded=(timeout --foreground 1800); fi
+  ( cd "$dir" && "${bounded[@]}" env "${compose_env[@]}" docker compose up -d --wait --quiet-pull </dev/null )
 }
 
 # ---- commands --------------------------------------------------------------------------------
 
 cmd_status() {
-  local service state list failed=0
+  local service state list failed=0 odd=0 wanted running
   (($# == 0)) || die "status takes no arguments."
   need_installation
   need_docker
@@ -514,10 +622,24 @@ cmd_status() {
     fi
   done <<<"$list"
   echo
+  if [[ -f $dir/.update-state ]]; then
+    echo "An update from $(update_state from) to $(update_state to) was cut off while it replaced the program files:"
+    echo "what is installed is a mixture of both. 'velydock update' finishes the update."
+    odd=1
+  fi
+  wanted=$(env_get VELYDOCK_IMAGE)
+  running=$(running_image velydock)
+  if [[ -n $wanted && -n $running && $running != "$wanted" ]]; then
+    echo "The container velydock runs the image $running,"
+    echo "but .env names $wanted: what is configured is not what runs."
+    echo "'velydock start' applies the configuration."
+    odd=1
+  fi
   if (( failed )); then
     echo "Not everything is running. 'velydock doctor' looks closer, 'velydock logs <service>' shows why."
     return 1
   fi
+  if (( odd )); then return 1; fi
   echo "Everything is running."
 }
 
@@ -532,6 +654,7 @@ cmd_start() {
   done
   need_installation
   need_docker
+  refuse_unfinished_update
   if (( pull )); then pull_images; fi
   start_stack
   echo "Velydock is running: $(public_url)"
@@ -548,6 +671,7 @@ cmd_restart() {
   local waited=0
   need_installation
   need_docker
+  refuse_unfinished_update
   compose restart "$@"
   echo "waiting until everything is ready ..."
   until stack_ok; do
@@ -648,21 +772,42 @@ cmd_cert() {
       need_installation
       need_docker
       proxy_enabled || die "the bundled proxy is switched off (COMPOSE_PROFILES): certificates are the business of your own proxy."
-      local project volume status=0
-      # The project name as Compose resolves it (top-level "name:" of the rendered file).
-      project=$(compose config 2>/dev/null | sed -nE 's/^name: *"?([A-Za-z0-9_-]+)"?$/\1/p' | head -n 1)
-      [[ -n $project ]] || die "cannot tell the Compose project name of this installation."
+      local rendered project volume status=0 was_running=0
+      # The project name as Compose resolves it (top-level "name:" of the rendered file). The
+      # rendered file holds every secret: it stays in this variable.
+      rendered=$(compose config </dev/null) ||
+        die "docker compose cannot read the configuration of this installation (see above). Nothing was changed."
+      project=$(sed -nE 's/^name: *"?([A-Za-z0-9_-]+)"?$/\1/p' <<<"$rendered" | sed -n 1p)
+      [[ -n $project ]] || die "cannot tell the Compose project name of this installation. Nothing was changed."
       volume=${project}_traefik-acme
       docker volume inspect "$volume" >/dev/null 2>&1 ||
         die "the bundled proxy has no certificate store here (volume $volume): nothing to take over."
-      echo "Stopping the proxy for a moment …"
-      compose stop traefik >/dev/null 2>&1 || die "could not stop the proxy."
+      lock
+      if [[ $(service_state traefik) == running* ]]; then was_running=1; fi
+      if (( was_running )); then
+        echo "Stopping the proxy for a moment …"
+        # From this line on the proxy is started again whatever happens, also when this command
+        # is interrupted or its terminal goes away (see cleanup): stopped by "compose stop", it
+        # would otherwise stay stopped, across restarts of the server too.
+        proxy_stopped=1
+        compose stop traefik >/dev/null 2>&1 || die "could not stop the proxy."
+      else
+        echo "The proxy is not running; its certificate store is changed while it is stopped."
+      fi
       compose run --rm --no-deps --user 0:0 -v "$volume:/acme" velydock cert prune-fetched /acme/acme.json </dev/null ||
         status=$?
-      # Whatever happened above: the proxy comes back.
-      compose start traefik >/dev/null 2>&1 || die "the proxy did not start again: velydock start"
-      ((status == 0)) || die "the proxy's certificate store was not changed (see above). The proxy is running again."
-      echo "The proxy is running again. 'velydock doctor' shows which certificate each address is served with."
+      if (( was_running )); then
+        if ! compose start traefik >/dev/null 2>&1; then
+          proxy_stopped=0
+          die "the proxy did not start again: velydock start"
+        fi
+        proxy_stopped=0
+        ((status == 0)) || die "the proxy's certificate store was not changed (see above). The proxy is running again."
+        echo "The proxy is running again. 'velydock doctor' shows which certificate each address is served with."
+      else
+        ((status == 0)) || die "the proxy's certificate store was not changed (see above)."
+        echo "The proxy was not running and was left that way: velydock start"
+      fi
       ;;
     *) die "cert: unknown action '$action' (list, add, remove, takeover)" ;;
   esac
@@ -700,8 +845,21 @@ backup_target() {
   printf '%s' "${target:-$dir/backups}"
 }
 
+# Runs backup.sh and notes in $backup_made the directory it reports. That path is "the backup
+# just made" - not the name that sorts last in the target directory: names carry the clock of
+# the moment they were written, and a clock can have been ahead.
+make_backup() {
+  local target=$1 said
+  make_work
+  said=$work/backup.said
+  backup_made=""
+  run_script backup.sh "$target" | tee "$said" || return 1
+  backup_made=$(sed -n 's/^backup written to //p' "$said" | tail -n 1)
+  [[ -n $backup_made && -d $backup_made ]]
+}
+
 cmd_backup() {
-  local target="" keep="" name count=0
+  local target="" keep="" name count=1
   while (($#)); do
     case $1 in
       --keep)
@@ -726,11 +884,14 @@ cmd_backup() {
   elif [[ $target != /* ]]; then
     target=${PWD%/}/$target
   fi
+  if [[ $target != / ]]; then target=${target%/}; fi
   lock
-  run_script backup.sh "$target"
+  make_backup "$target" || die "the backup failed (see above); no older backup was removed."
   [[ -n $keep ]] || return 0
-  # Only what backup.sh made and what is complete is ever removed.
+  # Only what backup.sh made and what is complete is ever removed - and never the backup just
+  # made, whatever its name sorts like. It is one of the N; of the others the newest stay.
   while IFS= read -r name; do
+    [[ $target/$name != "$backup_made" ]] || continue
     count=$((count + 1))
     (( count > keep )) || continue
     remove_below "$target" "$target/$name"
@@ -768,7 +929,7 @@ cmd_version() {
 }
 
 cmd_update() {
-  local target="" backup=yes image="" yes=0 installed unpacked order=0
+  local target="" backup=yes image="" yes=0 installed unpacked order=0 unfinished
   while (($#)); do
     case $1 in
       --version)
@@ -792,20 +953,32 @@ cmd_update() {
   [[ -f $dir/MANIFEST ]] || die "$dir/MANIFEST is missing; this installation cannot be updated by this command."
   installed=$(installed_version)
   make_work
-  if [[ -z $target ]]; then
-    target=$(latest_version "$work/latest") ||
-      die "could not find out the latest release at $(release_base). Name one with --version."
+  if [[ -f $dir/.update-state ]]; then
+    # An update was cut off while it replaced the program files. VERSION may name either
+    # release by now, so it is no guide: the update named in the file is finished.
+    unfinished=$(update_state to)
+    valid_version "$unfinished" ||
+      die "$dir/.update-state names no version. Put the program files back by hand from $dir/.previous/ (docs/betrieb.md) and remove the file."
+    [[ -z $target || $target == "$unfinished" ]] ||
+      die "an update to $unfinished was cut off while it replaced the program files. Finish it first: velydock update --version $unfinished"
+    target=$unfinished
+    echo "An update from $(update_state from) to $target was cut off while it replaced the program files. It is finished now."
+  else
+    if [[ -z $target ]]; then
+      target=$(latest_version "$work/latest") ||
+        die "could not find out the latest release at $(release_base). Name one with --version."
+    fi
+    valid_version "$target" || die "update: '$target' is not a version (1.2.3)."
+    compare_versions "$target" "$installed" || order=$?
+    if (( order == 0 )); then
+      echo "Velydock $installed is installed, and that is the version asked for. Nothing to do."
+      return 0
+    fi
+    if (( order == 2 )); then
+      die "version $target is older than the installed $installed. Going back is not an update: the database keeps the changes the newer version made. The way back is the backup made before the update (docs/betrieb.md)."
+    fi
+    echo "Update: Velydock $installed -> $target"
   fi
-  valid_version "$target" || die "update: '$target' is not a version (1.2.3)."
-  compare_versions "$target" "$installed" || order=$?
-  if (( order == 0 )); then
-    echo "Velydock $installed is installed, and that is the version asked for. Nothing to do."
-    return 0
-  fi
-  if (( order == 2 )); then
-    die "version $target is older than the installed $installed. Going back is not an update: the database keeps the changes the newer version made. The way back is the backup made before the update (docs/betrieb.md)."
-  fi
-  echo "Update: Velydock $installed -> $target"
   echo "Sign-in and interface are unavailable for about a minute while the containers are replaced."
   if (( ! yes )); then
     confirm "Update now?" || die "aborted; nothing was changed."
@@ -817,53 +990,96 @@ cmd_update() {
   bash "$unpacked/scripts/velydock" __continue-update "$dir" "$unpacked" "$backup" "$image"
 }
 
-# Second half of an update, run from the unpacked bundle of the new version.
+# Second half of an update, run from the unpacked bundle of the new version. In this order:
+#
+#   1. fetch the images of the new release, with its Compose file;
+#   2. back up;
+#   3. keep the previous program files and the image line in .previous/;
+#      - up to here the installation is untouched, and whatever fails, the update can simply be
+#        repeated -
+#   4. replace the program files and the image line, VERSION last. While this goes on,
+#      .update-state says so. Whatever stops it - an error, Ctrl-C, a closed terminal - the
+#      files and the image line are put back (see cleanup); if it is cut off harder than that,
+#      the file stays, "status" and "doctor" report it, and "velydock update" finishes the job;
+#   5. start, and check that everything runs.
 continue_update() {
-  local unpacked=$2 backup=$3 image=$4 old_version new_version="" old_manifest changed backup_dir made=""
+  local unpacked=$2 backup=$3 image=$4 new_version="" changed made="" resumed=0 path
   dir=$1
   [[ -n $dir && $dir != / && -f $dir/VERSION && -f $dir/MANIFEST && -f $dir/.env ]] ||
     die "$dir is not a Velydock installation."
   umask 022
-  init_compose_env
-  old_version=$(installed_version)
+  init_compose_env "$unpacked/docker-compose.yml"
+  update_from=$(installed_version)
   IFS= read -r new_version < "$unpacked/VERSION" || true
   [[ -n $image ]] || image=$(bundle_image "$unpacked")
-  backup_dir=$(backup_target)
+  if [[ -f $dir/.update-state ]]; then
+    # Cut off while it replaced files: what .previous/ holds is the release it started from,
+    # and that copy must not be overwritten with the mixture that is in place now.
+    resumed=1
+    update_from=$(update_state from)
+    [[ -n $update_from && -f $dir/.previous/$update_from/MANIFEST ]] ||
+      die "the update that was cut off left no copy of the previous program files in $dir/.previous/. Nothing was changed now; see docs/betrieb.md for the way back by hand."
+  fi
+
+  if ! pull_images "$unpacked/docker-compose.yml" "$image"; then
+    if (( resumed )); then
+      die "the images of version $new_version could not be fetched (see above). Nothing was changed now; repeat 'velydock update' when the registry can be reached."
+    fi
+    die "the images of version $new_version could not be fetched (see above). Nothing was changed: Velydock $update_from stays installed. Repeat the update when the registry can be reached."
+  fi
 
   if [[ $backup == yes ]]; then
     echo "backing up before the update ..."
-    run_script backup.sh "$backup_dir" ||
+    make_backup "$(backup_target)" ||
       die "the backup failed, so nothing was changed. Is Velydock running ('velydock start')? To update without a backup: --no-backup."
-    made=$backup_dir/$(list_backups "$backup_dir" | sed -n 1p)
+    made=$backup_made
   else
     echo "no backup before this update (--no-backup)."
   fi
 
-  changed=$(modified_files)
-  if [[ -n $changed ]]; then
-    echo "these program files were changed on this server; your versions are kept in $dir/.previous/$old_version/:"
-    printf '  %s\n' "${changed//$'\n'/$'\n'  }"
+  if (( ! resumed )); then
+    changed=$(modified_files)
+    if [[ -n $changed ]]; then
+      echo "these program files were changed on this server; your versions are kept in $dir/.previous/$update_from/:"
+      printf '  %s\n' "${changed//$'\n'/$'\n'  }"
+    fi
+    keep_previous "$update_from"
   fi
+  update_old_paths=$(manifest_paths "$dir/.previous/$update_from/MANIFEST")
+  update_new_paths=$(manifest_paths "$unpacked/MANIFEST")
+  update_old_image=$(sed -n 1p "$dir/.previous/$update_from.image" 2>/dev/null) || update_old_image=""
 
-  make_work
-  old_manifest=$work/MANIFEST.old
-  cp -- "$dir/MANIFEST" "$old_manifest"
-  keep_previous "$old_version"
   echo "replacing the program files ..."
-  place_files "$dir" "$unpacked"
-  remove_obsolete "$old_manifest"
+  printf 'from=%s\nto=%s\n' "$update_from" "$new_version" > "$dir/.update-state"
+  switching=$update_from
+  place_files "$dir" "$unpacked" hold
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    if grep -qxF -- "$path" <<<"$update_new_paths"; then continue; fi
+    remove_below "$dir" "$dir/$path"
+    echo "  removed $path (not part of the new version)"
+  done <<<"$update_old_paths"
   env_set VELYDOCK_IMAGE "$image"
+  put_file "$unpacked/VERSION" "$dir/VERSION"
+  rm -f -- "$dir/.update-state"
+  switching=""
   # The Compose file may read other variables now.
   init_compose_env
 
-  if pull_images && start_stack && stack_ok; then
+  if start_stack && stack_ok; then
+    # An installer run that never finished has nothing left to finish on an installation that
+    # has just been updated; a later run of the installer must not take it up again.
+    if [[ -e $dir/.install-state ]]; then
+      rm -f -- "$dir/.install-state"
+      echo "removed $dir/.install-state, left by an installer run that did not finish."
+    fi
     echo
-    echo "Velydock was updated: $old_version -> $new_version"
+    echo "Velydock was updated: $update_from -> $new_version"
     echo "Running: $(public_url)"
-    echo "Program files of $old_version: $dir/.previous/$old_version/"
+    echo "Program files of $update_from: $dir/.previous/$update_from/"
     if [[ -n $made ]]; then
       echo "Backup made before the update: $made"
-      echo "Should you have to go back to $old_version: the old program files alone do not undo what the new"
+      echo "Should you have to go back to $update_from: the old program files alone do not undo what the new"
       echo "version changed in the database. The way back is that backup (docs/betrieb.md, \"Update\")."
     else
       echo "No backup was made. The old program files alone do not undo what the new version changed in"
@@ -875,8 +1091,8 @@ continue_update() {
     echo
     echo "error: version $new_version is in place but did not start cleanly."
     echo "Look at 'velydock status' and 'velydock logs velydock'; 'velydock start' tries again."
-    echo "The way back: put the files from $dir/.previous/$old_version/ back, set VELYDOCK_IMAGE in"
-    echo ".env to the line in $dir/.previous/$old_version.image and restore a backup made before"
+    echo "The way back: put the files from $dir/.previous/$update_from/ back, set VELYDOCK_IMAGE in"
+    echo ".env to the line in $dir/.previous/$update_from.image and restore a backup made before"
     echo "the update${made:+ ($made)} with 'velydock restore'. The old program files alone do not"
     echo "undo what the new version changed in the database (docs/betrieb.md)."
   } >&2
@@ -944,12 +1160,30 @@ doctor_containers() {
 }
 
 doctor_env() {
-  local mode
+  local mode owner
   mode=$(stat -c %a "$dir/.env")
   if [[ $mode == 600 || $mode == 400 ]]; then
     report ok ".env is readable only by its owner (mode $mode)"
   else
     report fail ".env has mode $mode: others on this server can read every secret (chmod 600 $dir/.env)"
+  fi
+  # Programs in this directory are run as root, by hand and by the backup timer.
+  mode=$(stat -c %a "$dir")
+  owner=$(stat -c %u "$dir")
+  if (( (8#$mode & 8#022) != 0 )) || (( owner != 0 && owner != EUID )); then
+    report fail "the installation directory $dir belongs to $(stat -c %U "$dir") and has mode $mode: others can replace the programs that are run from it (chown root:root $dir; chmod go-w $dir)"
+  else
+    report ok "the installation directory can be changed by its owner only ($(stat -c %U "$dir"), mode $mode)"
+  fi
+}
+
+# What was begun here and not finished.
+doctor_unfinished() {
+  if [[ -f $dir/.update-state ]]; then
+    report fail "an update from $(update_state from) to $(update_state to) was cut off while it replaced the program files: what is installed is a mixture ('velydock update' finishes it)"
+  fi
+  if [[ -f $dir/.install-state ]]; then
+    report warn "the installer did not finish here ($dir/.install-state, of $(date -r "$dir/.install-state" +%Y-%m-%d 2>/dev/null || echo an unknown day)): run it again and it continues - or remove the file if this installation is complete, so that no later run takes it up again"
   fi
 }
 
@@ -1084,6 +1318,8 @@ doctor_backups() {
     seconds=$(date -u -d "${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2}" +%s 2>/dev/null) || seconds=""
     if [[ -z $seconds ]]; then
       report info "last backup: $target/$newest"
+    elif (( seconds > $(date -u +%s) + 3600 )); then
+      report warn "the newest backup carries a time that has not come yet ($target/$newest): the clock was ahead when it was made, or is behind now"
     else
       age=$(( ($(date -u +%s) - seconds) / 3600 ))
       if (( age > 48 )); then
@@ -1107,7 +1343,7 @@ doctor_backups() {
 }
 
 doctor_version() {
-  local installed latest order=0 changed image shipped="" known path extra=""
+  local installed latest order=0 changed image shipped="" known path extra="" running
   installed=$(installed_version)
   changed=$(modified_files)
   if [[ -n $changed ]]; then
@@ -1132,6 +1368,13 @@ doctor_version() {
   else
     report warn "VELYDOCK_IMAGE in .env ($image) is not the image release $installed names ($shipped); fine if set on purpose"
   fi
+  # What .env names is what should run - otherwise a change was never applied.
+  running=$(running_image velydock)
+  if [[ -n $image && -n $running && $running != "$image" ]]; then
+    report fail "the container velydock runs the image $running, but .env names $image: what is configured is not what runs ('velydock start' applies it)"
+  elif [[ -n $running ]]; then
+    report ok "the container velydock runs the image .env names"
+  fi
   make_work
   if latest=$(latest_version "$work/latest" 2>/dev/null); then
     compare_versions "$latest" "$installed" || order=$?
@@ -1154,6 +1397,7 @@ cmd_doctor() {
   apps=$(env_get APPS_HOST)
   [[ -z $apps ]] || hosts+=("$apps")
   echo "Velydock $(installed_version) in $dir"
+  doctor_unfinished
   doctor_containers
   doctor_env
   doctor_names "${hosts[@]}"
@@ -1255,7 +1499,7 @@ cmd_uninstall() {
   while IFS= read -r path; do
     rm -f -- "$dir/$path"
   done <<<"$paths"
-  for path in MANIFEST .env .install-state .lock install.log .previous backups; do
+  for path in MANIFEST .env .install-state .update-state .lock install.log .previous backups; do
     if [[ -e $dir/$path || -L $dir/$path ]]; then remove_below "$dir" "$dir/$path"; fi
   done
   # Of the directories only those that held program files go, and only if they are empty now.
@@ -1287,6 +1531,12 @@ main() {
   fi
   [[ $# -eq 0 ]] || shift
   trap cleanup EXIT
+  # Ctrl-C, a "kill" and a closed terminal end the command through cleanup as well. (A program
+  # that is running in the foreground is waited for first; at a terminal the same signal has
+  # reached it too.)
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   case $command in
     __place-files)
       (($# == 2)) || die "__place-files: wrong number of arguments."
@@ -1316,6 +1566,11 @@ main() {
     cert) cmd_cert "$@" ;;
     doctor) cmd_doctor "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
+    __accounts)
+      need_installation
+      need_docker
+      compose exec -T postgres psql -U postgres -d velydock -Atc 'SELECT count(*) FROM users' </dev/null
+      ;;
     version | --version) cmd_version "$@" ;;
     help | --help | -h) usage ;;
     *)

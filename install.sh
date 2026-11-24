@@ -60,6 +60,7 @@ tool=""            # the management command of this installation
 problem=""         # why the last validation failed
 failures=0
 pending=()         # files written under another name first; none of them may stay behind
+child_pid=""       # the step that runs in the background at the moment, if any
 
 # ---- messages --------------------------------------------------------------------------------
 
@@ -127,6 +128,8 @@ load_messages() {
     "Ein Compose-Projekt namens \"%s\" hat auf diesem Server bereits Container, und %s enthält keine Installation, zu der sie gehören könnten. Entferne sie zuerst; sie und diese Installation kämen einander in die Quere."
   m chk_volume_exists "The Docker volume %s of an earlier installation still exists. Its databases only work with the .env they were created with. If the data is still needed, put the old installation directory back to %s (program files and .env) and run the installer again; if not, remove the volume (docker volume rm %s)." \
     "Das Docker-Volume %s einer früheren Installation existiert noch. Seine Datenbanken funktionieren nur mit der .env, mit der sie angelegt wurden. Werden die Daten noch gebraucht, lege das alte Installationsverzeichnis wieder nach %s (Programmdateien und .env) und starte den Installer erneut; wenn nicht, entferne das Volume (docker volume rm %s)."
+  m chk_volume_reused "The Docker volume %s of an earlier installation still exists and will be used again, with the certificates in it. If that is not wanted, remove it first: docker volume rm %s" \
+    "Das Docker-Volume %s einer früheren Installation existiert noch und wird wieder verwendet, mit den Zertifikaten darin. Ist das nicht gewollt, entferne es vorher: docker volume rm %s"
   m chk_launcher_other "%s already belongs to another Velydock installation (%s)." \
     "%s gehört bereits zu einer anderen Velydock-Installation (%s)."
   m chk_release "release to install: %s" "Release, das installiert wird: %s"
@@ -193,6 +196,16 @@ load_messages() {
     "\"%s\" geht nicht als Verzeichnis: Gebraucht wird ein absoluter Pfad aus Buchstaben, Ziffern, \".\", \"_\", \"+\", \"-\" und \"/\"."
   m dir_foreign "%s is not empty and holds no Velydock installation. Choose an empty or new directory." \
     "%s ist nicht leer und enthält keine Velydock-Installation. Wähle ein leeres oder neues Verzeichnis."
+  m dir_link "%s is a symbolic link. Velydock is installed where it points to: %s" \
+    "%s ist ein symbolischer Link. Velydock wird dorthin installiert, wohin er zeigt: %s"
+  m dir_dangling "%s is a symbolic link that points to no directory." \
+    "%s ist ein symbolischer Link, der auf kein Verzeichnis zeigt."
+  m dir_will_secure "%s belongs to %s and has mode %s. Programs in this directory are run as %s later, so the installer will give it to %s and take write access from everybody else." \
+    "%s gehört %s und hat den Modus %s. Programme in diesem Verzeichnis laufen später als %s; der Installer übergibt es deshalb an %s und nimmt allen anderen das Schreibrecht."
+  m dir_secured "%s now belongs to %s, and nobody else can write to it." \
+    "%s gehört jetzt %s, und niemand sonst kann darin schreiben."
+  m dir_unsafe "%s cannot be made safe: it must belong to %s and must not be writable by its group or by others. Choose another directory." \
+    "%s lässt sich nicht absichern: Es muss %s gehören und darf weder für die Gruppe noch für andere schreibbar sein. Wähle ein anderes Verzeichnis."
   m dir_taken "%s already holds a Velydock installation; start the installer with --dir %s to see it." \
     "%s enthält bereits eine Velydock-Installation; starte den Installer mit --dir %s, um sie zu sehen."
   m sec_backup "Backups" "Backups"
@@ -238,7 +251,11 @@ load_messages() {
   m q_go "Install now?" "Jetzt installieren?"
   m q_resume "Continue this installation now?" "Diese Installation jetzt fortsetzen?"
   m aborted "Aborted. Nothing was changed." "Abgebrochen. Es wurde nichts verändert."
+  m interrupted "Interrupted." "Unterbrochen."
+  m interrupted_clean "Interrupted. Nothing was changed." "Unterbrochen. Es wurde nichts verändert."
 
+  m resume_changed "The installation in %s was begun with Velydock %s and did not finish then, but it has been changed since: it is at version %s now. The installer does not continue it - it would put the files of the old version back. If Velydock works, remove the leftover file %s (\"%s doctor\" shows the state of the installation); to start over: %s uninstall --purge" \
+    "Die Installation in %s wurde mit Velydock %s begonnen und damals nicht abgeschlossen, ist aber seither verändert worden: Sie steht jetzt bei Version %s. Der Installer setzt sie nicht fort - er würde die Dateien der alten Version zurücklegen. Läuft Velydock, entferne die übrig gebliebene Datei %s (\"%s doctor\" zeigt den Zustand der Installation); für einen Neuanfang: %s uninstall --purge"
   m resume_note "The installation of Velydock %s in %s did not finish. It is continued with the answers given then; the configuration in .env stays as it is." \
     "Die Installation von Velydock %s in %s wurde nicht abgeschlossen. Sie wird mit den damaligen Antworten fortgesetzt; die Konfiguration in .env bleibt, wie sie ist."
   m installed_note "Velydock %s is already installed in %s (%s). Configuration and data were not touched." \
@@ -269,6 +286,12 @@ load_messages() {
   m step_cert "Importing the certificate" "Importiere das Zertifikat"
   m cert_failed "The certificate could not be imported. Velydock runs, with a self-signed certificate for now. Once the cause is fixed: %s cert add %s %s" \
     "Das Zertifikat ließ sich nicht importieren. Velydock läuft, vorerst mit einem selbstsignierten Zertifikat. Wenn die Ursache behoben ist: %s cert add %s %s"
+  m cert_kept "This installation already holds certificates (%s cert list); the one given at the first run is not stored again. To replace one: %s cert add %s %s --replace" \
+    "Diese Installation enthält bereits Zertifikate (%s cert list); das beim ersten Lauf angegebene wird nicht erneut gespeichert. Um eines zu ersetzen: %s cert add %s %s --replace"
+  m accounts_unknown "Could not find out whether this installation already has accounts, so no administrator is created (creating one would reset the password of an existing account of that name). Once Velydock runs: %s admin --username NAME" \
+    "Es ließ sich nicht feststellen, ob diese Installation schon Konten hat; deshalb wird kein Administrator angelegt (das würde das Passwort eines vorhandenen Kontos dieses Namens zurücksetzen). Sobald Velydock läuft: %s admin --username NAME"
+  m admin_exists "This installation already has accounts (%s): no administrator is created and no password is changed. Lost access? %s admin --username NAME restores it." \
+    "Diese Installation hat bereits Konten (%s): Es wird kein Administrator angelegt und kein Passwort geändert. Zugang verloren? %s admin --username NAME stellt ihn wieder her."
   m step_admin "Creating the first administrator" "Lege den ersten Administrator an"
   m admin_failed "The first administrator could not be created:" "Der erste Administrator ließ sich nicht anlegen:"
   m step_launcher "Installing the command %s" "Installiere den Befehl %s"
@@ -452,20 +475,49 @@ check() {
 cleanup() {
   local status=$? file
   trap - EXIT
-  if (( status != 0 && changed )); then
-    printf '\n' >&2
-    if [[ -n $tool && -x $tool ]]; then
-      say half_way "$tool" >&2
-    else
-      say half_way_early >&2
-    fi
-    if (( log_final )); then say log_at "$log_file" >&2; fi
-  fi
+  # Nothing interrupts the tidying up; and it comes before the last words, which cannot be
+  # written any more when the terminal is gone.
+  trap '' INT TERM HUP
   for file in "${pending[@]}"; do
     if [[ -e $file ]]; then rm -f -- "$file"; fi
   done
+  if (( status != 0 && changed )); then
+    {
+      printf '\n'
+      if [[ -n $tool && -x $tool ]]; then
+        say half_way "$tool"
+      else
+        say half_way_early
+      fi
+      if (( log_final )); then say log_at "$log_file"; fi
+    } >&2 || true
+  fi
   if [[ -n $work && -d $work ]]; then rm -rf -- "$work"; fi
   exit "$status"
+}
+
+# Ctrl-C, a closed terminal or a "kill": the step that is running is ended with everything it
+# started, and the installer says where it stopped (see cleanup).
+interrupted() {
+  local signal=$1 pid=$child_pid watchdog
+  trap '' INT TERM HUP
+  child_pid=""
+  if [[ -n $pid ]]; then
+    # The step is a process group of its own (see run_logged); without setsid it is one process.
+    # What does not end when asked to is ended ten seconds later.
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    ( sleep 10; kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$pid" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+  fi
+  log "interrupted by signal $signal"
+  if (( changed )); then
+    printf '\n%s\n' "$(t interrupted)" >&2 || true
+  else
+    printf '\n%s\n' "$(t interrupted_clean)" >&2 || true
+  fi
+  exit $((128 + signal))
 }
 
 # Moves the log to its lasting place; until then it is collected in the temporary directory.
@@ -480,20 +532,27 @@ settle_log() {
 }
 
 # Runs a command with its output in the log; on a terminal a dot every few seconds shows life.
+# The command runs in the background as a session of its own: a Ctrl-C at the terminal reaches
+# the installer alone, which then ends the command and all it started (see "interrupted"). Left
+# in the foreground, or started with a plain "&", it would either outlive the installer or keep
+# the installer from noticing the interruption until it is done.
 run_logged() {
-  local status=0 pid
+  local status=0
   log "run: $*"
-  if [[ -t 1 ]]; then
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >> "$log_file" 2>&1 </dev/null &
+  else
     "$@" >> "$log_file" 2>&1 </dev/null &
-    pid=$!
-    while kill -0 "$pid" 2>/dev/null; do
+  fi
+  child_pid=$!
+  if [[ -t 1 ]]; then
+    while kill -0 "$child_pid" 2>/dev/null; do
       printf '.'
       sleep 3
     done
-    wait "$pid" || status=$?
-  else
-    "$@" >> "$log_file" 2>&1 </dev/null || status=$?
   fi
+  wait "$child_pid" || status=$?
+  child_pid=""
   log "status: $status"
   return "$status"
 }
@@ -1062,6 +1121,7 @@ ask_questions() {
     section sec_dir
     ask opt_dir "$(t q_dir)" "$DEFAULT_DIR" v_dir
     opt_dir=${opt_dir%/}
+    resolve_directory
   else
     v_dir "$opt_dir" || die "$(t opt_bad "$problem" --dir)"
   fi
@@ -1245,7 +1305,7 @@ check_docker() {
 
 # Nothing of another installation is in the way of a new one.
 check_conflicts() {
-  local volume
+  local volume name
   (( ! resume )) || return 0
   if [[ -n $(project_containers) ]]; then
     check fail "$(t chk_project_exists "$(project_name)" "${opt_dir:-$DEFAULT_DIR}")"
@@ -1254,6 +1314,14 @@ check_conflicts() {
   if docker volume inspect "$volume" >/dev/null 2>&1; then
     check fail "$(t chk_volume_exists "$volume" "${opt_dir:-$DEFAULT_DIR}" "$volume")"
   fi
+  # These two do not stand in the way, but what they hold comes back: certificates the proxy
+  # fetched for the earlier installation, and copies of the ones uploaded to it.
+  for name in traefik-acme velydock-certs; do
+    volume=$(project_name)_$name
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      check warn "$(t chk_volume_reused "$volume" "$volume")"
+    fi
+  done
 }
 
 # The command in /usr/local/bin can only stand for one installation.
@@ -1701,9 +1769,53 @@ report_installed() {
   say installed_hint "$tool" "$tool" "$tool"
 }
 
+# A symbolic link as installation directory: the installation goes where it points to, and that
+# place is what the command in /usr/local/bin and the timer name - a link can be pointed
+# elsewhere later.
+resolve_directory() {
+  local real
+  [[ -n $opt_dir && -L $opt_dir ]] || return 0
+  real=$(readlink -f -- "$opt_dir" 2>/dev/null) || real=""
+  [[ -n $real && -d $real ]] || die "$(t dir_dangling "$opt_dir")"
+  problem=""
+  v_path "$real" || die "$problem"
+  say dir_link "$opt_dir" "$real"
+  opt_dir=$real
+}
+
+# True if the directory belongs to whoever installs and nobody else may write to it.
+directory_safe() {
+  local owner mode
+  owner=$(stat -c %u -- "$1" 2>/dev/null) || return 1
+  mode=$(stat -c %a -- "$1" 2>/dev/null) || return 1
+  (( owner == EUID && (8#$mode & 8#022) == 0 ))
+}
+
+# Says before the summary what "secure_directory" is going to do.
+check_directory() {
+  [[ -d $opt_dir ]] || return 0
+  if directory_safe "$opt_dir"; then return 0; fi
+  check warn "$(t dir_will_secure "$opt_dir" "$(stat -c %U -- "$opt_dir")" "$(stat -c %a -- "$opt_dir")" "$(id -un)" "$(id -un)")"
+}
+
+# Programs in the installation directory are run by root later - through the command in
+# /usr/local/bin and by the backup timer -, and root writes into it. A directory that existed
+# before is therefore taken over: it belongs to whoever installs, and nobody else writes to it.
+# What cannot be made so is not used.
+secure_directory() {
+  if directory_safe "$opt_dir"; then return 0; fi
+  if (( EUID == 0 )); then chown -- 0:0 "$opt_dir" 2>/dev/null || true; fi
+  chmod go-w -- "$opt_dir" 2>/dev/null || true
+  directory_safe "$opt_dir" || die "$(t dir_unsafe "$opt_dir" "$(id -un)")"
+  say dir_secured "$opt_dir" "$(id -un)"
+  log "directory secured: $opt_dir"
+}
+
 # Looks at the place an installation would be at before any question is asked.
 find_installation() {
-  local candidate=$opt_dir
+  local candidate installed=""
+  resolve_directory
+  candidate=$opt_dir
   if [[ -z $candidate ]] && (( EUID == 0 )); then
     candidate=$(launcher_directory)
     [[ -n $candidate ]] || candidate=$DEFAULT_DIR
@@ -1722,6 +1834,14 @@ find_installation() {
       # They were checked when they were given; checked again, because they come from a file.
       check_options
       v_host_set || die "$problem"
+      # The file may be old: somebody finished the installation by hand and updated it since.
+      # Continuing would put the old version's files under the newer image.
+      if [[ -f $opt_dir/VERSION ]]; then
+        IFS= read -r installed < "$opt_dir/VERSION" || true
+        if [[ $installed != "$opt_version" ]]; then
+          die "$(t resume_changed "$opt_dir" "$opt_version" "$installed" "$opt_dir/.install-state" "$opt_dir/scripts/velydock" "$opt_dir/scripts/velydock")"
+        fi
+      fi
       ;;
     foreign)
       if [[ -n $opt_dir ]]; then die "$(t dir_foreign "$candidate")"; fi
@@ -1761,7 +1881,7 @@ show_summary() {
 }
 
 perform() {
-  local unpacked output password errors
+  local unpacked output password="" errors accounts=""
 
   if (( docker_missing )); then
     install_docker
@@ -1773,10 +1893,11 @@ perform() {
   unpacked=$work/velydock-$opt_version
   step_ok
 
-  step step_files "$opt_dir"
   changed=1
   ( umask 022 && mkdir -p -- "$opt_dir" )
+  secure_directory
   if (( opt_no_system )); then settle_log "$opt_dir/install.log"; fi
+  step step_files "$opt_dir"
   write_state
   tool=$opt_dir/scripts/velydock
   if ! run_logged bash "$unpacked/scripts/velydock" __place-files "$opt_dir" "$unpacked"; then
@@ -1803,32 +1924,47 @@ perform() {
   step_ok
 
   if [[ $opt_tls == own ]]; then
-    step step_cert
-    if ! run_logged "$opt_dir/scripts/velydock" cert add "$opt_cert" "$opt_key" --replace; then
+    # A run that continues an earlier one may come long after it: a certificate stored in the
+    # meantime, perhaps a renewed one, is not replaced by the file of the first run.
+    if (( resume )) && "$opt_dir/scripts/velydock" cert list 2>/dev/null </dev/null | grep -q $'\t'; then
+      say cert_kept "$tool" "$tool" "$opt_cert" "$opt_key"
+    else
+      step step_cert
+      if ! run_logged "$opt_dir/scripts/velydock" cert add "$opt_cert" "$opt_key" --replace; then
+        step_failed
+        tail -n 5 -- "$log_file" >&2 || true
+        die "$(t cert_failed "$tool" "$opt_cert" "$opt_key")"
+      fi
+      step_ok
+    fi
+  fi
+
+  # The first administrator is created in an installation without accounts only. With an
+  # account of that name present, the command would reset its password and end its sessions -
+  # which is what happens when a run of long ago is continued on an installation in use.
+  accounts=$("$opt_dir/scripts/velydock" __accounts 2>> "$log_file" </dev/null) || accounts=""
+  [[ $accounts =~ ^[0-9]+$ ]] || die "$(t accounts_unknown "$tool")"
+  if (( accounts > 0 )); then
+    log "accounts present: $accounts; no administrator created"
+  else
+    step step_admin
+    errors=$work/admin.err
+    log "run: velydock admin --username $opt_admin_user --email $opt_admin_email"
+    # The output holds the one-time password: it goes to the terminal once, never into the log.
+    if ! output=$("$opt_dir/scripts/velydock" admin --username "$opt_admin_user" --email "$opt_admin_email" 2> "$errors" </dev/null); then
       step_failed
-      tail -n 5 -- "$log_file" >&2 || true
-      die "$(t cert_failed "$tool" "$opt_cert" "$opt_key")"
+      cat -- "$errors" >> "$log_file" 2>/dev/null || true
+      say admin_failed >&2
+      grep -i 'error' "$errors" >&2 || tail -n 5 -- "$errors" >&2 || true
+      exit 1
+    fi
+    password=$(sed -nE 's/.*One-time password:[[:space:]]+([^[:space:]]+).*/\1/p' <<<"$output" | sed -n 1p)
+    if [[ -z $password ]]; then
+      step_failed
+      die "$(t admin_failed)"
     fi
     step_ok
   fi
-
-  step step_admin
-  errors=$work/admin.err
-  log "run: velydock admin --username $opt_admin_user --email $opt_admin_email"
-  # The output holds the one-time password: it goes to the terminal once, never into the log.
-  if ! output=$("$opt_dir/scripts/velydock" admin --username "$opt_admin_user" --email "$opt_admin_email" 2> "$errors" </dev/null); then
-    step_failed
-    cat -- "$errors" >> "$log_file" 2>/dev/null || true
-    say admin_failed >&2
-    grep -i 'error' "$errors" >&2 || tail -n 5 -- "$errors" >&2 || true
-    exit 1
-  fi
-  password=$(sed -nE 's/.*One-time password:[[:space:]]+([^[:space:]]+).*/\1/p' <<<"$output" | sed -n 1p)
-  if [[ -z $password ]]; then
-    step_failed
-    die "$(t admin_failed)"
-  fi
-  step_ok
 
   if [[ $opt_backup == yes ]] && (( ! opt_no_system )); then install_timer; fi
 
@@ -1838,9 +1974,14 @@ perform() {
 
   printf '\n%s\n\n' "$(t done_title "$opt_version")"
   printf '  %-18s %s\n' "$(t done_address)" "https://$opt_velydock_host$opt_port_suffix"
-  printf '  %-18s %s\n' "$(t done_user)" "$opt_admin_user"
-  printf '  %-18s %s\n\n' "$(t done_password)" "$password"
-  say done_password_note
+  if [[ -n $password ]]; then
+    printf '  %-18s %s\n' "$(t done_user)" "$opt_admin_user"
+    printf '  %-18s %s\n\n' "$(t done_password)" "$password"
+    say done_password_note
+  else
+    printf '\n'
+    say admin_exists "$accounts" "$tool"
+  fi
   case $opt_tls in
     selfsigned) say done_selfsigned ;;
     letsencrypt) say done_letsencrypt ;;
@@ -1869,6 +2010,9 @@ main() {
 
   work=$(mktemp -d)
   trap cleanup EXIT
+  trap 'interrupted 1' HUP
+  trap 'interrupted 2' INT
+  trap 'interrupted 15' TERM
   log_file=$work/install.log
   if (( EUID == 0 )) && (( ! opt_no_system )); then settle_log "$SYSTEM_LOG"; fi
   log "installer started (language $ui_lang, base $(release_base))"
@@ -1894,6 +2038,7 @@ main() {
     section checking_answers
     check_names
     check_disk "$opt_dir" "$MIN_DIR_DISK_MB"
+    check_directory
     check_launcher
     (( failures == 0 )) || die "$(t checks_failed)"
     show_summary

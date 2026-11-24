@@ -8,8 +8,10 @@
 #
 #   1. options, messages and the checks of an own certificate - nothing is started;
 #   2. the management command against a stand-in for docker: what "cert add" sends, that the
-#      caller's environment stays away from Compose, which backups "--keep" removes, and what
-#      "doctor" says about the certificate a TLS server really serves;
+#      caller's environment stays away from Compose, which backups "--keep" removes, what
+#      "doctor" says about the certificate a TLS server really serves - and what is left when
+#      things go wrong: "cert takeover" interrupted, an update whose images cannot be fetched,
+#      one that fails or is cut off while it replaces the program files;
 #   3. a local release: a registry on a loopback port with two versions of the image, and an
 #      HTTP server with install.sh, the bundles and SHA256SUMS (scripts/make-bundle.sh);
 #   4. a bundle that does not match its checksum is refused; the questions are answered through
@@ -19,6 +21,8 @@
 #      update, the update again, uninstall, and uninstall --purge;
 #   6. a "new server": a fresh installation that takes over the backup of the old one, as
 #      docs/betrieb.md describes it.
+#   7. install.sh --yes --tls own: a fresh installation with an own certificate; every name of
+#      the installation is served with it afterwards (TLS handshakes with the proxy).
 #
 # Without root (the default) everything stays in a temporary directory (--no-system), on
 # loopback ports and under a Compose project of its own. Other projects are never touched.
@@ -64,6 +68,7 @@ second=0.1.1
 admin=chef
 http_pid=""
 tls_pid=""
+files_pid=""
 started=0
 passed=""
 
@@ -180,6 +185,7 @@ cleanup() {
   fi
   [[ -z $http_pid ]] || kill "$http_pid" 2>/dev/null
   [[ -z $tls_pid ]] || kill "$tls_pid" 2>/dev/null
+  [[ -z $files_pid ]] || kill "$files_pid" 2>/dev/null
   if (( started )); then
     as_root test -x "$dir/scripts/velydock" && velydock uninstall --purge --yes >/dev/null 2>&1
     remove_project "$project"
@@ -318,7 +324,7 @@ stage=$work/stage
 mkdir "$stage"
 tar -xzf "$work/plain-release/velydock-$first.tar.gz" -C "$stage"
 fake=$work/fake
-mkdir "$fake"
+mkdir -m 755 "$fake"
 bash "$stage/velydock-$first/scripts/velydock" __place-files "$fake" "$stage/velydock-$first"
 ( cd "$fake" && sha256sum --check --quiet --strict MANIFEST ) || fail "__place-files did not place what the bundle holds"
 [[ -x $fake/scripts/velydock && -x $fake/scripts/backup.sh && ! -x $fake/docker-compose.yml ]] || fail "file modes after __place-files"
@@ -332,7 +338,8 @@ VELYDOCK_IMAGE=example.invalid/velydock:$first
 ENV
 chmod 600 "$fake/.env"
 
-# The stand-in records how it was called, with which environment and what it was sent.
+# The stand-in records how it was called, with which environment and what it was sent. Files
+# in its directory make it fail or take its time where a test needs that.
 stub=$work/stub
 mkdir "$stub"
 cat > "$stub/docker" <<'STUB'
@@ -341,9 +348,34 @@ printf '%s\n' "$*" >> "$STUB_DIR/calls"
 env > "$STUB_DIR/environment"
 case "$*" in
   *"cert add"*) cat > "$STUB_DIR/stdin" ;;
+  *prune-fetched*)
+    if [[ -s $STUB_DIR/slow-prune ]]; then
+      : > "$STUB_DIR/prune-running"
+      sleep "$(cat "$STUB_DIR/slow-prune")"
+    fi
+    ;;
   *pg_dump*) echo "dump of ${*: -1}" ;;
   "compose config --services") printf '%s\n' keycloak postgres theme traefik velydock ;;
+  "compose config")
+    if [[ -e $STUB_DIR/fail-config ]]; then
+      echo "stand-in: the Compose file cannot be read" >&2
+      exit 15
+    fi
+    printf 'name: velydock-itest-fake\nservices: {}\n'
+    ;;
+  *" config --images")
+    printf '%s\n' "${VELYDOCK_IMAGE:-}" > "$STUB_DIR/image-asked"
+    printf '%s\n' example.invalid/postgres:1 "${VELYDOCK_IMAGE:-example.invalid/velydock:none}"
+    ;;
+  "image inspect "*) [[ ! -e $STUB_DIR/images-missing ]] || exit 1 ;;
+  "pull "* | *" pull --quiet")
+    if [[ -e $STUB_DIR/fail-pull ]]; then
+      echo "stand-in: the registry does not answer" >&2
+      exit 1
+    fi
+    ;;
   "compose ps --all -q "*) echo "id-${*: -1}" ;;
+  "inspect --format {{.Config.Image}} "*) cat "$STUB_DIR/running-image" 2>/dev/null ;;
   "inspect --format "*)
     case ${*: -1} in
       id-theme) echo 'exited||0|no' ;;
@@ -514,6 +546,239 @@ doctor_with standin ''
 said "^\\[FAIL\\] dock\\.itest\\.localhost: served with the proxy's self-signed stand-in - Let's Encrypt has not issued"
 echo "doctor: valid, not covering, expired, expiring and stand-in certificates are told apart"
 
+section "management command: when things go wrong (still with the stand-in)"
+# The line of the first call that matches, in the stand-in's record; nothing if there is none.
+call_line() { { grep -n -- "$1" "$stub/calls" || true; } | sed -n 1p | cut -d: -f1; }
+
+# cert takeover stops the proxy, changes its store and starts it again - and starts it again
+# also when it is interrupted in between.
+: > "$stub/calls"
+"${stubbed[@]}" cert takeover > "$work/takeover.out" 2>&1 || {
+  cat "$work/takeover.out" >&2
+  fail "cert takeover failed"
+}
+grep -qxF 'compose run --rm --no-deps --user 0:0 -v velydock-itest-fake_traefik-acme:/acme velydock cert prune-fetched /acme/acme.json' "$stub/calls" ||
+  fail "cert takeover did not prune the store of this installation's proxy: $(tr '\n' ';' < "$stub/calls")"
+stopped=$(call_line '^compose stop traefik$')
+pruned=$(call_line 'prune-fetched')
+started_again=$(call_line '^compose start traefik$')
+if [[ -z $stopped || -z $pruned || -z $started_again ]] || (( stopped > pruned || pruned > started_again )); then
+  fail "cert takeover: expected stop, prune, start - got: $(tr '\n' ';' < "$stub/calls")"
+fi
+# The configuration cannot be read: said so, and the proxy is not touched.
+: > "$stub/calls"
+touch "$stub/fail-config"
+expect 1 'cannot read the configuration of this installation' "${stubbed[@]}" cert takeover
+if grep -q 'traefik' "$stub/calls"; then fail "cert takeover touched the proxy although the configuration could not be read"; fi
+rm "$stub/fail-config"
+# Interrupted while the store is being changed, the way a closed terminal does it: the signal
+# goes to the command and everything it started.
+interrupt_takeover() {
+  local signal=$1 whom=$2 status=0 pid
+  : > "$stub/calls"
+  rm -f "$stub/prune-running"
+  if [[ $whom == group ]]; then
+    setsid "${stubbed[@]}" cert takeover > "$work/takeover.out" 2>&1 &
+  else
+    "${stubbed[@]}" cert takeover > "$work/takeover.out" 2>&1 &
+  fi
+  pid=$!
+  for _ in $(seq 1 100); do
+    [[ -e $stub/prune-running ]] && break
+    python3 -c 'import time; time.sleep(0.1)'
+  done
+  [[ -e $stub/prune-running ]] || fail "cert takeover never got as far as changing the store"
+  if [[ $whom == group ]]; then kill "-$signal" -- "-$pid"; else kill "-$signal" "$pid"; fi
+  wait "$pid" || status=$?
+  [[ $status == "$3" ]] || { cat "$work/takeover.out" >&2; fail "cert takeover interrupted by $signal ended with status $status instead of $3"; }
+  pruned=$(call_line 'prune-fetched')
+  started_again=$(call_line '^compose start traefik$')
+  if [[ -z $started_again ]] || (( started_again < pruned )); then
+    fail "cert takeover interrupted by $signal left the proxy stopped: $(tr '\n' ';' < "$stub/calls")"
+  fi
+  grep -q 'The proxy is running again' "$work/takeover.out" || fail "cert takeover interrupted by $signal did not say that the proxy runs again"
+}
+echo 30 > "$stub/slow-prune"
+interrupt_takeover HUP group 129
+# Only the command itself is told to end; what it started finishes first (here after 3 seconds).
+echo 3 > "$stub/slow-prune"
+interrupt_takeover TERM command 143
+rm "$stub/slow-prune"
+echo "cert takeover: stop, prune, start; interrupted by HUP and by TERM, the proxy is started again"
+
+# Retention never removes the backup just made - also when older ones carry later times,
+# because the clock was ahead when they were written.
+vault=$work/vault-ahead
+mkdir "$vault"
+old_backup velydock-20200101T000000Z
+old_backup velydock-20990101T000000Z
+old_backup velydock-20990102T000000Z
+"${stubbed[@]}" backup "$vault" --keep 2 > "$work/backup.out"
+made=$(sed -n 's/^backup written to //p' "$work/backup.out")
+[[ -n $made && -d $made && -s $made/velydock.dump ]] || { cat "$work/backup.out" >&2; fail "with later-dated backups present, the backup just made is gone"; }
+left=$(cd "$vault" && find . -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' ')
+[[ $left == "velydock-20990102T000000Z ${made##*/} " || $left == "${made##*/} velydock-20990102T000000Z " ]] ||
+  fail "after --keep 2 with later-dated backups the directory holds: $left"
+python3 -c 'import time; time.sleep(1.1)'
+"${stubbed[@]}" backup "$vault" --keep 1 > "$work/backup.out"
+made=$(sed -n 's/^backup written to //p' "$work/backup.out")
+left=$(cd "$vault" && find . -mindepth 1 -maxdepth 1 -printf '%f\n' | tr '\n' ' ')
+[[ $left == "${made##*/} " ]] || fail "after --keep 1 the directory holds: $left   expected only ${made##*/}"
+echo "retention: the backup just made stays, whatever the names of the others"
+
+# Updates. A second release, served from a loopback port of its own.
+"$repo/scripts/make-bundle.sh" "$second" "example.invalid/velydock:$second" "$work/quick-release/download/v$second" >/dev/null
+mkdir "$work/quick-release/latest" "$work/stage2"
+cp -r "$work/quick-release/download/v$second" "$work/quick-release/latest/download"
+tar -xzf "$work/quick-release/download/v$second/velydock-$second.tar.gz" -C "$work/stage2"
+cat > "$work/file-server.py" <<'PY'
+"""Serves a directory on a free loopback port. argv: <directory> <file that receives the port>"""
+import http.server
+import os
+import sys
+
+
+class Quiet(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+os.chdir(sys.argv[1])
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+with open(sys.argv[2], "w", encoding="ascii") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+python3 "$work/file-server.py" "$work/quick-release" "$work/files-port" &
+files_pid=$!
+for _ in $(seq 1 100); do
+  [[ -s $work/files-port ]] && break
+  python3 -c 'import time; time.sleep(0.1)'
+done
+updating=("${clean[@]}" "PATH=$stub:$PATH" "STUB_DIR=$stub" "VELYDOCK_RELEASE_BASE_URL=http://127.0.0.1:$(cat "$work/files-port")")
+old_image=example.invalid/velydock:$first
+new_image=example.invalid/velydock:$second
+# fresh_installation <directory>: the program files of the first release and a small .env
+fresh_installation() {
+  mkdir -m 755 "$1"
+  bash "$stage/velydock-$first/scripts/velydock" __place-files "$1" "$stage/velydock-$first"
+  cat > "$1/.env" <<ENV
+VELYDOCK_HOST=dock.fake.localhost
+KEYCLOAK_HOST=auth.fake.localhost
+SANDBOX_HOST=sandbox.fake.localhost
+COMPOSE_PROFILES=
+COMPOSE_PROJECT_NAME=velydock-itest-fake
+VELYDOCK_IMAGE=$old_image
+ENV
+  chmod 600 "$1/.env"
+}
+# Everything in an installation directory but the lock, with checksums.
+fingerprint() { ( cd "$1" && find . -type f ! -name .lock -exec sha256sum {} + | sort -k 2 ); }
+# True if the program files are exactly those of a release (given as its unpacked bundle).
+is_release() { [[ $(cat "$1/VERSION") == "$(cat "$2/VERSION")" ]] && ( cd "$1" && sha256sum --check --quiet --strict MANIFEST >/dev/null 2>&1 ) && cmp -s "$1/MANIFEST" "$2/MANIFEST"; }
+
+# 1. The images cannot be fetched: nothing is changed, and the update can simply be repeated.
+one=$work/update-one
+fresh_installation "$one"
+echo "version=$first" > "$one/.install-state"
+before=$(fingerprint "$one")
+touch "$stub/fail-pull" "$stub/images-missing"
+: > "$stub/calls"
+expect 1 "images of version $second could not be fetched.*Nothing was changed" \
+  "${updating[@]}" VELYDOCK_PULL_POLICY=missing "$one/scripts/velydock" update --yes
+[[ $(fingerprint "$one") == "$before" ]] || fail "an update whose images could not be fetched (only missing ones) changed the installation"
+[[ $(cat "$stub/image-asked") == "$new_image" ]] || fail "the images were not asked for with the image of the new release"
+grep -q -- "-f .*/velydock-$second/docker-compose.yml config --images\$" "$stub/calls" || fail "the images were not taken from the Compose file of the new release"
+rm "$stub/images-missing"
+: > "$stub/calls"
+expect 1 "images of version $second could not be fetched.*Nothing was changed" "${updating[@]}" "$one/scripts/velydock" update --yes
+[[ $(fingerprint "$one") == "$before" ]] || fail "an update whose images could not be fetched changed the installation"
+grep -q -- "^compose --project-directory $one --env-file $one/.env -f .*/velydock-$second/docker-compose.yml pull --quiet\$" "$stub/calls" ||
+  fail "the images were not fetched with the Compose file of the new release: $(tr '\n' ';' < "$stub/calls")"
+if grep -q 'pg_dump\|compose up' "$stub/calls"; then fail "an update whose images could not be fetched went on to back up or to start"; fi
+expect 0 "Velydock $first in" "${updating[@]}" "$one/scripts/velydock" status
+rm "$stub/fail-pull"
+: > "$stub/calls"
+"${updating[@]}" "$one/scripts/velydock" update --yes > "$work/update.out" 2>&1 || { cat "$work/update.out" >&2; fail "the repeated update failed"; }
+grep -q "Velydock was updated: $first -> $second" "$work/update.out" || fail "the repeated update did not report $first -> $second"
+is_release "$one" "$work/stage2/velydock-$second" || fail "after the update the program files are not those of $second"
+grep -qxF "VELYDOCK_IMAGE=$new_image" "$one/.env" || fail "after the update .env does not name the new image"
+[[ ! -e $one/.update-state && $(cat "$one/.previous/$first/VERSION") == "$first" && $(cat "$one/.previous/$first.image") == "$old_image" ]] ||
+  fail "after the update: .update-state left, or .previous is not the first release"
+fetched=$(call_line ' pull --quiet$')
+dumped=$(call_line 'pg_dump')
+up=$(call_line '^compose up -d --wait')
+if [[ -z $fetched || -z $dumped || -z $up ]] || (( fetched > dumped || dumped > up )); then
+  fail "update: expected images, backup, start in this order - got: $(tr '\n' ';' < "$stub/calls")"
+fi
+# An installer run that never finished has nothing left to finish after an update.
+[[ ! -e $one/.install-state ]] || fail "the update left the stale .install-state"
+grep -q "removed $one/.install-state" "$work/update.out" || fail "the update did not say that it removed .install-state"
+echo "update: images first; when they cannot be fetched nothing is changed, and the update can be repeated"
+
+# 2. What runs is compared with what .env names; a leftover of the installer is reported.
+echo "example.invalid/velydock:0.0.1" > "$stub/running-image"
+expect 1 'runs the image example.invalid/velydock:0.0.1' "${updating[@]}" "$one/scripts/velydock" status
+"${updating[@]}" "$one/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said '^\[FAIL\] the container velydock runs the image example.invalid/velydock:0.0.1, but .env names'
+echo "$new_image" > "$stub/running-image"
+expect 0 'Everything is running' "${updating[@]}" "$one/scripts/velydock" status
+touch "$one/.install-state"
+"${updating[@]}" "$one/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said '^\[ ok \] the container velydock runs the image .env names'
+said '^\[warn\] the installer did not finish here'
+said '^\[ ok \] the installation directory can be changed by its owner only'
+chmod 777 "$one"
+"${updating[@]}" "$one/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said '^\[FAIL\] the installation directory .* has mode 777'
+chmod 755 "$one"
+rm "$stub/running-image" "$one/.install-state"
+
+# 3. Replacing the program files fails half-way (here: a directory where a file belongs): what
+#    was replaced is put back, with the image line, and after the repair the update works.
+two=$work/update-two
+fresh_installation "$two"
+rm "$two/scripts/restore.sh"
+mkdir "$two/scripts/restore.sh"
+before=$(fingerprint "$two")
+expect 1 "files and the image of $first are back in place" "${updating[@]}" "$two/scripts/velydock" update --yes
+[[ $(fingerprint "$two" | grep -v ' \./\.previous/\| \./backups/') == "$before" ]] ||
+  fail "after a failed replacement the installation is not as before: $(diff <(echo "$before") <(fingerprint "$two") | grep -v previous | head -n 5)"
+[[ $(cat "$two/VERSION") == "$first" && $(cat "$two/IMAGE") == "$old_image" && ! -e $two/.update-state ]] || fail "after a failed replacement: VERSION, IMAGE or .update-state"
+[[ -z $(find "$two" -name '*.new.*') ]] || fail "a failed replacement left half-written files: $(find "$two" -name '*.new.*')"
+rmdir "$two/scripts/restore.sh"
+install -m 755 "$stage/velydock-$first/scripts/restore.sh" "$two/scripts/restore.sh"
+python3 -c 'import time; time.sleep(1.1)'
+"${updating[@]}" "$two/scripts/velydock" update --yes > "$work/update.out" 2>&1 || { cat "$work/update.out" >&2; fail "the update after the repair failed"; }
+is_release "$two" "$work/stage2/velydock-$second" || fail "after the repaired update the program files are not those of $second"
+echo "update: a replacement that fails half-way is taken back"
+
+# 4. Cut off for good while it replaced files (as after a power failure): .update-state stays.
+#    status and doctor say so, nothing is started from the mixture, and "update" finishes it
+#    without overwriting what was kept of the old release.
+three=$work/update-three
+fresh_installation "$three"
+mkdir -p "$three/.previous/$first"
+cp -a "$stage/velydock-$first/." "$three/.previous/$first/"
+echo "$old_image" > "$three/.previous/$first.image"
+printf 'from=%s\nto=%s\n' "$first" "$second" > "$three/.update-state"
+install -m 644 "$work/stage2/velydock-$second/IMAGE" "$three/IMAGE"
+expect 1 "update from $first to $second was cut off" "${updating[@]}" "$three/scripts/velydock" status
+"${updating[@]}" "$three/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said "^\\[FAIL\\] an update from $first to $second was cut off"
+expect 1 'nothing is started from this mixture' "${updating[@]}" "$three/scripts/velydock" start
+expect 1 "Finish it first: velydock update --version $second" "${updating[@]}" "$three/scripts/velydock" update --version 9.9.9 --yes
+"${updating[@]}" "$three/scripts/velydock" update --yes > "$work/update.out" 2>&1 || { cat "$work/update.out" >&2; fail "finishing an update that was cut off failed"; }
+grep -q 'It is finished now' "$work/update.out" || fail "the update did not say that it finishes the one that was cut off"
+is_release "$three" "$work/stage2/velydock-$second" || fail "after finishing, the program files are not those of $second"
+[[ ! -e $three/.update-state && $(cat "$three/.previous/$first/IMAGE") == "$old_image" ]] ||
+  fail "after finishing: .update-state left, or the kept copy of $first was overwritten with the mixture"
+expect 0 'Everything is running' "${updating[@]}" "$three/scripts/velydock" status
+kill "$files_pid" 2>/dev/null
+wait "$files_pid" 2>/dev/null || true
+files_pid=""
+echo "update: one that was cut off is reported by status and doctor, and finished by the next update"
+
 if [[ ${INSTALLER_TEST_ONLY:-} == quick ]]; then
   passed=" (the quick part only: INSTALLER_TEST_ONLY=quick)"
   exit 0
@@ -561,6 +826,10 @@ latest() {
 mkdir -p "$release/download"
 first_image=$(publish "$first")
 second_image=$(publish "$second")
+# A release whose image is not in the registry.
+unfetchable=0.1.5
+"$repo/scripts/make-bundle.sh" "$unfetchable" "$registry/velydock:$unfetchable@sha256:$(printf '%064d' 0)" \
+  "$release/download/v$unfetchable" >/dev/null
 [[ ${first_image##*@} != "${second_image##*@}" ]] || fail "both versions have the same image."
 if docker image inspect "$first_image" >/dev/null 2>&1; then fail "$first_image is still present locally; the test would not pull it."; fi
 latest "$first"
@@ -847,23 +1116,22 @@ accounts=$((accounts + 1))
 [[ $(users) == "$accounts" ]] || fail "velydock admin did not create a further administrator"
 
 section "own certificates (velydock cert)"
-if docker exec "$(container velydock)" velydock cert --help >/dev/null 2>&1; then
-  make_cert served 30 'DNS:*.itest.localhost'
-  velydock cert add "$certs/served.pem" "$certs/served.key"
-  expect 0 'wildcard-itest-localhost' velydock cert list
-  wanted=$(openssl x509 -in "$certs/served.pem" -noout -fingerprint -sha256)
-  for _ in $(seq 1 60); do
-    found=$(openssl s_client -connect "$https_endpoint" -servername dock.itest.localhost </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null || true)
-    [[ $found == "$wanted" ]] && break
-    python3 -c 'import time; time.sleep(1)'
-  done
-  [[ $found == "$wanted" ]] || fail "the imported certificate is not served"
-  expect 0 'dock.itest.localhost: certificate valid until' velydock doctor
-  velydock cert remove wildcard-itest-localhost
-  echo "imported, served, listed, removed"
-else
-  echo "SKIPPED: the image $source_image has no 'velydock cert' command; only what the wrapper sends was tested (part 2)."
-fi
+docker exec "$(container velydock)" velydock cert --help >/dev/null 2>&1 ||
+  fail "'velydock cert --help' fails in the container of $source_image: the image must have the certificate commands"
+make_cert served 30 'DNS:*.itest.localhost'
+velydock cert add "$certs/served.pem" "$certs/served.key"
+expect 0 'wildcard-itest-localhost' velydock cert list
+wanted=$(openssl x509 -in "$certs/served.pem" -noout -fingerprint -sha256)
+found=""
+for _ in $(seq 1 60); do
+  found=$(openssl s_client -connect "$https_endpoint" -servername dock.itest.localhost </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null || true)
+  [[ $found == "$wanted" ]] && break
+  python3 -c 'import time; time.sleep(1)'
+done
+[[ $found == "$wanted" ]] || fail "the imported certificate is not served"
+expect 0 'dock.itest.localhost: certificate valid until' velydock doctor
+velydock cert remove wildcard-itest-localhost
+echo "imported, served, listed, removed"
 
 section "velydock backup"
 velydock backup
@@ -893,6 +1161,18 @@ as_root bash -c "echo '# changed on this server' >> '$dir/docker-compose.keycloa
 as_root bash -c "echo gone > '$dir/deploy/retired.txt' && cd '$dir' && sha256sum deploy/retired.txt >> MANIFEST"
 as_root bash -c "echo '# not from Velydock' > '$dir/deploy/traefik/dynamic/zz-other.yml'"
 expect 0 "program files differ from release $first.*docker-compose.keycloak-admin.yml" velydock doctor
+# An update whose image the registry does not have: it fails before anything is changed - no
+# backup, no file, not the image line -, Velydock runs on, and the next update is not in the way.
+env_before=$(as_root sha256sum "$dir/.env")
+backups_before=$(as_root find "$dir/backups" -mindepth 1 -maxdepth 1 | wc -l)
+expect 1 "images of version $unfetchable could not be fetched.*Nothing was changed" velydock update --version "$unfetchable" --yes
+[[ $(as_root cat "$dir/VERSION") == "$first" ]] || fail "an update that could not fetch its image changed VERSION"
+[[ $(as_root sha256sum "$dir/.env") == "$env_before" ]] || fail "an update that could not fetch its image changed .env"
+as_root test ! -e "$dir/.previous" || fail "an update that could not fetch its image left .previous"
+as_root test ! -e "$dir/.update-state" || fail "an update that could not fetch its image left .update-state"
+[[ $(as_root find "$dir/backups" -mindepth 1 -maxdepth 1 | wc -l) == "$backups_before" ]] || fail "an update that could not fetch its image made a backup"
+[[ $(docker inspect --format '{{.Config.Image}}' "$(container velydock)") == "$first_image" ]] || fail "an update that could not fetch its image replaced the container"
+velydock status
 latest "$second"
 expect 0 "version $first is installed, $second is available" velydock doctor
 expect 1 'nobody can be asked here' unattended_velydock update
@@ -1025,6 +1305,46 @@ velydock restore "$saved" --yes
   fail "Keycloak on the new server does not know $admin"
 velydock status
 expect 0 ' 0 failures' velydock doctor
+velydock uninstall --purge --yes >/dev/null
+[[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]] || fail "purge left containers"
+[[ -z $(docker volume ls -q --filter "label=com.docker.compose.project=$project") ]] || fail "purge left volumes"
+as_root test ! -e "$dir" || fail "purge left $dir"
+started=0
+
+# ---- 7. an own certificate from the first minute ------------------------------------------------
+
+section "install.sh --yes --tls own: the installation is served with the given certificate"
+# One certificate for every name of the installation; the installer checks it before anything
+# starts, stores it once the stack runs, and nothing is fetched from anywhere.
+make_cert firstminute 30 'DNS:*.itest.localhost,DNS:*.apps.itest.localhost'
+started=1
+installer --lang en --yes "${install_options[@]}" --version "$second" --domain itest.localhost --tls own \
+  --cert "$certs/firstminute.pem" --key "$certs/firstminute.key" \
+  --admin-user "$admin" --admin-email chef@example.com --no-backup > "$work/own.out" 2>&1 </dev/null || {
+  cat "$work/own.out" >&2
+  fail "the installation with an own certificate failed"
+}
+grep -q 'One-time password' "$work/own.out" || fail "the installation with an own certificate printed no one-time password"
+as_root grep -qxF 'TLS_RESOLVER=' "$dir/.env" || fail "TLS_RESOLVER= is missing in .env (own certificate)"
+if grep -qF -- "-----BEGIN" "$work/own.out"; then fail "the installer printed key or certificate material"; fi
+wanted=$(openssl x509 -in "$certs/firstminute.pem" -noout -fingerprint -sha256)
+for name in dock.itest.localhost auth.itest.localhost sandbox.itest.localhost apps.itest.localhost wiki.apps.itest.localhost; do
+  found=""
+  for _ in $(seq 1 60); do
+    found=$(openssl s_client -connect "$https_endpoint" -servername "$name" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null || true)
+    [[ $found == "$wanted" ]] && break
+    python3 -c 'import time; time.sleep(1)'
+  done
+  [[ $found == "$wanted" ]] || fail "$name is not served with the certificate given to the installer"
+done
+# Named after its first DNS name, as "velydock cert add" does without --name.
+expect 0 'wildcard-itest-localhost' velydock cert list
+expect 0 'dock.itest.localhost: certificate valid until' velydock doctor
+# The key file given to the installer is not kept anywhere in the installation directory.
+if as_root grep -rlF -- "$(sed -n 2p "$certs/firstminute.key")" "$dir" 2>/dev/null | grep -q .; then
+  fail "the private key is in a file of the installation directory"
+fi
+echo "installed with an own certificate; all five names are served with it"
 velydock uninstall --purge --yes >/dev/null
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]] || fail "purge left containers"
 [[ -z $(docker volume ls -q --filter "label=com.docker.compose.project=$project") ]] || fail "purge left volumes"
