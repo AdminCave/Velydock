@@ -238,6 +238,33 @@ Was bleibt:
 - Veröffentlichte Routen haben keine voreingestellte Ratenbegrenzung; sie lässt sich je App oder
   Vorlage setzen. Der Umweg über Velydocks Anmeldung (`/proxy/login`) ist wie die API begrenzt.
 
+## Eigene Zertifikate und ihre Schlüssel
+
+Systemadministratoren können TLS-Zertifikate mit privatem Schlüssel hochladen
+([betrieb.md](betrieb.md#zertifikate-tls)). Für den Schlüssel gilt:
+
+- **Wer hochladen darf:** nur Systemadministratoren. Die Tabelle ist per Row Level Security
+  ausschließlich im Systemkontext sichtbar – auch lesend. Eine Anfrage im Kontext einer
+  Organisation sieht keine Zeile, was immer sie abfragt (`test_certificates.py::TestWhoMay`).
+- **Der Schlüssel verlässt Velydock über keine Schnittstelle.** Keine Antwort der API enthält ihn,
+  auch keine Fehlermeldung; das Protokoll nennt Namen, Fingerabdruck und Ablaufdatum.
+- **Zum Proxy kommt er als Datei,** nicht über das Netz: Velydock schreibt Zertifikat und Schlüssel
+  in ein Volume, das der Proxy nur lesend eingebunden hat (Dateien `0640`, lesbar für den Benutzer
+  des Velydock-Containers und dessen Gruppe, die der Proxy zusätzlich bekommt). Was der Proxy bei
+  Velydock abruft, enthält nur die Dateinamen.
+- **Gespeichert wird er unverschlüsselt** – in der Datenbank und im Volume. Der Proxy muss ihn
+  ohne Zutun lesen können; ein Schlüssel für die Verschlüsselung läge in derselben `.env` daneben.
+  Das entspricht dem, wie Traefik die Schlüssel der Let's-Encrypt-Zertifikate ablegt. Wer die
+  Datenbank oder ein Backup lesen kann, hat die Schlüssel: Backups verschlüsseln und nicht auf
+  demselben Server lassen ([betrieb.md](betrieb.md#backup)).
+- **Eine Passphrase** wird nur zum Öffnen des hochgeladenen Schlüssels verwendet und nicht
+  gespeichert.
+- **Was der Proxy bekommt, ist vorher geprüft:** Schlüssel passt zum Zertifikat, Schlüsseltyp und
+  -länge, Gültigkeit, Namen. Traefik übergeht ein Zertifikat, das es nicht laden kann, ohne
+  Meldung – und lieferte dann sein selbstsigniertes aus.
+- **Dateien im Volume** heißen nach dem SHA-256-Fingerabdruck des Zertifikats; Velydock löscht dort
+  nur Dateien, die diesem Muster folgen.
+
 ## Eingaben
 
 - Alle Anfragen werden gegen ein Schema geprüft; unbekannte Felder führen zu einem Fehler.

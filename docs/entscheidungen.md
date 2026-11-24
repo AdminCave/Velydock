@@ -254,7 +254,36 @@ Technisch folgt daraus:
 - Die Anmeldeseite übernimmt nichts von einer Organisation: Dort ist noch nicht bekannt, wer
   sich anmeldet.
 
-## 17. Abweichungen vom freigegebenen Vorschlag
+## 17. Eigene Zertifikate (24.11.2026)
+
+Der Auftraggeber wollte neben Let's Encrypt eigene TLS-Zertifikate hochladen können. Ohne
+Rückfrage entschieden, weil es aus dem Bestehenden folgt:
+
+- **Systemadministratoren, für die ganze Installation.** Ein Zertifikat gilt für die Namen, die
+  in ihm stehen, gleich welcher Organisation eine Adresse dient. Organisationen laden keine hoch:
+  Ihre veröffentlichten Apps liegen unter dem Apps-Host der Installation, nicht unter eigenen
+  Domains.
+- **Die Datenbank ist der eine Ort.** Zertifikat und Schlüssel liegen dort (und damit im Backup);
+  das Volume für den Proxy ist eine Kopie, die Velydock jederzeit neu schreibt.
+- **Der Schlüssel geht nicht über das Netz.** Der Proxy bekommt Dateinamen, nicht Inhalte, obwohl
+  Traefik beides annähme: Was er bei Velydock abruft, kann jeder Container im selben Netz
+  mitlesen, der es darauf anlegt.
+- **Unverschlüsselt gespeichert,** wie Traefik es mit den Let's-Encrypt-Schlüsseln hält: Der
+  Schlüssel dazu läge in derselben `.env`, und ein getauschtes `VELYDOCK_SECRET_KEY` machte alle
+  Zertifikate unbrauchbar ([sicherheit.md](sicherheit.md#eigene-zertifikate-und-ihre-schlüssel)).
+- **Velydock sagt dem Proxy, für welche Namen er selbst Zertifikate holt.** Zuerst trugen die
+  Routen von Velydock, Anmeldung und Sandbox den Let's-Encrypt-Resolver fest in der Datei. Ein Test
+  gegen den echten Proxy zeigte, wohin das führt: Für einen Namen lagen dann zwei Zertifikate vor,
+  und Traefik nimmt das, dessen Namensliste alphabetisch später steht – ein hochgeladenes
+  Platzhalter-Zertifikat verlor immer. Jetzt nennt dieselbe Antwort, die die hochgeladenen
+  Zertifikate nennt, auch die Namen, für die der Proxy eines holen soll; ein Name mit eigenem
+  Zertifikat ist nie darunter. Für Namen, die *vorher* schon ein geholtes hatten, bleibt ein
+  Handgriff auf dem Server ([betrieb.md](betrieb.md#zertifikate-tls)): Velydock kann Traefiks
+  Speicher nicht ändern, während der Proxy läuft, und hat keinen Zugriff auf Docker.
+- **Ein Name steht in höchstens einem hinterlegten Zertifikat.** Sonst entschiede wieder die
+  alphabetische Reihenfolge.
+
+## 18. Abweichungen vom freigegebenen Vorschlag
 
 - Python 3.13 statt 3.14: identisch mit der Entwicklungs- und Testumgebung.
 - Bits UI wurde nicht benötigt; die Komponenten basieren auf denen von AdminHelper.

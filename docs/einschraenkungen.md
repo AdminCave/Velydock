@@ -61,6 +61,16 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - **Entzogener Zugriff wirkt bei veröffentlichten Apps nach bis zu 30 Sekunden:** So lange merkt
   sich Velydock die Antwort auf die Frage, ob jemand eine App nutzen darf. Eine Sperre direkt in
   Keycloak wirkt wie in der Oberfläche nach bis zu fünf Minuten.
+- **Eigene Zertifikate verlängert niemand automatisch.** Die Seite und das Log warnen 30 Tage vor
+  dem Ablauf; ersetzen muss ein Systemadministrator. Angenommen werden PEM und PKCS#12, Schlüssel
+  als RSA (ab 2048 Bit) oder ECDSA P-256/P-384 – keine DER-Dateien, kein Ed25519.
+- **Ein Name, für den der Proxy schon ein Let's-Encrypt-Zertifikat geholt hat, braucht einen
+  Handgriff auf dem Server,** bevor ein hochgeladenes für ihn gilt: Traefik behält geholte
+  Zertifikate und zieht sie je nach Namen vor ([betrieb.md](betrieb.md#zertifikate-tls)). Die
+  Seite zeigt an, wenn das der Fall ist.
+- **Zertifikate gelten für die ganze Installation.** Eine Organisation kann kein eigenes
+  hochladen, und veröffentlichte Apps liegen immer unter dem Apps-Host, nicht unter einer
+  eigenen Domain der Organisation.
 - **Vorhandene Benutzer fügt nur der Systemadministrator weiteren Organisationen hinzu.** Eine
   Einladung durch Mandantenadministratoren gibt es nicht.
 - **Feste Rollen.** Eigene Rollen lassen sich nicht definieren.
@@ -100,7 +110,9 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - LDAP/AD-Föderation und externe Identity Provider.
 - Der Versand von E-Mails über den SMTP-Server eines Anbieters mit Anmeldung und TLS. Getestet
   ist der Weg über einen lokalen Mail-Empfänger ohne beides ([tests.md](tests.md)).
-- Let's-Encrypt-Zertifikate (die Tests laufen mit Traefiks selbstsigniertem Zertifikat).
+- Zertifikate von Let's Encrypt selbst. Der Weg dorthin ist mit dessen Testserver Pebble
+  geprüft (`scripts/tests/tls-modes.sh`: Bestellung, Prüfung des Namens über Port 80, Auslieferung),
+  nicht mit dem echten Dienst und nicht unter echten Domainnamen.
 - Firefox und WebKit in der CI. Die Browser-Suite läuft auf Wunsch auch in beiden
   ([tests.md](tests.md#andere-browser)) und ist dort einmal vollständig gelaufen; die CI
   prüft nur Chromium. Safari selbst (macOS, iOS) und Edge sind nicht geprüft – WebKit unter

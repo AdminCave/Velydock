@@ -76,6 +76,7 @@ users ──1 user_settings        Design, Akzentfarbe, Dock-Position, App-Leist
 users ──< sessions             serverseitige Sitzungen (nur der Hash des Cookies)
 system_settings                Instanzname, Standardwerte, Zwei-Faktor-Pflicht
 proxy_templates                eigene Vorlagen für Proxy-Einstellungen (für alle Organisationen)
+certificates                   hochgeladene TLS-Zertifikate mit Schlüssel (nur im Systemkontext sichtbar)
 ```
 
 - `users` enthält eine Zeile je Identität im gemeinsamen Keycloak-Realm. `home_tenant_id` nennt

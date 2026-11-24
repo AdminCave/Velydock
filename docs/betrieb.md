@@ -8,6 +8,7 @@
 | `keycloak` | Keine eigenen (liegt in PostgreSQL) | – |
 | `velydock` | Keine eigenen (liegt in PostgreSQL) | – |
 | `traefik` | Let's-Encrypt-Zertifikate (werden bei Verlust neu ausgestellt) | `traefik-acme` |
+| `velydock`, `traefik` | Kopien der hochgeladenen Zertifikate für den Proxy (werden aus der Datenbank neu geschrieben) | `velydock-certs` |
 | `theme` | Login-Theme, wird bei jedem Start aus dem Image neu geschrieben | `keycloak-themes` |
 
 Dazu kommt die Datei `.env` mit allen Geheimnissen.
@@ -164,6 +165,103 @@ dem Backup einspielen.
 Der Ablauf Backup → Datenverlust → Wiederherstellung wird in der CI gegen den vollständigen
 Stack getestet (`scripts/tests/backup-restore.sh`).
 
+## Zertifikate (TLS)
+
+Der mitgelieferte Proxy liefert jede Adresse der Installation mit einem von drei Zertifikaten
+aus:
+
+| | Woher | Wann |
+|---|---|---|
+| **Let's Encrypt** | holt der Proxy selbst und verlängert es selbst | Standard (`TLS_RESOLVER=letsencrypt`). Braucht Port 80 von außen und passende DNS-Einträge. |
+| **Eigenes Zertifikat** | lädt ein Systemadministrator hoch | Für jeden Namen, für den eines hinterlegt ist – mit oder ohne Let's Encrypt daneben. |
+| **Ersatzzertifikat** | erzeugt der Proxy selbst (selbstsigniert, Browser warnen) | Für Namen ohne eigenes Zertifikat, wenn Let's Encrypt aus ist (`TLS_RESOLVER=` leer). Nur zum Ausprobieren. |
+
+### Eigene Zertifikate
+
+Hochgeladen wird unter **System → Zertifikate** ([administration.md](administration.md#zertifikate))
+oder auf der Kommandozeile:
+
+```bash
+# Zertifikat, Kette und privater Schlüssel als PEM, in beliebiger Reihenfolge, über die Standardeingabe
+cat fullchain.pem privkey.pem | docker compose exec -T velydock velydock cert add --name "Firma 2027"
+docker compose exec velydock velydock cert list
+# Verlängerung: gleicher Name, neues Zertifikat
+cat neu-fullchain.pem neu-privkey.pem | docker compose exec -T velydock velydock cert add --name "Firma 2027" --replace
+docker compose exec velydock velydock cert remove "Firma 2027"
+```
+
+- **Was angenommen wird:** PEM (Zertifikat, die Zertifikate seiner Aussteller, Schlüssel) oder
+  eine PKCS#12-Datei (`.p12`, `.pfx`; nur in der Oberfläche). Schlüssel: RSA mit 2048 bis 8192
+  Bit oder ECDSA P-256/P-384 – was Browser akzeptieren. Ein mit Passphrase geschützter Schlüssel
+  wird mit der Passphrase geöffnet und ohne sie gespeichert: Der Proxy muss ihn unbeaufsichtigt
+  lesen können.
+- **Was abgelehnt wird,** jeweils mit dem Grund: ein Schlüssel, der nicht zum Zertifikat gehört;
+  ein abgelaufenes Zertifikat; eines ohne Namen im Feld *Subject Alternative Name* (Browser werten
+  den *Common Name* nicht mehr aus); ein nicht unterstützter Schlüsseltyp. Traefik würde ein
+  Zertifikat, das es nicht laden kann, wortlos übergehen – deshalb prüft Velydock vorher.
+- **Kette:** Die Zertifikate der Aussteller gehören dazu („fullchain“). Fehlen sie, speichert
+  Velydock das Zertifikat trotzdem und warnt: Browser, die den Aussteller nicht kennen, lehnen die
+  Verbindung ab. Ein mitgeliefertes Wurzelzertifikat wird nicht gespeichert; Clients haben ihr
+  eigenes.
+- **Für welche Adressen es gilt:** für jeden Namen, der im Zertifikat steht – Velydock, Anmeldung,
+  Sandbox, Apps-Host und veröffentlichte Apps. Ein Platzhalter (`*.example.com`) steht für genau
+  eine Ebene: `dock.example.com` ja, `example.com` und `a.dock.example.com` nein.
+- **Ein Name, ein Zertifikat:** Velydock nimmt kein zweites Zertifikat an, in dem ein Name eines
+  hinterlegten steht – eine Verlängerung geht über **Ersetzen** (`--replace`). Ein Platzhalter neben
+  einem genauen Namen ist erlaubt; dann gilt das Zertifikat mit dem genauen Namen.
+- **Ablauf:** Ein eigenes Zertifikat verlängert niemand automatisch. Die Seite zeigt „läuft bald
+  ab“ ab 30 Tagen vor dem Ende; im selben Zeitraum schreibt Velydock zweimal täglich eine Zeile
+  `WARNING certificate "…" expires on …` ins Log (`docker compose logs velydock`).
+- **Wirkung:** nach wenigen Sekunden, ohne Neustart. Die Seite zeigt je Adresse, welches Zertifikat
+  der Proxy *tatsächlich* ausliefert – Velydock fragt ihn dafür wie ein Browser.
+
+**Wie es zum Proxy kommt.** Zertifikate und Schlüssel liegen in der Datenbank (und damit im
+Backup). Velydock schreibt sie in das Volume `velydock-certs`, das der Proxy nur lesend eingebunden
+hat, und nennt ihm mit den Routen die Dateinamen (`/internal/proxy/traefik`, siehe
+[Apps über den Proxy veröffentlichen](#apps-über-den-proxy-veröffentlichen)). Der Schlüssel selbst
+geht nicht über das Netz. Das Volume muss nicht gesichert werden: Ist es leer – neuer Server,
+zurückgespieltes Backup –, schreibt Velydock es beim nächsten Abruf des Proxys neu. Voraussetzung
+ist `VELYDOCK_PROXY_SECRET` in `.env`; `install.sh` erzeugt es.
+
+### Let's Encrypt und eigene Zertifikate nebeneinander
+
+Für welche Namen der Proxy bei Let's Encrypt ein Zertifikat holt, sagt ihm Velydock: für die
+eigenen Adressen (Velydock, Anmeldung, Sandbox) und für veröffentlichte Apps – jeweils nur, solange
+für den Namen **kein** eigenes Zertifikat hinterlegt ist. Wird eines entfernt, holt der Proxy
+wieder selbst eines.
+
+Eine Ausnahme braucht einen Handgriff: **ein Name, für den der Proxy früher schon ein Zertifikat
+geholt hat.** Traefik behält jedes geholte Zertifikat und verlängert es weiter. Liegen für einen
+Namen zwei vor, nimmt es das, dessen Namensliste alphabetisch später steht – ein hochgeladenes
+Platzhalter-Zertifikat verliert so immer gegen ein geholtes. Die Seite zeigt das an („ausgeliefert
+wird ein anderes Zertifikat“). Dann das geholte aus Traefiks Speicher nehmen, während der Proxy
+steht (etwa zehn Sekunden Unterbrechung):
+
+```bash
+docker compose stop traefik
+docker compose run --rm --no-deps --user 0:0 -v velydock_traefik-acme:/acme \
+  velydock cert prune-fetched /acme/acme.json
+docker compose start traefik
+```
+
+Der Befehl entfernt nur geholte Zertifikate für Namen, die ein eigenes haben, und nennt sie. Gilt
+ein geholtes für mehrere Namen, geht es als Ganzes; für die übrigen holt der Proxy beim Start ein
+neues. `velydock_` ist der Projektname der Installation (`docker compose ls`).
+
+**Ganz auf eigene Zertifikate umstellen:** `TLS_RESOLVER=` (leer) in `.env`, `docker compose up -d`,
+dann wie oben aufräumen. Der Proxy holt danach nichts mehr; Namen ohne eigenes Zertifikat bekommen
+das Ersatzzertifikat.
+
+**Let's Encrypt ausprobieren, ohne das Limit zu berühren:** `ACME_CA_SERVER` in `.env` nennt ein
+anderes ACME-Verzeichnis, zum Beispiel die Testumgebung von Let's Encrypt
+(`https://acme-staging-v02.api.letsencrypt.org/directory`; deren Zertifikaten vertrauen Browser
+nicht). Vor dem Wechsel zurück das Volume `traefik-acme` löschen, sonst behält der Proxy die
+Test-Zertifikate.
+
+**Eigener Reverse Proxy:** Ohne den mitgelieferten Traefik (`COMPOSE_PROFILES` leer) haben
+hochgeladene Zertifikate keine Wirkung; die Seite zeigt dann „Proxy antwortet nicht“. TLS ist dort
+Sache des eigenen Proxys.
+
 ## Eigener Reverse Proxy
 
 In `.env` `COMPOSE_PROFILES=` leer setzen; Traefik startet dann nicht. Der eigene Proxy muss die
@@ -262,8 +360,10 @@ Funktion ist aus, solange `APPS_HOST` in `.env` leer ist.
 **Zertifikate.** Für jeden veröffentlichten Hostnamen holt Traefik ein eigenes Zertifikat von
 Let's Encrypt, sobald die App veröffentlicht ist und der DNS-Eintrag stimmt. Let's Encrypt
 begrenzt die Zahl neuer Zertifikate je Domain und Woche (derzeit 50) – wer viele Apps auf
-Subdomains veröffentlicht, plant das ein oder nutzt den Pfad-Modus, der mit dem einen Zertifikat
-von `APPS_HOST` auskommt.
+Subdomains veröffentlicht, plant das ein, nutzt den Pfad-Modus, der mit dem einen Zertifikat von
+`APPS_HOST` auskommt, oder hinterlegt **vor dem Veröffentlichen** ein eigenes
+Platzhalter-Zertifikat (`*.apps.example.com`): Für Namen mit eigenem Zertifikat holt der Proxy
+keines ([Zertifikate](#zertifikate-tls)).
 
 **Was der Proxy erreichen muss.** Traefik baut die Verbindung zur internen Adresse auf. Sie muss
 vom Server aus erreichbar sein (Routing, Firewall). Adressen dieser Installation selbst –
