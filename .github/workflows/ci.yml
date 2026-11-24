@@ -115,3 +115,49 @@ jobs:
             e2e/playwright-report
             e2e/test-results
           retention-days: 7
+
+  installer:
+    name: Installer (as root on the runner, from a local release)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Shell scripts are clean
+        run: shellcheck install.sh scripts/velydock scripts/*.sh scripts/tests/*.sh
+      - name: Build the image
+        run: docker build -t velydock:dev .
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: What needs root on a fresh system, in containers (Docker's packages on Debian and Ubuntu; launcher, timer and log with stand-ins)
+        run: bash scripts/tests/installer-system.sh
+      # The real thing: the installer as root with its defaults - /opt/velydock, ports 80 and
+      # 443, /usr/local/bin/velydock, the systemd timer for backups - then the first sign-in in
+      # a browser, backup, update to a second version, restore, uninstall and purge. The script
+      # calls sudo itself where a real administrator would.
+      - name: Installer as root (install, sign in, back up, update, restore, uninstall)
+        env:
+          INSTALLER_TEST_MODE: system
+        run: bash scripts/tests/installer.sh
+      - name: State on failure
+        if: failure()
+        run: |
+          docker ps -a
+          sudo tail -n 200 /var/log/velydock-install.log || true
+          sudo journalctl -u velydock-backup.service --no-pager -n 50 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: installer-playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
