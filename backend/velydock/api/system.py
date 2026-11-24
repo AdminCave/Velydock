@@ -14,6 +14,10 @@ from velydock.db import system_scope
 from velydock.idp.base import IdentityProvider
 from velydock.schemas import (
     AuditPage,
+    CertificateIn,
+    CertificateOut,
+    CertificateReplace,
+    CertificatesOut,
     MemberAdd,
     ProxyInfo,
     ProxyTargetIn,
@@ -32,6 +36,7 @@ from velydock.schemas import (
     TenantUpdate,
 )
 from velydock.services import audit as audit_service
+from velydock.services import certificates as certificates_service
 from velydock.services import proxy as proxy_service
 from velydock.services import settings as settings_service
 from velydock.services import tenants as tenants_service
@@ -229,4 +234,47 @@ async def delete_proxy_template(
     db: AsyncSession = Depends(get_db, scope="function"),
 ) -> Response:
     await proxy_service.delete_template(db, principal, template_id)
+    return Response(status_code=204)
+
+
+# ---- own TLS certificates ------------------------------------------------------------------------
+
+
+@router.get("/certificates", response_model=CertificatesOut)
+async def list_certificates(
+    _: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> CertificatesOut:
+    return await certificates_service.overview(db, settings)
+
+
+@router.post("/certificates", response_model=CertificateOut, status_code=201)
+async def add_certificate(
+    data: CertificateIn,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> CertificateOut:
+    return await certificates_service.add(db, principal, settings, data)
+
+
+@router.put("/certificates/{certificate_id}", response_model=CertificateOut)
+async def replace_certificate(
+    certificate_id: uuid.UUID,
+    data: CertificateReplace,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    settings: Settings = Depends(get_settings),
+) -> CertificateOut:
+    return await certificates_service.replace(db, principal, settings, certificate_id, data)
+
+
+@router.delete("/certificates/{certificate_id}", status_code=204)
+async def remove_certificate(
+    certificate_id: uuid.UUID,
+    principal: Principal = Depends(require_system_admin),
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> Response:
+    await certificates_service.remove(db, principal, certificate_id)
     return Response(status_code=204)

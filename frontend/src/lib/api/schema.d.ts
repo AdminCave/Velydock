@@ -414,6 +414,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/system/certificates': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Certificates */
+    get: operations['list_certificates_api_v1_system_certificates_get'];
+    put?: never;
+    /** Add Certificate */
+    post: operations['add_certificate_api_v1_system_certificates_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/system/certificates/{certificate_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Replace Certificate */
+    put: operations['replace_certificate_api_v1_system_certificates__certificate_id__put'];
+    post?: never;
+    /** Remove Certificate */
+    delete: operations['remove_certificate_api_v1_system_certificates__certificate_id__delete'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/system/proxy': {
     parameters: {
       query?: never;
@@ -903,6 +939,117 @@ export interface components {
       /** Total */
       total: number;
     };
+    /** CertificateHost */
+    CertificateHost: {
+      /** Certificate Id */
+      certificate_id: string | null;
+      /** Host */
+      host: string;
+      /** Label */
+      label: string;
+      /**
+       * Purpose
+       * @enum {string}
+       */
+      purpose: 'velydock' | 'keycloak' | 'sandbox' | 'apps' | 'app';
+      served: components['schemas']['ServedCertificate'];
+    };
+    /**
+     * CertificateIn
+     * @description A certificate with its private key: as PEM text, or as a PKCS#12 file (base64).
+     */
+    CertificateIn: {
+      /** Certificate */
+      certificate?: string | null;
+      /** Name */
+      name: string;
+      /** Passphrase */
+      passphrase?: string | null;
+      /** Pkcs12 */
+      pkcs12?: string | null;
+      /** Private Key */
+      private_key?: string | null;
+    };
+    /**
+     * CertificateOut
+     * @description What is stored about a certificate. The private key is not part of any answer.
+     */
+    CertificateOut: {
+      /** Chain */
+      chain: string[];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Fingerprint */
+      fingerprint: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Issuer */
+      issuer: string;
+      /** Key Type */
+      key_type: string;
+      /** Name */
+      name: string;
+      /** Names */
+      names: string[];
+      /**
+       * Not After
+       * Format: date-time
+       */
+      not_after: string;
+      /**
+       * Not Before
+       * Format: date-time
+       */
+      not_before: string;
+      /** Serial */
+      serial: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'valid' | 'expires_soon' | 'expired' | 'not_yet_valid';
+      /** Subject */
+      subject: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Warnings */
+      warnings: 'no_intermediate'[];
+    };
+    /** CertificateReplace */
+    CertificateReplace: {
+      /** Certificate */
+      certificate?: string | null;
+      /** Name */
+      name?: string | null;
+      /** Passphrase */
+      passphrase?: string | null;
+      /** Pkcs12 */
+      pkcs12?: string | null;
+      /** Private Key */
+      private_key?: string | null;
+    };
+    /** CertificatesOut */
+    CertificatesOut: {
+      /** Acme */
+      acme: boolean;
+      /** Available */
+      available: boolean;
+      /** Certificates */
+      certificates: components['schemas']['CertificateOut'][];
+      /** Hosts */
+      hosts: components['schemas']['CertificateHost'][];
+      /** Problem */
+      problem: ('no_directory' | 'no_secret' | 'not_writable') | null;
+    };
     /**
      * EffectiveSettings
      * @description What applies to this user in the active organization, and what the organization fixed.
@@ -1318,6 +1465,41 @@ export interface components {
      * @enum {string}
      */
     Role: 'member' | 'user_manager' | 'tenant_admin';
+    /**
+     * ServedCertificate
+     * @description What the proxy answered with when asked for a name.
+     */
+    ServedCertificate: {
+      /** Certificate Id */
+      certificate_id?: string | null;
+      /**
+       * Fingerprint
+       * @default
+       */
+      fingerprint: string;
+      /**
+       * Issuer
+       * @default
+       */
+      issuer: string;
+      /** Not After */
+      not_after?: string | null;
+      /**
+       * Source
+       * @enum {string}
+       */
+      source: 'uploaded' | 'other' | 'default' | 'unreachable' | 'unknown';
+      /**
+       * Subject
+       * @default
+       */
+      subject: string;
+      /**
+       * Valid For Host
+       * @default false
+       */
+      valid_for_host: boolean;
+    };
     /** SettingsUpdate */
     SettingsUpdate: {
       /** Accent Color */
@@ -2648,6 +2830,123 @@ export interface operations {
         content: {
           'application/json': components['schemas']['AuditPage'];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_certificates_api_v1_system_certificates_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CertificatesOut'];
+        };
+      };
+    };
+  };
+  add_certificate_api_v1_system_certificates_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CertificateIn'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CertificateOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  replace_certificate_api_v1_system_certificates__certificate_id__put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        certificate_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CertificateReplace'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CertificateOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  remove_certificate_api_v1_system_certificates__certificate_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        certificate_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Validation Error */
       422: {

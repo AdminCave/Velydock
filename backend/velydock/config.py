@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     proxy_tls_resolver: str = ""
     # The entry point of the proxy that serves the published addresses.
     proxy_entry_point: str = "websecure"
+    # Own TLS certificates. Velydock writes the uploaded ones into this directory, which the
+    # bundled proxy has mounted under the same path, and tells the proxy the file names along
+    # with its routes: private keys do not travel over the network. Without the directory (or
+    # without the secret the proxy fetches its configuration with) the feature is off.
+    certs_dir: str | None = None
+    # Where the bundled proxy answers TLS (host:port), to show which certificate a name really
+    # gets. Without it nothing is asked.
+    proxy_tls_address: str | None = None
 
     static_dir: str = "/app/static"
     theme_source_dir: str = "/opt/velydock/keycloak-theme"
@@ -82,7 +90,7 @@ class Settings(BaseSettings):
             raise ValueError("must be an absolute http(s) URL")
         return value
 
-    @field_validator("proxy_secret", mode="before")
+    @field_validator("proxy_secret", "certs_dir", "proxy_tls_address", mode="before")
     @classmethod
     def _empty_is_none(cls, value: object) -> object:
         # An empty variable in .env means "not set", not "a secret of no characters".

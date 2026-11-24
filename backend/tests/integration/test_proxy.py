@@ -102,10 +102,21 @@ async def publish(client: httpx.AsyncClient, name: str = "wiki", **fields: Any) 
 
 
 async def routes(world: World) -> dict[str, Any]:
+    """What the proxy is told about published apps.
+
+    The same answer also says for which of Velydock's own names the proxy fetches a certificate
+    (routers "vd-tls-…", see test_certificates.py); they are left out here.
+    """
     async with world.client() as client:
         response = await client.get("/internal/proxy/traefik", headers=FROM_PROXY)
     assert response.status_code == 200, response.text
-    return response.json()  # type: ignore[no-any-return]
+    told: dict[str, Any] = response.json()
+    routers = told.get("http", {}).get("routers", {})
+    for name in [name for name in routers if name.startswith("vd-tls-")]:
+        del routers[name]
+    if "http" in told and not routers:
+        del told["http"]
+    return told
 
 
 # ---------------------------------------------------------------------------------------------

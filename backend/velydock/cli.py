@@ -27,10 +27,11 @@ from velydock.errors import ApiError
 from velydock.idp.base import IdpError, IdpUnavailable
 from velydock.idp.keycloak import KeycloakIdp, ensure_realm, set_console_access
 from velydock.models import Membership, Role, Tenant, User
-from velydock.schemas import TenantCreate, UserCreate
+from velydock.schemas import CertificateIn, CertificateReplace, TenantCreate, UserCreate
 from velydock.security import sessions
 from velydock.security.tokens import temporary_password
 from velydock.services import audit
+from velydock.services import certificates as certificates_service
 from velydock.services import settings as settings_service
 from velydock.services import tenants as tenants_service
 
@@ -304,6 +305,80 @@ def serve(settings: Settings) -> None:
     )
 
 
+async def certificates(settings: Settings, args: argparse.Namespace, stdin: str | None = None) -> int:
+    """Own certificates from the command line: what the installer uses, and a way without a browser."""
+    if args.cert_command == "list":
+        async with transaction(Scope.SYSTEM) as db:
+            listed = await certificates_service.listed(db)
+        if not listed:
+            print("No certificates stored.")
+        for item in listed:
+            print(
+                f"{item.name}\t{', '.join(item.names)}\tvalid until {item.not_after:%Y-%m-%d}\t{item.status}"
+            )
+        return 0
+    if args.cert_command == "prune-fetched":
+        async with transaction(Scope.SYSTEM) as db:
+            rows = await certificates_service.rows(db)
+        try:
+            removed = certificates_service.prune_fetched(Path(args.storage), rows)
+        except FileNotFoundError:
+            print(f"error: {args.storage} does not exist", file=sys.stderr)
+            return 1
+        except (OSError, ValueError) as exc:
+            print(f"error: {args.storage} cannot be rewritten: {exc}", file=sys.stderr)
+            return 1
+        if not removed:
+            print(
+                "Nothing to remove: the proxy holds no fetched certificate for a name with an uploaded one."
+            )
+        for names in removed:
+            print(f"Removed the fetched certificate for {names}.")
+        return 0
+    if args.cert_command == "remove":
+        async with transaction(Scope.SYSTEM) as db:
+            row = await certificates_service.by_name(db, args.name)
+            if row is None:
+                print(f"error: no certificate is called {args.name!r}", file=sys.stderr)
+                return 1
+            await certificates_service.remove(db, None, row.id)
+        print(f"Removed {args.name}. The proxy stops serving it within a few seconds.")
+        return 0
+    text = sys.stdin.read() if stdin is None else stdin
+    async with transaction(Scope.SYSTEM) as db:
+        existing = await certificates_service.by_name(db, args.name)
+        if existing is not None and not args.replace:
+            print(
+                f"error: a certificate called {args.name!r} exists already (use --replace to renew it)",
+                file=sys.stderr,
+            )
+            return 1
+        if existing is not None:
+            stored = await certificates_service.replace(
+                db, None, settings, existing.id, CertificateReplace(certificate=text)
+            )
+        else:
+            stored = await certificates_service.add(
+                db, None, settings, CertificateIn(name=args.name, certificate=text)
+            )
+    print(f"Stored {stored.name}: valid for {', '.join(stored.names)} until {stored.not_after:%Y-%m-%d}.")
+    if "no_intermediate" in stored.warnings:
+        print(
+            "warning: the certificate of its issuer is not with it. Browsers that do not know the issuer "
+            'will refuse the connection; add the chain ("fullchain") and store it again with --replace.',
+            file=sys.stderr,
+        )
+    print("The proxy serves it within a few seconds.")
+    return 0
+
+
+async def _certificates_and_close(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        return await certificates(settings, args)
+    finally:
+        await dispose_engine()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="velydock", description=f"Velydock {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -323,6 +398,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     console.add_argument("--username", required=True)
     console.add_argument("--revoke", action="store_true", help="take the right away again")
+    cert = sub.add_parser("cert", help="own TLS certificates for the bundled proxy")
+    cert_sub = cert.add_subparsers(dest="cert_command", required=True)
+    cert_add = cert_sub.add_parser(
+        "add", help="store a certificate; reads certificate, chain and private key as PEM from standard input"
+    )
+    cert_add.add_argument("--name", required=True, help="what the certificate is called in the interface")
+    cert_add.add_argument("--replace", action="store_true", help="replace the certificate of this name")
+    cert_sub.add_parser("list", help="list the stored certificates")
+    cert_remove = cert_sub.add_parser("remove", help="remove a stored certificate")
+    cert_remove.add_argument("name")
+    cert_prune = cert_sub.add_parser(
+        "prune-fetched",
+        help="remove from the proxy's own store (acme.json) the certificates it fetched for names "
+        "that have an uploaded one; run it while the proxy is stopped",
+    )
+    cert_prune.add_argument("storage", help="path of the proxy's acme.json")
     theme = sub.add_parser("install-theme", help="copy the Keycloak login theme into a directory")
     theme.add_argument("target")
     sub.add_parser("version", help="print the version")
@@ -360,12 +451,28 @@ def main(argv: list[str] | None = None) -> int:
         except (IdpError, ApiError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+    if args.command == "cert":
+        try:
+            return asyncio.run(_certificates_and_close(settings, args))
+        except ValidationError as exc:
+            for problem in exc.errors():
+                print(f"error: {'.'.join(str(p) for p in problem['loc'])}: {problem['msg']}", file=sys.stderr)
+            return 1
+        except ApiError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "keycloak-admin":
         try:
             return asyncio.run(keycloak_admin(settings, args.username, args.revoke))
         except IdpError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+    if args.command in ("run", "serve") and settings.proxy_tls_resolver and not settings.proxy_secret:
+        # Not fatal: an installation behind a reverse proxy of its own needs neither.
+        logging.getLogger("velydock").error(
+            "VELYDOCK_PROXY_SECRET is not set: the bundled proxy cannot ask Velydock which certificates "
+            "to fetch and serves a self-signed one. Set it in .env (openssl rand -hex 32)."
+        )
     if args.command == "run":
         migrate(settings)
         asyncio.run(_bootstrap_and_close(settings))

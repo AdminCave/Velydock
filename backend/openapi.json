@@ -679,6 +679,345 @@
         "title": "AuditPage",
         "type": "object"
       },
+      "CertificateHost": {
+        "additionalProperties": false,
+        "properties": {
+          "certificate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate Id"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "velydock",
+              "keycloak",
+              "sandbox",
+              "apps",
+              "app"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "served": {
+            "$ref": "#/components/schemas/ServedCertificate"
+          }
+        },
+        "required": [
+          "host",
+          "purpose",
+          "label",
+          "certificate_id",
+          "served"
+        ],
+        "title": "CertificateHost",
+        "type": "object"
+      },
+      "CertificateIn": {
+        "additionalProperties": false,
+        "description": "A certificate with its private key: as PEM text, or as a PKCS#12 file (base64).",
+        "properties": {
+          "certificate": {
+            "anyOf": [
+              {
+                "maxLength": 131072,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "passphrase": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passphrase"
+          },
+          "pkcs12": {
+            "anyOf": [
+              {
+                "maxLength": 262144,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pkcs12"
+          },
+          "private_key": {
+            "anyOf": [
+              {
+                "maxLength": 131072,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Private Key"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CertificateIn",
+        "type": "object"
+      },
+      "CertificateOut": {
+        "additionalProperties": false,
+        "description": "What is stored about a certificate. The private key is not part of any answer.",
+        "properties": {
+          "chain": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chain",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "issuer": {
+            "title": "Issuer",
+            "type": "string"
+          },
+          "key_type": {
+            "title": "Key Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          },
+          "not_after": {
+            "format": "date-time",
+            "title": "Not After",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "title": "Not Before",
+            "type": "string"
+          },
+          "serial": {
+            "title": "Serial",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "valid",
+              "expires_soon",
+              "expired",
+              "not_yet_valid"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "const": "no_intermediate",
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "names",
+          "subject",
+          "issuer",
+          "chain",
+          "serial",
+          "key_type",
+          "fingerprint",
+          "not_before",
+          "not_after",
+          "status",
+          "warnings",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CertificateOut",
+        "type": "object"
+      },
+      "CertificateReplace": {
+        "additionalProperties": false,
+        "properties": {
+          "certificate": {
+            "anyOf": [
+              {
+                "maxLength": 131072,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "passphrase": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passphrase"
+          },
+          "pkcs12": {
+            "anyOf": [
+              {
+                "maxLength": 262144,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pkcs12"
+          },
+          "private_key": {
+            "anyOf": [
+              {
+                "maxLength": 131072,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Private Key"
+          }
+        },
+        "title": "CertificateReplace",
+        "type": "object"
+      },
+      "CertificatesOut": {
+        "additionalProperties": false,
+        "properties": {
+          "acme": {
+            "title": "Acme",
+            "type": "boolean"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "certificates": {
+            "items": {
+              "$ref": "#/components/schemas/CertificateOut"
+            },
+            "title": "Certificates",
+            "type": "array"
+          },
+          "hosts": {
+            "items": {
+              "$ref": "#/components/schemas/CertificateHost"
+            },
+            "title": "Hosts",
+            "type": "array"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_directory",
+                  "no_secret",
+                  "not_writable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "required": [
+          "available",
+          "problem",
+          "acme",
+          "certificates",
+          "hosts"
+        ],
+        "title": "CertificatesOut",
+        "type": "object"
+      },
       "EffectiveSettings": {
         "additionalProperties": false,
         "description": "What applies to this user in the active organization, and what the organization fixed.",
@@ -1777,6 +2116,72 @@
         ],
         "title": "Role",
         "type": "string"
+      },
+      "ServedCertificate": {
+        "additionalProperties": false,
+        "description": "What the proxy answered with when asked for a name.",
+        "properties": {
+          "certificate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate Id"
+          },
+          "fingerprint": {
+            "default": "",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "issuer": {
+            "default": "",
+            "title": "Issuer",
+            "type": "string"
+          },
+          "not_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not After"
+          },
+          "source": {
+            "enum": [
+              "uploaded",
+              "other",
+              "default",
+              "unreachable",
+              "unknown"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "title": "Subject",
+            "type": "string"
+          },
+          "valid_for_host": {
+            "default": false,
+            "title": "Valid For Host",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "ServedCertificate",
+        "type": "object"
       },
       "SettingsUpdate": {
         "additionalProperties": false,
@@ -4285,6 +4690,153 @@
           }
         },
         "summary": "System Audit",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/certificates": {
+      "get": {
+        "operationId": "list_certificates_api_v1_system_certificates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificatesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Certificates",
+        "tags": [
+          "system"
+        ]
+      },
+      "post": {
+        "operationId": "add_certificate_api_v1_system_certificates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertificateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Certificate",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/certificates/{certificate_id}": {
+      "delete": {
+        "operationId": "remove_certificate_api_v1_system_certificates__certificate_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "certificate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Certificate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Certificate",
+        "tags": [
+          "system"
+        ]
+      },
+      "put": {
+        "operationId": "replace_certificate_api_v1_system_certificates__certificate_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "certificate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Certificate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertificateReplace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Certificate",
         "tags": [
           "system"
         ]

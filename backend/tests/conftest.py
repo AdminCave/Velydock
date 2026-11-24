@@ -60,7 +60,8 @@ PUBLIC_URL = "https://dock.test"
 SANDBOX_URL = "https://sandbox.test"
 
 _TABLES = (
-    "audit_log, sessions, user_settings, system_settings, proxy_templates, proxy_targets, app_publications, "
+    "audit_log, sessions, user_settings, system_settings, certificates, proxy_templates, proxy_targets, "
+    "app_publications, "
     "app_user_grants, app_group_grants, apps, group_members, groups, memberships, users, tenants"
 )
 

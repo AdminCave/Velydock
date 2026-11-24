@@ -49,6 +49,7 @@ from velydock.models import (
     AppType,
     AppUserGrant,
     AuthSession,
+    Certificate,
     GroupMember,
     Membership,
     ProxyTarget,
@@ -71,6 +72,7 @@ from velydock.schemas import (
 from velydock.security import sessions
 from velydock.security.tokens import TokenError, sign, verify
 from velydock.services import audit
+from velydock.services import certificates as certificates_service
 
 log = logging.getLogger(__name__)
 
@@ -626,7 +628,17 @@ def _router_rule(settings: Settings, publication: AppPublication) -> str:
     return f"Host(`{apps_host}`) && (Path(`/{name}`) || PathPrefix(`/{name}/`))"
 
 
-def _build(settings: Settings, publication: AppPublication, options: dict[str, Any]) -> dict[str, Any]:
+def published_host(settings: Settings, publication: AppPublication) -> str:
+    """The host name a publication is reached under (the apps host, or a sub-domain of it)."""
+    apps_host = urlsplit(settings.apps_url or "").hostname or ""
+    if publication.mode == PublicationMode.SUBDOMAIN.value:
+        return f"{check_name(publication.name)}.{apps_host}"
+    return apps_host
+
+
+def _build(
+    settings: Settings, publication: AppPublication, options: dict[str, Any], *, own_certificate: bool = False
+) -> dict[str, Any]:
     key = f"vd-{publication.app_id.hex}"
     middlewares: dict[str, Any] = {}
     chain: list[str] = []
@@ -696,7 +708,12 @@ def _build(settings: Settings, publication: AppPublication, options: dict[str, A
         "rule": _router_rule(settings, publication),
         "entryPoints": [settings.proxy_entry_point],
         "service": key,
-        "tls": {"certResolver": settings.proxy_tls_resolver} if settings.proxy_tls_resolver else {},
+        # With an uploaded certificate for this name the proxy is not to fetch one of its own.
+        "tls": (
+            {"certResolver": settings.proxy_tls_resolver}
+            if settings.proxy_tls_resolver and not own_certificate
+            else {}
+        ),
     }
     if chain:
         router["middlewares"] = chain
@@ -759,9 +776,22 @@ def problem_of(
 
 
 async def traefik_configuration(db: AsyncSession, settings: Settings) -> dict[str, Any]:
-    """The routes of everything that is published right now, in Traefik's dynamic configuration format."""
+    """What the proxy is to serve right now, in Traefik's dynamic configuration format.
+
+    The routes of everything that is published, and the uploaded certificates (as file names:
+    see services/certificates.py).
+    """
+    document: dict[str, Any] = {}
+    certificates = await certificates_service.files_for_proxy(db, settings)
+    if certificates:
+        document["tls"] = {"certificates": certificates}
+    stored = list((await db.execute(select(Certificate))).scalars()) if certificates else []
+    # Which of Velydock's own names the proxy fetches a certificate for: those without one here.
+    routers: dict[str, Any] = certificates_service.certificate_requests(settings, stored)
     if not settings.apps_url:
-        return {}
+        if routers:
+            document["http"] = {"routers": routers}
+        return document
     rows = (
         await db.execute(
             select(AppPublication)
@@ -783,7 +813,6 @@ async def traefik_configuration(db: AsyncSession, settings: Settings) -> dict[st
     sub_domains_only = set(
         (await db.execute(select(Tenant.id).where(Tenant.proxy_path_allowed.is_(False)))).scalars()
     )
-    routers: dict[str, Any] = {}
     services: dict[str, Any] = {}
     middlewares: dict[str, Any] = {}
     transports: dict[str, Any] = {}
@@ -797,6 +826,8 @@ async def traefik_configuration(db: AsyncSession, settings: Settings) -> dict[st
                 settings,
                 publication,
                 effective_options(known.get(publication.template), dict(publication.options or {})),
+                own_certificate=certificates_service.chosen_for(stored, published_host(settings, publication))
+                is not None,
             )
         except Exception:
             # One publication that cannot be built must not take the others down with it.
@@ -807,13 +838,16 @@ async def traefik_configuration(db: AsyncSession, settings: Settings) -> dict[st
         middlewares.update(built["middlewares"])
         transports.update(built["transports"])
     if not routers:
-        return {}
-    http: dict[str, Any] = {"routers": routers, "services": services}
+        return document
+    http: dict[str, Any] = {"routers": routers}
+    if services:
+        http["services"] = services
     if middlewares:
         http["middlewares"] = middlewares
     if transports:
         http["serversTransports"] = transports
-    return {"http": http}
+    document["http"] = http
+    return document
 
 
 # ---------------------------------------------------------------------------------------------

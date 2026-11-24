@@ -328,6 +328,44 @@ class ProxyTemplate(Base):
     __table_args__ = (Index("uq_proxy_templates_name_lower", func.lower(name), unique=True),)
 
 
+class Certificate(Base):
+    """A TLS certificate with its private key, uploaded for the bundled proxy to serve.
+
+    System scope only, for every operation (see migration 0004): no request of an organization
+    can read a private key, whatever the query. The key never leaves through the API either.
+    """
+
+    __tablename__ = "certificates"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # PEM: the certificate itself first, then the certificates that lead to its issuer.
+    certificate: Mapped[str] = mapped_column(Text, nullable=False)
+    # PEM, PKCS#8, without a passphrase: the proxy must be able to read it unattended.
+    private_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # SHA-256 of the certificate (DER), hex. Also the name of its files for the proxy.
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # The names it is valid for (DNS names in lower case, "*." for wildcards; addresses as text).
+    names: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    subject: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    issuer: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    # Subjects of the certificates stored with it, the certificate itself first.
+    chain: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # The key the proxy files this certificate under: by it, it decides which of two certificates
+    # for the same name it serves (see services/certificates.py, `proxy_key`).
+    proxy_key: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # What was noticed about the upload that the administrator should know (see the service).
+    warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    serial: Mapped[str] = mapped_column(String(80), nullable=False, server_default="")
+    key_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="")
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+    __table_args__ = (Index("uq_certificates_name_lower", func.lower(name), unique=True),)
+
+
 class AppGroupGrant(Base):
     __tablename__ = "app_group_grants"
 

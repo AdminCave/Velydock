@@ -735,3 +735,85 @@ class ProxyInfo(Model):
     targets: list[str] = Field(default_factory=list)
     templates: list[ProxyTemplateOut] = Field(default_factory=list)
     defaults: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---- own TLS certificates ------------------------------------------------------------------------
+
+CertificateName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80), AfterValidator(_one_space)
+]
+# Generous limits; the real ones are in services/certificates.py, with messages that say more.
+_Pem = Annotated[str, StringConstraints(max_length=131_072)]
+
+
+class CertificateIn(Model):
+    """A certificate with its private key: as PEM text, or as a PKCS#12 file (base64)."""
+
+    name: CertificateName
+    # PEM: the certificate, then the certificates that lead to its issuer. May hold the key too.
+    certificate: _Pem | None = None
+    private_key: _Pem | None = None
+    pkcs12: Annotated[str, StringConstraints(max_length=262_144)] | None = None
+    passphrase: Annotated[str, StringConstraints(max_length=1024)] | None = None
+
+
+class CertificateReplace(Model):
+    name: CertificateName | None = None
+    certificate: _Pem | None = None
+    private_key: _Pem | None = None
+    pkcs12: Annotated[str, StringConstraints(max_length=262_144)] | None = None
+    passphrase: Annotated[str, StringConstraints(max_length=1024)] | None = None
+
+
+class CertificateOut(Model):
+    """What is stored about a certificate. The private key is not part of any answer."""
+
+    id: uuid.UUID
+    name: str
+    names: list[str]
+    subject: str
+    issuer: str
+    chain: list[str]
+    serial: str
+    key_type: str
+    fingerprint: str
+    not_before: datetime
+    not_after: datetime
+    status: Literal["valid", "expires_soon", "expired", "not_yet_valid"]
+    warnings: list[Literal["no_intermediate"]]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ServedCertificate(Model):
+    """What the proxy answered with when asked for a name."""
+
+    # uploaded: one of the stored ones · other: another one (Let's Encrypt, for example) ·
+    # default: the proxy's self-signed stand-in · unreachable: the proxy did not answer ·
+    # unknown: this installation cannot ask.
+    source: Literal["uploaded", "other", "default", "unreachable", "unknown"]
+    certificate_id: uuid.UUID | None = None
+    subject: str = ""
+    issuer: str = ""
+    not_after: datetime | None = None
+    fingerprint: str = ""
+    valid_for_host: bool = False
+
+
+class CertificateHost(Model):
+    host: str
+    purpose: Literal["velydock", "keycloak", "sandbox", "apps", "app"]
+    # For a published app: its name.
+    label: str
+    # The stored certificate that is valid for this name, if there is one.
+    certificate_id: uuid.UUID | None
+    served: ServedCertificate
+
+
+class CertificatesOut(Model):
+    available: bool
+    problem: Literal["no_directory", "no_secret", "not_writable"] | None
+    # Whether the proxy also fetches certificates by itself (Let's Encrypt).
+    acme: bool
+    certificates: list[CertificateOut]
+    hosts: list[CertificateHost]
