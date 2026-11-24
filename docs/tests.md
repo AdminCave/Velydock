@@ -1,14 +1,15 @@
 # Tests
 
-Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 23.11.2026.
+Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, Lauf vom 24.11.2026.
 
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
-| Unit-Tests Backend | pytest | 324 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 404 Tests | PostgreSQL |
+| Unit-Tests Backend | pytest | 374 Tests | nichts |
+| Integrationstests Backend | pytest gegen PostgreSQL | 430 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
-| Unit-Tests Frontend | Vitest, Testing Library | 858 Tests | nichts |
-| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 87 Tests | kompletter Stack |
+| Unit-Tests Frontend | Vitest, Testing Library | 1030 Tests | nichts |
+| Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 92 Tests | kompletter Stack |
+| Zertifikate am echten Proxy | Shell-Skript mit Pebble, dem ACME-Testserver von Let's Encrypt | 1 Durchlauf | Image wie unten, Docker, `openssl` |
 | Backup und Wiederherstellung | Shell-Skript | 1 Rundlauf | kompletter Stack |
 | Installation nach Anleitung | Shell-Skript und Playwright | 1 Durchlauf | Image `velydock:dev` (oder `VELYDOCK_DEV_IMAGE`) |
 | Installer und Verwaltungsbefehl | Shell-Skript, Pseudo-Terminal, Playwright | 1 Durchlauf | Image wie oben, Docker |
@@ -110,6 +111,33 @@ Logo, Design, Akzentfarbe, Dock-Position und App-Leiste je Organisation und je B
   Eingeschaltet sitzt sie oben oder unten (Lage am Bildschirm gemessen), „Neu laden“ steht dann in
   ihr und nicht mehr im Menü; „Standard“ nimmt sie wieder weg.
 - Die Anmeldeseite bekommt nichts vom Erscheinungsbild einer Organisation.
+
+## Eigene Zertifikate und Let's Encrypt
+
+Drei Ebenen, weil jede etwas anderes beweist:
+
+- **Was angenommen wird** (`unit/test_certificates.py`, 50 Tests): Zertifikat, Kette und Schlüssel
+  in jeder Reihenfolge und Schreibweise, PKCS#12, geschützte Schlüssel; abgelehnt mit je eigenem
+  Grund: fremder Schlüssel, abgelaufen, kein Name, RSA-1024, P-521, Ed25519, Unlesbares. Dazu
+  Traefiks Auswahlregel – welches von zwei Zertifikaten es für einen Namen nimmt –, nachgebaut
+  aus dessen Quelltext, und das Aufräumen seines Speichers (`acme.json`).
+- **Wer darf und was der Proxy erfährt** (`integration/test_certificates.py`, 26 Tests): nur
+  Systemadministratoren; im Kontext einer Organisation ist die Tabelle leer und nimmt nichts an
+  (Row Level Security, direkt an der Datenbank geprüft); keine Antwort, keine Fehlermeldung und
+  kein Protokolleintrag enthält den Schlüssel; die Dateien für den Proxy entstehen, folgen der
+  Datenbank und verschwinden wieder; für einen Namen mit eigenem Zertifikat wird keines
+  angefordert. Die Anzeige „was wird wirklich ausgeliefert“ läuft gegen einen echten TLS-Server im
+  Test.
+- **Was der echte Proxy damit tut:**
+  - `07d-certificates` (Browser, 5 Tests) lädt über die Oberfläche hoch – PEM und PKCS#12 –,
+    ersetzt und entfernt, und macht nach jedem Schritt einen TLS-Handshake mit Traefik: Verglichen
+    wird der Fingerabdruck des ausgelieferten Zertifikats, nicht eine Anzeige.
+  - `scripts/tests/tls-modes.sh` stellt den Produktiv-Stack neben **Pebble**, den Testserver von
+    Let's Encrypt: Der Proxy bestellt Zertifikate für die Namen, die Velydock ihm nennt, und
+    Pebble prüft sie über Port 80 – derselbe Ablauf wie mit Let's Encrypt, ohne Internet. Danach
+    eigene Zertifikate per Kommandozeile, ein Name mit schon geholtem Zertifikat (das geholte
+    bleibt vorn, bis `cert prune-fetched` es entfernt; dann gilt das eigene, auch nach Neustarts,
+    und es wird nichts neu geholt) und das Entfernen (der Proxy holt wieder selbst).
 
 ## Apps über den Proxy veröffentlichen
 
@@ -279,6 +307,15 @@ mit dem Zustand vor dem Backup.
 | Keycloak und Browser lieferten nach einer Theme-Änderung weiter die alte Datei aus. | Sichtprüfung per Screenshot; jetzt `test_theme_install.py` und `08-deployment` |
 | Keycloak 26.8 lehnt Admin-API-Tokens ohne den Scope `kc-admin-api` ab. | Probe am echten Keycloak; jetzt `keycloak/…::TestRealmProvisioning` |
 | Die Anmeldeseite war auf Bildschirmen ab 1200 px Breite nur halb so breit wie vorgesehen. | Installations-Rauchtest (Screenshot); jetzt `08-deployment` bei vier Breiten |
+
+Am 24.11.2026 kam dazu:
+
+| Fehler | Gefunden durch |
+|---|---|
+| Ein hochgeladenes Zertifikat wurde für einen Namen, für den der Proxy schon eines von Let's Encrypt hatte, nicht zuverlässig ausgeliefert. In acht Versuchen von Hand gewann das hochgeladene jedes Mal; der daraus geschriebene Test scheiterte beim ersten Lauf. Traefik sortiert Zertifikate nach ihrer Namensliste und nimmt das letzte – ein Platzhalter-Zertifikat verliert so immer. | `scripts/tests/tls-modes.sh` gegen den echten Proxy, dann Traefiks Quelltext. Behoben: Velydock nennt dem Proxy die Namen, für die er selbst Zertifikate holt, in derselben Antwort wie die hochgeladenen; für früher geholte gibt es `velydock cert takeover`. |
+| Die Warnung „Zertifikat des Ausstellers fehlt“ erschien auch für ein Zertifikat, das direkt von einer mitgelieferten Wurzel ausgestellt war. | Import auf der Kommandozeile im selben Test; jetzt `unit/test_certificates.py` |
+| Ein Test der Kommandozeile schloss die Datenbankverbindung der ganzen Testsuite; 289 folgende Tests brachen mit Fehlern ab. | Lauf der kompletten Suite (die Datei allein bestand) |
+| Ein Browser-Test scheiterte in drei Läufen mit `net::ERR_NETWORK_CHANGED`. Ursache ist die Maschine, nicht Velydock: Eine andere Arbeitssitzung legte alle paar Sekunden Container-Netzwerkschnittstellen an und ab (mit `ip monitor` während des Tests aufgezeichnet), und Chromium bricht dabei laufende Anfragen ab. | Trace des Tests und `ip monitor`. Der Installer-Test wiederholt die Anmeldung, wenn die Spur genau diesen Fehler zeigt; die Browser-Suite tut das nicht. |
 
 ## Fehler, die eine unabhängige Durchsicht gefunden hat
 

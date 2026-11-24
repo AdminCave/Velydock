@@ -34,7 +34,7 @@ root, weil `.env` nur für root lesbar ist.
 | `velydock backup [Verzeichnis] [--keep N]` | [Backup](#backup) beider Datenbanken und der `.env`. |
 | `velydock restore <Backup-Verzeichnis> [--yes]` | [Wiederherstellung](#wiederherstellung). |
 | `velydock admin --username NAME [--email ADRESSE]` | Legt einen Administrator an oder stellt einen Zugang wieder her ([installation.md](installation.md#ersten-administrator-anlegen)). |
-| `velydock cert list`, `cert add <Zertifikat> <Schlüssel> [--name N] [--replace]`, `cert remove <Name>` | Eigene Zertifikate. |
+| `velydock cert list`, `cert add <Zertifikat> <Schlüssel> [--name N] [--replace]`, `cert remove <Name>`, `cert takeover` | Eigene Zertifikate ([Zertifikate](#zertifikate-tls)). |
 | `velydock doctor` | [Diagnose](#protokolle-und-diagnose), eine Zeile je Prüfung. Verändert nichts. |
 | `velydock uninstall [--purge] [--yes]` | [Deinstallation](#deinstallation). |
 | `velydock version`, `velydock help` | Installierte Version; alle Befehle. |
@@ -326,13 +326,23 @@ Hochgeladen wird unter **System → Zertifikate** ([administration.md](administr
 oder auf der Kommandozeile:
 
 ```bash
-# Zertifikat, Kette und privater Schlüssel als PEM, in beliebiger Reihenfolge, über die Standardeingabe
+velydock cert add fullchain.pem privkey.pem --name "Firma 2027"
+velydock cert list
+# Verlängerung: gleicher Name, neues Zertifikat
+velydock cert add neu-fullchain.pem neu-privkey.pem --name "Firma 2027" --replace
+velydock cert remove "Firma 2027"
+```
+
+Ohne den Befehl `velydock` (Installation von Hand) geht dasselbe über den Container: Zertifikat,
+Kette und Schlüssel als PEM in beliebiger Reihenfolge über die Standardeingabe.
+
+```bash
 cat fullchain.pem privkey.pem | docker compose exec -T velydock velydock cert add --name "Firma 2027"
 docker compose exec velydock velydock cert list
-# Verlängerung: gleicher Name, neues Zertifikat
-cat neu-fullchain.pem neu-privkey.pem | docker compose exec -T velydock velydock cert add --name "Firma 2027" --replace
-docker compose exec velydock velydock cert remove "Firma 2027"
 ```
+
+Der Installer nimmt mit `--tls own --cert … --key …` ein Zertifikat gleich bei der Installation
+entgegen ([installation.md](installation.md)).
 
 - **Was angenommen wird:** PEM (Zertifikat, die Zertifikate seiner Aussteller, Schlüssel) oder
   eine PKCS#12-Datei (`.p12`, `.pfx`; nur in der Oberfläche). Schlüssel: RSA mit 2048 bis 8192
@@ -365,7 +375,7 @@ hat, und nennt ihm mit den Routen die Dateinamen (`/internal/proxy/traefik`, sie
 [Apps über den Proxy veröffentlichen](#apps-über-den-proxy-veröffentlichen)). Der Schlüssel selbst
 geht nicht über das Netz. Das Volume muss nicht gesichert werden: Ist es leer – neuer Server,
 zurückgespieltes Backup –, schreibt Velydock es beim nächsten Abruf des Proxys neu. Voraussetzung
-ist `VELYDOCK_PROXY_SECRET` in `.env`; `install.sh` erzeugt es.
+ist `VELYDOCK_PROXY_SECRET` in `.env`; der Installer und `scripts/install.sh` erzeugen es.
 
 ### Let's Encrypt und eigene Zertifikate nebeneinander
 
@@ -377,9 +387,15 @@ wieder selbst eines.
 Eine Ausnahme braucht einen Handgriff: **ein Name, für den der Proxy früher schon ein Zertifikat
 geholt hat.** Traefik behält jedes geholte Zertifikat und verlängert es weiter. Liegen für einen
 Namen zwei vor, nimmt es das, dessen Namensliste alphabetisch später steht – ein hochgeladenes
-Platzhalter-Zertifikat verliert so immer gegen ein geholtes. Die Seite zeigt das an („ausgeliefert
-wird ein anderes Zertifikat“). Dann das geholte aus Traefiks Speicher nehmen, während der Proxy
-steht (etwa zehn Sekunden Unterbrechung):
+Platzhalter-Zertifikat verliert so immer gegen ein geholtes. Die Seite zeigt das an („Der Proxy
+liefert für diesen Namen weiter ein Zertifikat aus, das er selbst geholt hat“). Dann das geholte aus
+Traefiks Speicher nehmen, während der Proxy steht (etwa zehn Sekunden Unterbrechung):
+
+```bash
+velydock cert takeover
+```
+
+Von Hand sind das drei Schritte:
 
 ```bash
 docker compose stop traefik
@@ -392,8 +408,8 @@ Der Befehl entfernt nur geholte Zertifikate für Namen, die ein eigenes haben, u
 ein geholtes für mehrere Namen, geht es als Ganzes; für die übrigen holt der Proxy beim Start ein
 neues. `velydock_` ist der Projektname der Installation (`docker compose ls`).
 
-**Ganz auf eigene Zertifikate umstellen:** `TLS_RESOLVER=` (leer) in `.env`, `docker compose up -d`,
-dann wie oben aufräumen. Der Proxy holt danach nichts mehr; Namen ohne eigenes Zertifikat bekommen
+**Ganz auf eigene Zertifikate umstellen:** `TLS_RESOLVER=` (leer) in `.env`, `velydock restart`
+(von Hand: `docker compose up -d`), dann wie oben aufräumen. Der Proxy holt danach nichts mehr; Namen ohne eigenes Zertifikat bekommen
 das Ersatzzertifikat.
 
 **Let's Encrypt ausprobieren, ohne das Limit zu berühren:** `ACME_CA_SERVER` in `.env` nennt ein

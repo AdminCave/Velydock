@@ -251,7 +251,8 @@ Alle Einstellungen stehen in `.env` (nach dem Installer: `/opt/velydock/.env`). 
 | `ACME_EMAIL` | E-Mail-Adresse für Let's Encrypt. |
 | `COMPOSE_PROFILES` | `proxy` startet den mitgelieferten Traefik. Leer lassen für einen eigenen Proxy. |
 | `HTTP_BIND`, `HTTPS_BIND` | Adresse und Port, an die Traefik bindet (Standard `0.0.0.0:80` und `0.0.0.0:443`). |
-| `TLS_RESOLVER` | Standard `letsencrypt`. Leer: Traefik verwendet ein selbstsigniertes Zertifikat (nur zum Testen). |
+| `TLS_RESOLVER` | Standard `letsencrypt`: Für Namen ohne eigenes Zertifikat holt der Proxy eines von Let's Encrypt. Leer: Er holt nichts; solche Namen bekommen sein selbstsigniertes Ersatzzertifikat ([betrieb.md](betrieb.md#zertifikate-tls)). |
+| `ACME_CA_SERVER` | Optional: ein anderes ACME-Verzeichnis als das von Let's Encrypt, zum Beispiel dessen Testumgebung. |
 | `PUBLIC_PORT_SUFFIX` | Nur nötig, wenn Velydock nicht auf Port 443 erreichbar ist, z. B. `:8443`. Die Umleitung von HTTP nach HTTPS zeigt auch dann auf Port 443. |
 | `VELYDOCK_IMAGE` | Image und Version, z. B. `ghcr.io/admincave/velydock:0.1.0`. |
 | `KEYCLOAK_IMAGE` | Image und Version von Keycloak. Ohne Angabe die Version, mit der Velydock getestet ist ([betrieb.md](betrieb.md#update)). |
@@ -279,7 +280,7 @@ Wer `.env` selbst aus `.env.example` anlegt, nimmt anderen Benutzern des Servers
 | `VELYDOCK_SECRET_KEY` | Signiert Login-Zustand und Links zu eigenen Apps. |
 | `VELYDOCK_OIDC_CLIENT_SECRET` | Geheimnis des OIDC-Clients `velydock`. |
 | `VELYDOCK_IDP_ADMIN_CLIENT_SECRET` | Geheimnis des Dienstzugangs `velydock-admin` für Keycloaks Admin-API. |
-| `VELYDOCK_PROXY_SECRET` | Damit holt Traefik die Routen veröffentlichter Apps bei Velydock ab. Nur nötig mit `APPS_HOST`. |
+| `VELYDOCK_PROXY_SECRET` | Damit holt der mitgelieferte Proxy bei Velydock ab, was er ausliefern soll: für welche Namen er Zertifikate holt, die hochgeladenen Zertifikate, die Routen veröffentlichter Apps. Mit dem mitgelieferten Proxy immer nötig – ohne den Wert bekommt jede Adresse das selbstsignierte Ersatzzertifikat. |
 | `KEYCLOAK_BOOTSTRAP_SECRET` | Damit legt Velydock beim ersten Start seinen Realm an. Muss danach in `.env` stehen bleiben: Keycloak startet ohne den Wert nicht, und Compose verweigert deshalb den Start. |
 
 ### Geheimnisse tauschen

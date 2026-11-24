@@ -104,6 +104,8 @@ jobs:
         run: bash scripts/tests/backup-restore.sh
       - name: Installation as documented (production Compose file, first administrator with second factor)
         run: bash scripts/tests/install-smoke.sh
+      - name: Certificates at the real proxy (fetched from an ACME test server, and own ones)
+        run: bash scripts/tests/tls-modes.sh
       - name: Logs on failure
         if: failure()
         run: $COMPOSE logs --no-color --tail 300
