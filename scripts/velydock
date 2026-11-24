@@ -76,6 +76,9 @@ Velydock management command
   velydock cert list
   velydock cert add <cert.pem> <key.pem> [--name N] [--replace]
   velydock cert remove <name>              own TLS certificates
+  velydock cert takeover                   make uploaded certificates win over ones the proxy
+                                           fetched earlier for the same names (stops the proxy
+                                           for a moment)
   velydock doctor                          read-only diagnosis, one line per check
   velydock uninstall [--purge] [--yes]     remove the containers; --purge also removes
                                            the data, the configuration and the backups
@@ -597,7 +600,7 @@ certificate_label() {
 
 cmd_cert() {
   local action=${1:-} files=() name="" replace=()
-  [[ -n $action ]] || die "usage: velydock cert list | add <cert.pem> <key.pem> [--name N] [--replace] | remove <name>"
+  [[ -n $action ]] || die "usage: velydock cert list | add <cert.pem> <key.pem> [--name N] [--replace] | remove <name> | takeover"
   shift
   case $action in
     list)
@@ -637,7 +640,31 @@ cmd_cert() {
       { cat -- "${files[0]}"; printf '\n'; cat -- "${files[1]}"; } |
         compose exec -T velydock velydock cert add --name "$name" "${replace[@]}"
       ;;
-    *) die "cert: unknown action '$action' (list, add, remove)" ;;
+    takeover)
+      # A name the proxy fetched a certificate for before one was uploaded keeps the fetched
+      # one in front (docs/betrieb.md, "Zertifikate"). The proxy reads its store at start only,
+      # so it is stopped while the fetched certificates for such names are taken out.
+      (($# == 0)) || die "cert takeover takes no arguments."
+      need_installation
+      need_docker
+      proxy_enabled || die "the bundled proxy is switched off (COMPOSE_PROFILES): certificates are the business of your own proxy."
+      local project volume status=0
+      # The project name as Compose resolves it (top-level "name:" of the rendered file).
+      project=$(compose config 2>/dev/null | sed -nE 's/^name: *"?([A-Za-z0-9_-]+)"?$/\1/p' | head -n 1)
+      [[ -n $project ]] || die "cannot tell the Compose project name of this installation."
+      volume=${project}_traefik-acme
+      docker volume inspect "$volume" >/dev/null 2>&1 ||
+        die "the bundled proxy has no certificate store here (volume $volume): nothing to take over."
+      echo "Stopping the proxy for a moment …"
+      compose stop traefik >/dev/null 2>&1 || die "could not stop the proxy."
+      compose run --rm --no-deps --user 0:0 -v "$volume:/acme" velydock cert prune-fetched /acme/acme.json </dev/null ||
+        status=$?
+      # Whatever happened above: the proxy comes back.
+      compose start traefik >/dev/null 2>&1 || die "the proxy did not start again: velydock start"
+      ((status == 0)) || die "the proxy's certificate store was not changed (see above). The proxy is running again."
+      echo "The proxy is running again. 'velydock doctor' shows which certificate each address is served with."
+      ;;
+    *) die "cert: unknown action '$action' (list, add, remove, takeover)" ;;
   esac
 }
 
