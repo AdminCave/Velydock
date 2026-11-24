@@ -178,7 +178,7 @@ aus:
 
 ### Eigene Zertifikate
 
-Hochgeladen wird unter **System → Zertifikate** ([administration.md](administration.md#zertifikate))
+Hochgeladen wird unter **System → Zertifikate** ([administration.md](administration.md#zertifikate-system--zertifikate))
 oder auf der Kommandozeile:
 
 ```bash

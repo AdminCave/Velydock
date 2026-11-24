@@ -264,6 +264,55 @@ Standard abweicht.
   auf Sinn. Ist der Inhalt falsch – ein ungültiges Netz, ein fehlerhafter Ausdruck –, sind die
   Apps mit dieser Vorlage nicht erreichbar; `docker compose logs traefik` nennt den Grund.
 
+## Zertifikate (System → Zertifikate)
+
+Eigene TLS-Zertifikate für den mitgelieferten Proxy. Nur Systemadministratoren; die Seite gilt für
+die ganze Installation, nicht für eine Organisation. Was dahinter geschieht und was auf dem Server
+zu tun ist, steht in [betrieb.md](betrieb.md#zertifikate-tls).
+
+**Zertifikat hinzufügen**
+
+1. Einen Namen vergeben, unter dem es in der Liste steht (zum Beispiel „Firma 2027“).
+2. Format wählen:
+   - **PEM (Text):** Zertifikat mit Kette und privaten Schlüssel je als Datei auswählen oder
+     einfügen. Die Zertifikatsdatei darf den Schlüssel schon enthalten.
+   - **PKCS#12 (.p12, .pfx):** eine Datei, dazu ihre Passphrase.
+3. Ist der Schlüssel mit einer Passphrase geschützt, sie mit angeben. Gespeichert wird sie nicht.
+
+Passt etwas nicht, sagt der Dialog es am betreffenden Feld: Schlüssel gehört nicht zum Zertifikat,
+Zertifikat abgelaufen, Schlüsseltyp nicht unterstützt, kein Name im Zertifikat. Steht einer der
+Namen schon in einem hinterlegten Zertifikat, nennt der Dialog es und bietet an, stattdessen
+dieses zu ersetzen.
+
+**Die Liste** zeigt je Zertifikat, wofür es gilt, wer es ausgestellt hat, bis wann es gültig ist
+(mit „läuft bald ab“ ab 30 Tagen vor dem Ende, „abgelaufen“, „noch nicht gültig“) und den
+Schlüsseltyp. Eine Warnung steht dabei, wenn das Zertifikat des Ausstellers fehlt. Unter
+*Details*: Inhaber, Aussteller, Kette, Seriennummer, SHA-256-Fingerabdruck.
+
+- **Ersetzen** ist die Verlängerung: derselbe Eintrag, neues Zertifikat.
+- **Entfernen** nennt vorher die Adressen, die das Zertifikat verlieren, und was sie danach
+  bekommen.
+
+**Adressen dieser Installation.** Für Velydock, Anmeldung, Sandbox, den Apps-Host und jede App mit
+eigener Subdomain zeigt die Seite, welches Zertifikat der Proxy *wirklich* ausliefert – Velydock
+fragt ihn dafür wie ein Browser:
+
+| Anzeige | Bedeutung |
+|---|---|
+| eigenes Zertifikat (mit Namen) | Das hinterlegte wird ausgeliefert. |
+| Aussteller: … | Ein anderes Zertifikat, in der Regel von Let's Encrypt. |
+| kein Zertifikat – Browser warnen | Der Proxy liefert sein selbstsigniertes Ersatzzertifikat. |
+| Proxy antwortet nicht | Der mitgelieferte Proxy läuft nicht (eigener Reverse Proxy): Hochgeladene Zertifikate wirken dort nicht. |
+| gilt nicht für diese Adresse | Das ausgelieferte Zertifikat nennt diesen Namen nicht. |
+
+Nach einer Änderung prüft die Seite einige Sekunden lang selbst nach; **Neu prüfen** fragt sofort.
+Steht bei einer Adresse dauerhaft, der Proxy liefere weiter ein selbst geholtes Zertifikat aus,
+hatte er für diesen Namen schon vorher eines von Let's Encrypt; es muss einmal auf dem Server
+entfernt werden ([betrieb.md](betrieb.md#lets-encrypt-und-eigene-zertifikate-nebeneinander)).
+
+Jedes Hinzufügen, Ersetzen und Entfernen steht im Systemprotokoll, mit Namen, Fingerabdruck und
+Ablaufdatum – nie mit dem Schlüssel.
+
 ## Was Benutzer selbst tun
 
 - **Profil:** Vor- und Nachname ändern. Die E-Mail-Adresse ändert die Administration.
