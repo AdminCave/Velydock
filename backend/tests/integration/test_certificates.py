@@ -13,6 +13,7 @@ import json
 import ssl
 import stat
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -873,6 +874,35 @@ class TestWhatIsReallyServed:
             state = (await client.get(URL)).json()
         assert [item["fetched_before"] for item in state["certificates"]] == [[], []]
         assert not any(item["takeover"] for item in state["hosts"])
+
+    async def test_a_certificate_removed_a_moment_ago_and_still_served_is_not_taken_for_a_fetched_one(
+        self, served: tuple[World, dict[str, str]], authority: Authority, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # dock.test is served with the certificate of the fixture throughout - as a proxy does
+        # for the seconds until it has fetched its configuration again.
+        world, uploaded = served
+        main = await world.tenant("Admin Cave", "main")
+        root = await world.user(main, "root", Role.TENANT_ADMIN, system_admin=True)
+        async with await world.login(root) as client:
+            first = (await client.post(URL, json=uploaded)).json()
+            # Removed and stored anew at once, with another certificate for the same name.
+            assert (await client.delete(f"{URL}/{first['id']}")).status_code == 204
+            again = (await client.post(URL, json=upload(authority, "Neu", ["dock.test"]))).json()
+            assert again["fetched_before"] == []
+            # The same after a replacement: what is still served is the one that was replaced.
+            renewed = upload(authority, "x", ["dock.test", "sandbox.test"])
+            del renewed["name"]
+            assert (await client.put(f"{URL}/{again['id']}", json=renewed)).json()["fetched_before"] == []
+            hosts = {item["host"]: item["takeover"] for item in (await client.get(URL)).json()["hosts"]}
+        assert hosts["dock.test"] is False
+        # Long after the removal it would be another matter: then nothing of ours explains it.
+        # (The log cannot be changed afterwards, so the test shortens "a moment ago" instead.)
+        monkeypatch.setattr(certificates, "JUST_NOW", timedelta(0))
+        async with await world.login(root) as client:
+            for item in (await client.get(URL)).json()["certificates"]:
+                await client.delete(f"{URL}/{item['id']}")
+            late = (await client.post(URL, json=upload(authority, "Spät", ["dock.test"]))).json()
+        assert late["fetched_before"] == ["dock.test"]
 
     async def test_the_command_line_says_when_a_takeover_is_needed(
         self, served: tuple[World, dict[str, str]], authority: Authority, capsys: pytest.CaptureFixture[str]

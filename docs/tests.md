@@ -5,7 +5,7 @@ Vier Ebenen, alle automatisiert und in der CI. Stand der Zahlen: Version 0.1, La
 | Ebene | Werkzeug | Umfang | Braucht |
 |---|---|---|---|
 | Unit-Tests Backend | pytest | 378 Tests | nichts |
-| Integrationstests Backend | pytest gegen PostgreSQL | 435 Tests | PostgreSQL |
+| Integrationstests Backend | pytest gegen PostgreSQL | 436 Tests | PostgreSQL |
 | Integration mit Keycloak | pytest gegen Keycloak | 39 Tests | Keycloak, Mail-Empfänger |
 | Unit-Tests Frontend | Vitest, Testing Library | 1035 Tests | nichts |
 | Browser-Tests (End-to-End) | Playwright; Chromium in der CI, Firefox und WebKit auf Wunsch | 92 Tests | kompletter Stack |
@@ -121,7 +121,7 @@ Drei Ebenen, weil jede etwas anderes beweist:
   Grund: fremder Schlüssel, abgelaufen, kein Name, RSA-1024, P-521, Ed25519, Unlesbares. Dazu
   Traefiks Auswahlregel – welches von zwei Zertifikaten es für einen Namen nimmt –, nachgebaut
   aus dessen Quelltext, und das Aufräumen seines Speichers (`acme.json`).
-- **Wer darf und was der Proxy erfährt** (`integration/test_certificates.py`, 31 Tests): nur
+- **Wer darf und was der Proxy erfährt** (`integration/test_certificates.py`, 32 Tests): nur
   Systemadministratoren; im Kontext einer Organisation ist die Tabelle leer und nimmt nichts an
   (Row Level Security, direkt an der Datenbank geprüft); keine Antwort, keine Fehlermeldung und
   kein Protokolleintrag enthält den Schlüssel; die Dateien für den Proxy entstehen, folgen der

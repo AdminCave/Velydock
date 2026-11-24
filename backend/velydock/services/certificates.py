@@ -48,7 +48,7 @@ from velydock.api.deps import Principal
 from velydock.config import Settings
 from velydock.db import system_scope
 from velydock.errors import ApiError, conflict, invalid, not_found
-from velydock.models import AppPublication, Certificate, PublicationMode
+from velydock.models import AppPublication, AuditLog, Certificate, PublicationMode
 from velydock.schemas import (
     CertificateHost,
     CertificateIn,
@@ -66,6 +66,9 @@ MAX_PEM = 64 * 1024
 MAX_PKCS12 = 96 * 1024
 MAX_CERTIFICATES = 10
 EXPIRES_SOON = timedelta(days=30)
+# How long a removed certificate may still be served: the proxy fetches its configuration every
+# few seconds and then needs a moment to apply it.
+JUST_NOW = timedelta(seconds=60)
 # What the proxy presents when it has nothing for a name.
 PROXY_DEFAULT_SUBJECT = "TRAEFIK DEFAULT CERT"
 
@@ -875,6 +878,18 @@ async def _served_from_elsewhere(db: AsyncSession, settings: Settings, parsed: P
     hosts = [host for host, _, _ in await _hosts(db, settings) if key_matches(parsed.proxy_key, host)]
     stored = {row.fingerprint: row.id for row in (await db.execute(select(Certificate))).scalars()}
     stored.setdefault(parsed.fingerprint, uuid.uuid4())
+    # A certificate that was removed or replaced here a moment ago is still served until the
+    # proxy has fetched its configuration again: that one is ours, not one it fetched.
+    recent = await db.execute(
+        select(AuditLog.details).where(
+            AuditLog.action.in_(("certificate.remove", "certificate.replace")),
+            AuditLog.created_at > datetime.now(UTC) - JUST_NOW,
+        )
+    )
+    for details in recent.scalars():
+        for source in (details, details.get("before") or {}):
+            if isinstance(source.get("fingerprint"), str):
+                stored.setdefault(source["fingerprint"], uuid.uuid4())
     answers = await asyncio.gather(*(_served(settings.proxy_tls_address, host, stored) for host in hosts))
     return sorted(host for host, answer in zip(hosts, answers, strict=True) if answer.source == "other")
 
