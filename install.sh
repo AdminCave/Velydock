@@ -206,6 +206,8 @@ load_messages() {
     "%s gehört jetzt %s, und niemand sonst kann darin schreiben."
   m dir_unsafe "%s cannot be made safe: it must belong to %s and must not be writable by its group or by others. Choose another directory." \
     "%s lässt sich nicht absichern: Es muss %s gehören und darf weder für die Gruppe noch für andere schreibbar sein. Wähle ein anderes Verzeichnis."
+  m dir_acl "%s carries access rules (an ACL) handed down from the directory above, which would give others write access to what is created in it, and they cannot be removed here (setfacl is missing). Install the package 'acl' or choose another directory." \
+    "%s trägt vom übergeordneten Verzeichnis vererbte Zugriffsregeln (eine ACL), die anderen Schreibrechte auf alles gäben, was darin angelegt wird, und sie lassen sich hier nicht entfernen (setfacl fehlt). Installiere das Paket acl oder wähle ein anderes Verzeichnis."
   m dir_taken "%s already holds a Velydock installation; start the installer with --dir %s to see it." \
     "%s enthält bereits eine Velydock-Installation; starte den Installer mit --dir %s, um sie zu sehen."
   m sec_backup "Backups" "Backups"
@@ -1803,6 +1805,16 @@ check_directory() {
 # before is therefore taken over: it belongs to whoever installs, and nobody else writes to it.
 # What cannot be made so is not used.
 secure_directory() {
+  # A default ACL inherited from the directory above would give everything created in here
+  # write access for others, whatever the umask (seen on /opt of GitHub's runners). It goes
+  # first, with the other ACL entries, where the tool for it exists.
+  if command -v setfacl >/dev/null 2>&1; then setfacl -b -k -- "$opt_dir" 2>/dev/null || true; fi
+  # ls marks a directory that (still) carries an ACL with "+" after its mode; nothing else
+  # that is always installed tells.
+  # shellcheck disable=SC2012
+  if [[ $(LC_ALL=C ls -ld -- "$opt_dir" 2>/dev/null | cut -c11) == "+" ]]; then
+    die "$(t dir_acl "$opt_dir")"
+  fi
   if directory_safe "$opt_dir"; then return 0; fi
   if (( EUID == 0 )); then chown -- 0:0 "$opt_dir" 2>/dev/null || true; fi
   chmod go-w -- "$opt_dir" 2>/dev/null || true
@@ -2002,6 +2014,9 @@ main() {
   detect_language "$@"
   # From here on, what other programs print must not depend on the caller's language.
   export LC_ALL=C
+  # Nothing the installer creates is writable for group or others, whatever the caller's umask
+  # (secrets get a narrower one where they are written).
+  umask 022
   load_messages
   parse_args "$@"
   check_options

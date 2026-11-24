@@ -774,10 +774,47 @@ is_release "$three" "$work/stage2/velydock-$second" || fail "after finishing, th
 [[ ! -e $three/.update-state && $(cat "$three/.previous/$first/IMAGE") == "$old_image" ]] ||
   fail "after finishing: .update-state left, or the kept copy of $first was overwritten with the mixture"
 expect 0 'Everything is running' "${updating[@]}" "$three/scripts/velydock" status
+echo "update: one that was cut off is reported by status and doctor, and finished by the next update"
+
+# 5. A place that hands down write access for everybody: a caller with umask 000, and - where
+#    the file system and the tools allow it - a default ACL on the directory above, as /opt has
+#    on GitHub's runners. There a new directory is writable for others whatever the umask (the
+#    first run of the CI job found the installation directory with mode 777 after the documented
+#    way back). Root runs programs from the installation: nothing in it may be writable for others.
+open_parent=$work/open-parent
+mkdir "$open_parent"
+handed_down="umask 000"
+if command -v setfacl >/dev/null 2>&1 && setfacl -d -m u::rwx,g::rwx,o::rwx "$open_parent" 2>/dev/null; then
+  handed_down="umask 000 and a default ACL above"
+fi
+four=$open_parent/installation
+( umask 000 && fresh_installation "$four" )
+# What the installer does with the directory itself (secure_directory in install.sh).
+if command -v setfacl >/dev/null 2>&1; then setfacl -b -k "$four" 2>/dev/null || true; fi
+chmod go-w "$four"
+open=$(find "$four" -perm /022 ! -type l | head -n 5)
+[[ -z $open ]] || fail "after placing the program files with $handed_down, others can write to: $open"
+( umask 000 && "${updating[@]}" "$four/scripts/velydock" update --yes ) > "$work/update.out" 2>&1 || {
+  cat "$work/update.out" >&2
+  fail "the update with $handed_down failed"
+}
+[[ -d $four/.previous/$first ]] || fail "the update kept no previous files"
+open=$(find "$four" -perm /022 ! -type l | head -n 5)
+[[ -z $open ]] || fail "after an update with $handed_down, others can write to: $open"
+# The documented way back copies the kept directory over the installation, its mode included.
+cp -a "$four/.previous/$first/." "$four/"
+[[ $(stat -c %a "$four") == 755 ]] || fail "after the way back the installation directory has mode $(stat -c %a "$four")"
+"${updating[@]}" "$four/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said '^\[ ok \] the installation directory can be changed by its owner only'
+said '^\[ ok \] the program files can be changed by their owner only'
+chmod o+w "$four/scripts/velydock"
+"${updating[@]}" "$four/scripts/velydock" doctor > "$work/doctor.out" 2>&1 || true
+said '^\[FAIL\] others can write to program files of the installation: .*scripts/velydock'
+chmod o-w "$four/scripts/velydock"
+echo "update: nothing below the installation is writable for others ($handed_down)"
 kill "$files_pid" 2>/dev/null
 wait "$files_pid" 2>/dev/null || true
 files_pid=""
-echo "update: one that was cut off is reported by status and doctor, and finished by the next update"
 
 if [[ ${INSTALLER_TEST_ONLY:-} == quick ]]; then
   passed=" (the quick part only: INSTALLER_TEST_ONLY=quick)"
