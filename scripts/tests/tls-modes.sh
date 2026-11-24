@@ -5,10 +5,11 @@
 #      from Pebble, Let's Encrypt's test server, so that nothing leaves this machine), for the
 #      names Velydock asks it to fetch one for,
 #   2. own certificates stored with `velydock cert add`: served for a name the proxy holds no
-#      certificate for, and never fetched one for afterwards,
-#   3. a name the proxy has fetched a certificate for before: the fetched one stays until it is
-#      taken out of the proxy's store (`velydock cert prune-fetched`), then the own one is
-#      served, also after restarts, and nothing is fetched for that name again,
+#      certificate for; stored again with its chain, the chain reaches the proxy,
+#   3. names the proxy has fetched certificates for before: Velydock says at the upload that
+#      the fetched ones have to go; once they are taken out of the proxy's store
+#      (`velydock cert prune-fetched`) the own ones are served, also after restarts, and
+#      nothing is fetched for these names again,
 #   4. removing an own certificate: the proxy fetches one again.
 #
 #   ./scripts/tests/tls-modes.sh
@@ -84,21 +85,31 @@ KEYCLOAK_BOOTSTRAP_SECRET=$(secret)
 VELYDOCK_PROXY_SECRET=$(secret)
 ENV
 
-# Own certificates: a root of our own, and one certificate per name signed by it. The common
-# name is chosen so that the proxy's order of certificates puts the one it fetched itself first
-# (it sorts them by their names, see backend/velydock/services/certificates.py): the case in
-# which an administrator has to take the fetched one out.
+# Own certificates: a root of our own, an intermediate below it, and one certificate per name
+# signed by the intermediate - as a certificate from a public authority comes.
 own="$work/own"
 mkdir "$own"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
   -subj "/CN=Velydock Test Root" -keyout "$own/root.key" -out "$own/root.crt" 2>/dev/null
-issue() { # <file name> <subject alternative names>
-  openssl req -newkey rsa:2048 -nodes -subj "/CN=A test certificate for $1" -keyout "$own/$1.key" -out "$own/$1.csr" 2>/dev/null
-  openssl x509 -req -in "$own/$1.csr" -CA "$own/root.crt" -CAkey "$own/root.key" -CAcreateserial -days 20 \
-    -extfile <(printf 'subjectAltName=%s\n' "$2") -out "$own/$1.crt" 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=Velydock Test Intermediate" \
+  -keyout "$own/intermediate.key" -out "$own/intermediate.csr" 2>/dev/null
+openssl x509 -req -in "$own/intermediate.csr" -CA "$own/root.crt" -CAkey "$own/root.key" -CAcreateserial -days 25 \
+  -extfile <(printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n') \
+  -out "$own/intermediate.crt" 2>/dev/null
+issue() { # <file name> <common name> <subject alternative names>
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=$2" -keyout "$own/$1.key" -out "$own/$1.csr" 2>/dev/null
+  openssl x509 -req -in "$own/$1.csr" -CA "$own/intermediate.crt" -CAkey "$own/intermediate.key" -CAcreateserial \
+    -days 20 -extfile <(printf 'subjectAltName=%s\n' "$3") -out "$own/$1.crt" 2>/dev/null
 }
-issue auth "DNS:auth.tls.test"
-issue apps "DNS:apps.tls.test,DNS:*.apps.tls.test"
+issue apps "Apps of the test" "DNS:apps.tls.test,DNS:*.apps.tls.test"
+# Two names the proxy will have fetched certificates for by then. The proxy sorts its
+# certificates by their list of names (common name included) and takes the last that fits:
+# - "auth": a common name that sorts before the host name, so the fetched one stays in front;
+# - "sandbox": exactly the names of the fetched one - then which of the two is served changes
+#   with every reload of the proxy's configuration.
+issue auth "A test certificate" "DNS:auth.tls.test"
+issue sandbox "sandbox.tls.test" "DNS:sandbox.tls.test"
+OWN="Velydock Test Intermediate"
 
 # Who issued the certificate a browser gets for a name (empty while the proxy does not answer).
 issuer_of() {
@@ -136,10 +147,28 @@ done
 # Nothing is published below the apps host, so nothing was asked for there.
 expect_issuer apps.tls.test "TRAEFIK DEFAULT CERT" "a name without a route should get the stand-in"
 
+# How many certificates the proxy sends for a name (the certificate and what leads to its issuer).
+sent() {
+  echo | openssl s_client -connect "127.0.0.1:$port" -servername "$1" -showcerts 2>/dev/null | grep -c 'BEGIN CERTIFICATE' || true
+}
+
 echo "2. own certificates, stored on the command line as the installer does it"
-cat "$own/apps.crt" "$own/root.crt" "$own/apps.key" | cert add --name "Apps" >/dev/null
-expect_issuer apps.tls.test "Velydock Test Root" "the own certificate is not served"
-expect_issuer wiki.apps.tls.test "Velydock Test Root" "the wildcard is not served for a sub-domain"
+# First as people do it wrong: without the certificate of the issuer. It is stored, with a warning.
+cat "$own/apps.crt" "$own/apps.key" | cert add --name "Apps" > "$work/add.out" 2> "$work/add.err"
+grep -q 'the certificate of its issuer is not with it' "$work/add.err" || { echo "error: no warning about the missing issuer" >&2; cat "$work/add.err" >&2; exit 1; }
+expect_issuer apps.tls.test "$OWN" "the own certificate is not served"
+expect_issuer wiki.apps.tls.test "$OWN" "the wildcard is not served for a sub-domain"
+[[ $(sent apps.tls.test) == 1 ]] || { echo "error: expected the certificate alone, the proxy sends $(sent apps.tls.test)" >&2; exit 1; }
+# Then what the warning says: the same certificate again, with its chain. Same certificate,
+# same fingerprint - and the proxy must send the chain now.
+cat "$own/apps.crt" "$own/intermediate.crt" "$own/root.crt" "$own/apps.key" | cert add --name "Apps" --replace > /dev/null 2> "$work/add.err"
+[[ ! -s $work/add.err ]] || { echo "error: a warning although the chain is complete:" >&2; cat "$work/add.err" >&2; exit 1; }
+for _ in $(seq 1 45); do
+  [[ $(sent apps.tls.test) == 2 ]] && break
+  sleep 1
+done
+[[ $(sent apps.tls.test) == 2 ]] || { echo "error: the chain stored afterwards does not reach the proxy (it sends $(sent apps.tls.test) certificate)" >&2; exit 1; }
+echo "  apps.tls.test: certificate and issuer are sent after the chain was added"
 expect_issuer dock.tls.test "Pebble Intermediate CA*" "an own certificate changed another name"
 listed=$(cert list)
 grep -q $'^Apps\tapps.tls.test, \\*.apps.tls.test\t' <<<"$listed" || { echo "error: cert list does not show it: $listed" >&2; exit 1; }
@@ -147,31 +176,50 @@ grep -q $'^Apps\tapps.tls.test, \\*.apps.tls.test\t' <<<"$listed" || { echo "err
 modes=$("${compose[@]}" exec -T velydock sh -c 'stat -c "%a %U" /certs/*.key | sort -u')
 [[ $modes == "640 velydock" ]] || { echo "error: key files are '$modes', expected '640 velydock'" >&2; exit 1; }
 
-echo "3. a name the proxy has fetched a certificate for before"
-cat "$own/auth.crt" "$own/root.crt" "$own/auth.key" | cert add --name "Anmeldung" >/dev/null
+echo "3. names the proxy has fetched certificates for before"
+for name in auth sandbox; do
+  cat "$own/$name.crt" "$own/intermediate.crt" "$own/$name.key" | cert add --name "$name" > /dev/null 2> "$work/add.err"
+  # Velydock asked the proxy before it stored the certificate, saw one from elsewhere, and says
+  # what that means - whatever the proxy serves afterwards.
+  grep -q "warning: for $name.tls.test the proxy holds a certificate it fetched itself" "$work/add.err" ||
+    { echo "error: no warning that $name.tls.test needs the takeover" >&2; cat "$work/add.err" >&2; exit 1; }
+done
 sleep 12 # two fetches of the configuration
-# Two certificates for one name, and the proxy takes the fetched one: this is why …
+# Two certificates for one name. For auth the proxy's order puts the fetched one first …
 expect_issuer auth.tls.test "Pebble Intermediate CA*" "expected the fetched certificate to stay in front"
-# … the fetched one is taken out of the proxy's store, while the proxy is stopped.
+# … for sandbox either may be served (same names in both): nothing to rely on, so nothing is
+# asserted. In both cases the fetched ones are taken out of the proxy's store, while it is stopped.
 "${compose[@]}" stop traefik >/dev/null 2>&1
 pruned=$("${compose[@]}" run --rm --no-deps --user 0:0 -v "${project}_traefik-acme:/acme" velydock \
-  cert prune-fetched /acme/acme.json 2>/dev/null)
-[[ $pruned == "Removed the fetched certificate for auth.tls.test." ]] || { echo "error: pruning said: $pruned" >&2; exit 1; }
+  cert prune-fetched /acme/acme.json 2>/dev/null | sort)
+wanted=$'Removed the fetched certificate for auth.tls.test.\nRemoved the fetched certificate for sandbox.tls.test.'
+[[ $pruned == "$wanted" ]] || { echo "error: pruning said: $pruned" >&2; exit 1; }
 "${compose[@]}" start traefik >/dev/null 2>&1
-expect_issuer auth.tls.test "Velydock Test Root" "the own certificate is not served after pruning"
+expect_issuer auth.tls.test "$OWN" "the own certificate is not served after pruning"
+expect_issuer sandbox.tls.test "$OWN" "the own certificate is not served after pruning"
 expect_issuer dock.tls.test "Pebble Intermediate CA*" "pruning took a certificate it should have kept"
-# It stays that way: with a certificate of its own, the name is not asked for again.
-for round in 1 2; do
+# It stays that way, also for the name with the same list (three restarts: before the pruning
+# each of them could have changed which one is served), and nothing is fetched for them again.
+for round in 1 2 3; do
   "${compose[@]}" restart traefik >/dev/null 2>&1
-  expect_issuer auth.tls.test "Velydock Test Root" "after restart $round the own certificate is not served"
+  expect_issuer auth.tls.test "$OWN" "after restart $round the own certificate is not served"
+  expect_issuer sandbox.tls.test "$OWN" "after restart $round the own certificate is not served"
 done
 sleep 8
-[[ $(fetched auth.tls.test) == 0 ]] || { echo "error: the proxy fetched a certificate for auth.tls.test again" >&2; exit 1; }
+for name in auth.tls.test sandbox.tls.test; do
+  [[ $(fetched "$name") == 0 ]] || { echo "error: the proxy fetched a certificate for $name again" >&2; exit 1; }
+done
 [[ $(fetched dock.tls.test) == 1 ]] || { echo "error: the certificate for dock.tls.test is gone from the proxy's store" >&2; exit 1; }
+# The secret the proxy fetches its configuration with is not among its arguments.
+if "${compose[@]}" exec -T traefik sh -c 'tr "\0" " " < /proc/1/cmdline' | grep -qi 'secret'; then
+  echo "error: the proxy's arguments carry a secret" >&2; exit 1
+fi
 
 echo "4. removed again: the proxy fetches a certificate for the name"
-cert remove "Anmeldung" >/dev/null
+cert remove "auth" >/dev/null
 expect_issuer auth.tls.test "Pebble Intermediate CA*" "no certificate was fetched after the own one was removed"
+cert remove "sandbox" >/dev/null
+expect_issuer sandbox.tls.test "Pebble Intermediate CA*" "no certificate was fetched after the own one was removed"
 cert remove "Apps" >/dev/null
 expect_issuer apps.tls.test "TRAEFIK DEFAULT CERT" "the removed certificate is still served"
 left=$("${compose[@]}" exec -T velydock sh -c 'ls /certs | wc -l')

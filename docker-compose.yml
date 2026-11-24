@@ -28,36 +28,40 @@ services:
     <<: *hardening
     image: traefik:v3.7.19
     profiles: ["proxy"]
-    command:
-      - --providers.file.directory=/etc/traefik/dynamic
-      # The routes of apps published through this proxy and the names of uploaded certificates
-      # are not in a file: Traefik fetches them from Velydock every few seconds, with a secret
-      # only the two share. While Velydock is away it keeps what it has. Without APPS_HOST and
-      # without uploaded certificates Velydock answers with nothing.
-      - --providers.http.endpoint=http://velydock:8000/internal/proxy/traefik
-      - --providers.http.pollinterval=5s
-      - --providers.http.headers.X-Velydock-Proxy-Secret=${VELYDOCK_PROXY_SECRET:-}
-      - --entrypoints.web.address=:80
-      - --entrypoints.web.http.redirections.entrypoint.to=websecure
-      - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --entrypoints.websecure.address=:443
+    # The whole static configuration is given as environment variables, not as arguments:
+    # arguments are readable by every user of the server (ps, /proc), and one of the values is
+    # a secret. Traefik takes its static configuration from one source only, so all of it is
+    # here. (TRAEFIK_A_B_C is the option a.b.c.)
+    environment:
+      TRAEFIK_PROVIDERS_FILE_DIRECTORY: /etc/traefik/dynamic
+      # The routes of apps published through this proxy, the names of uploaded certificates
+      # and the names it fetches certificates for are not in a file: Traefik fetches them from
+      # Velydock every few seconds, with a secret only the two share. While Velydock is away
+      # it keeps what it has.
+      TRAEFIK_PROVIDERS_HTTP_ENDPOINT: http://velydock:8000/internal/proxy/traefik
+      TRAEFIK_PROVIDERS_HTTP_POLLINTERVAL: 5s
+      TRAEFIK_PROVIDERS_HTTP_HEADERS_X-Velydock-Proxy-Secret: ${VELYDOCK_PROXY_SECRET:-}
+      TRAEFIK_ENTRYPOINTS_WEB_ADDRESS: ":80"
+      TRAEFIK_ENTRYPOINTS_WEB_HTTP_REDIRECTIONS_ENTRYPOINT_TO: websecure
+      TRAEFIK_ENTRYPOINTS_WEB_HTTP_REDIRECTIONS_ENTRYPOINT_SCHEME: https
+      TRAEFIK_ENTRYPOINTS_WEBSECURE_ADDRESS: ":443"
       # Traefik matches "/api%2F…" as one path segment while the application behind it decodes
       # it to "/api/…": such a request would reach the API past the router that rate-limits it.
       # No address of Velydock or Keycloak carries an encoded slash in its path, so refuse them.
-      - --entrypoints.websecure.http.encodedcharacters.allowencodedslash=false
+      TRAEFIK_ENTRYPOINTS_WEBSECURE_HTTP_ENCODEDCHARACTERS_ALLOWENCODEDSLASH: "false"
       # A header name written with "_" or "." (X_Forwarded_For) is read by some backends as the
       # header it resembles (X-Forwarded-For), which Traefik sets itself. Browsers never send
       # such names: drop these headers instead of passing them on. Applies to both entry points.
-      - --global.aliasheadersstrategy=delete
-      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
+      TRAEFIK_GLOBAL_ALIASHEADERSSTRATEGY: delete
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${ACME_EMAIL:-}
       # Another ACME directory than Let's Encrypt's: its staging environment while trying an
       # installation out (no rate limits, certificates browsers do not trust), or a CA of one's own.
-      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
-      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      - --log.level=INFO
-      - --global.sendanonymoususage=false
-    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_CASERVER: ${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_STORAGE: /acme/acme.json
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_HTTPCHALLENGE_ENTRYPOINT: web
+      TRAEFIK_LOG_LEVEL: INFO
+      TRAEFIK_GLOBAL_SENDANONYMOUSUSAGE: "false"
+      # For the route file (deploy/traefik/dynamic/velydock.yml), which reads them.
       VELYDOCK_HOST: ${VELYDOCK_HOST:?set VELYDOCK_HOST in .env}
       KEYCLOAK_HOST: ${KEYCLOAK_HOST:?set KEYCLOAK_HOST in .env}
       SANDBOX_HOST: ${SANDBOX_HOST:?set SANDBOX_HOST in .env}
