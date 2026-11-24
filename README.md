@@ -29,26 +29,35 @@ Teil von [Admin Cave](https://admincave.com). Lizenz: GPL-3.0-or-later.
   Rollen zuweisen – ohne eigene Passwortverwaltung.
 - **Single Sign-On:** Anmeldung über Keycloak (OpenID Connect) mit eigenem Login-Design,
   Zwei-Faktor-Pflicht für Administratoren, sofortiger Abmeldung bei Sperre.
-- **Betrieb:** vier Container mit Docker Compose, automatische TLS-Zertifikate, Skripte für
-  Installation, Backup und Wiederherstellung.
+- **Betrieb:** vier Container mit Docker Compose, automatische TLS-Zertifikate, ein Installer und
+  der Befehl `velydock` für Update, Backup, Wiederherstellung und Diagnose.
 
 ## Schnellstart
 
-Voraussetzungen: Docker mit Compose und drei DNS-Namen, die auf den Server zeigen.
+Voraussetzungen: ein Linux-Server (x86_64) und drei DNS-Namen, die auf ihn zeigen.
+
+```bash
+curl -fsSL https://github.com/AdminCave/Velydock/releases/latest/download/install.sh | sudo bash
+```
+
+Der Installer prüft den Server, richtet unter Debian und Ubuntu auf Wunsch Docker ein, fragt nach
+Hostnamen, Zertifikaten und dem ersten Administrator, startet alles und zeigt am Ende Adresse,
+Benutzername und ein Einmalpasswort. Danach gibt es auf dem Server den Befehl `velydock`
+(`velydock status`, `update`, `backup`, `doctor`, `help`). Ausführlich:
+[docs/installation.md](docs/installation.md).
+
+**Diese Zeile braucht ein veröffentlichtes Release, und noch gibt es keines** – das erste entsteht
+mit dem Tag `v0.1.0`. Bis dahin geht es von Hand aus dem Quelltext:
 
 ```bash
 git clone https://github.com/AdminCave/Velydock.git && cd Velydock
-docker build -t ghcr.io/admincave/velydock:latest .    # nur solange kein Release veröffentlicht ist
+docker build -t ghcr.io/admincave/velydock:latest .
 ./scripts/install.sh dock.example.com auth.example.com sandbox.example.com admin@example.com
 docker compose up -d --wait    # kehrt zurück, sobald alles bereit ist (erster Start: ein bis zwei Minuten)
 docker compose exec velydock velydock setup-admin --username admin --email admin@example.com
 ```
 
 Der letzte Befehl zeigt ein Einmalpasswort. Danach `https://dock.example.com` öffnen und anmelden.
-Ausführlich: [docs/installation.md](docs/installation.md).
-
-Ein fertiges Image gibt es erst mit dem ersten Release (Tag `v0.1.0`); bis dahin baut die zweite
-Zeile es lokal aus dem Quelltext.
 
 Zum Ausprobieren auf dem eigenen Rechner ohne DNS und Zertifikate:
 [docs/entwicklung.md](docs/entwicklung.md#der-entwicklungs-stack).

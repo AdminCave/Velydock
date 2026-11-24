@@ -93,6 +93,22 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
 - **Keycloak-Updates** sind Aufgabe des Betreibers (`KEYCLOAK_IMAGE` in `.env`,
   [betrieb.md](betrieb.md#update)).
 - **Der Zugang zu Keycloaks Konsole** führt über einen SSH-Tunnel ([betrieb.md](betrieb.md)).
+- **Der Installer braucht ein veröffentlichtes Release, und noch gibt es keines.** Bis dahin
+  bleibt die Installation von Hand ([installation.md](installation.md#installation-von-hand)).
+- **Nur x86_64.** Das Image wird nur für amd64 gebaut; auf anderen Architekturen bricht der
+  Installer mit dieser Auskunft ab.
+- **Docker richtet der Installer nur unter Debian und Ubuntu ein.** Auf anderen Systemen muss es
+  vorher installiert sein.
+- **Eine Installation je Server.** Der Befehl in `/usr/local/bin`, der Backup-Timer und das
+  Compose-Projekt `velydock` gibt es je Server einmal; eine zweite Installation lehnt der
+  Installer ab.
+- **Das Release ist durch eine Prüfsumme gesichert, nicht durch eine Signatur.** `SHA256SUMS`
+  stammt aus demselben Release wie das Paket: Sie deckt Übertragungsfehler auf, kein
+  manipuliertes Release.
+- **Die nächtlichen Backups des Installers liegen auf dem Server selbst.** Sie von dort an einen
+  anderen Ort zu kopieren, ist Aufgabe des Betreibers.
+- **Der Befehl `velydock` meldet sich nur auf Englisch;** der Installer spricht Deutsch und
+  Englisch.
 
 ## Nicht automatisiert getestet
 
@@ -114,4 +130,13 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
   Chromium und Firefox ist der Weg vollständig getestet.
 - Die Installation nach Anleitung *mit* eingerichtetem Apps-Host. Der Installationstest läuft
   ohne; das Veröffentlichen selbst ist auf dem Entwicklungs-Stack getestet, der dieselbe
-  Compose-Datei verwendet.
+  Compose-Datei verwendet. Der Test des Installers richtet einen Apps-Host ein, veröffentlicht
+  dort aber nichts.
+- Der Installer als root mit echtem systemd außerhalb der CI: Auf einem Entwicklerrechner läuft
+  sein Test ohne root in einem eigenen Verzeichnis; Befehl, Timer und Protokoll sind dort nur in
+  einem Container mit Attrappen für `docker` und `systemctl` geprüft
+  ([tests.md](tests.md#installer-und-verwaltungsbefehl)).
+- Die Einrichtung von Docker durch den Installer bis zum laufenden Daemon. Geprüft ist, dass die
+  Pakete sich unter Debian 13 und Ubuntu 24.04 installieren lassen.
+- Der Import eines eigenen Zertifikats durch den Installer in einen laufenden Stack; geprüft sind
+  die Prüfungen vor dem Start und was der Befehl übergibt.
