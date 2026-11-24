@@ -319,6 +319,28 @@ Am 24.11.2026 kam dazu:
 | Die Warnung „Zertifikat des Ausstellers fehlt“ erschien auch für ein Zertifikat, das direkt von einer mitgelieferten Wurzel ausgestellt war. | Import auf der Kommandozeile im selben Test; jetzt `unit/test_certificates.py` |
 | Ein Test der Kommandozeile schloss die Datenbankverbindung der ganzen Testsuite; 289 folgende Tests brachen mit Fehlern ab. | Lauf der kompletten Suite (die Datei allein bestand) |
 | Ein Browser-Test scheiterte in drei Läufen mit `net::ERR_NETWORK_CHANGED`. Ursache ist die Maschine, nicht Velydock: Eine andere Arbeitssitzung legte alle paar Sekunden Container-Netzwerkschnittstellen an und ab (mit `ip monitor` während des Tests aufgezeichnet), und Chromium bricht dabei laufende Anfragen ab. | Trace des Tests und `ip monitor`. Der Installer-Test wiederholt die Anmeldung, wenn die Spur genau diesen Fehler zeigt; die Browser-Suite tut das nicht. |
+| Auf dem GitHub-Runner war das Installationsverzeichnis nach dem dokumentierten Weg zurück für alle schreibbar (`velydock doctor` meldete Modus 777). `/opt` vererbt dort eine Standard-ACL: Neue Unterverzeichnisse bekommen Schreibrechte für alle, gleich welche umask gilt – und aus dem Verzeichnis führt root Programme aus. | Erster Lauf des CI-Jobs „Installer“ als root. Behoben: Der Installer entfernt die ACL des Verzeichnisses (oder lehnt es ab), der Verwaltungsbefehl schließt, was er anlegt; `installer.sh` stellt die Lage mit `setfacl` und umask 000 nach. |
+
+## Durchsicht der Zertifikate und des Installers (24.11.2026)
+
+Eine unabhängige Durchsicht des neuen Codes, ohne Kenntnis der eigenen Tests. Alle Punkte sind
+behoben und haben einen Test bekommen.
+
+| Befund | Behoben durch |
+|---|---|
+| Dasselbe Zertifikat, mit Kette erneut hinterlegt, kam nie beim Proxy an: Seine Dateien hießen nach dem Fingerabdruck des Zertifikats, der sich nicht ändert. | Dateiname aus dem gespeicherten Inhalt. `test_certificates.py`, `tls-modes.sh` (der Proxy schickt danach zwei Zertifikate) |
+| Ein Datenbankfehler beim Speichern hätte den privaten Schlüssel ins Log geschrieben (SQLAlchemy nennt die Werte einer gescheiterten Anweisung). | Werte werden nie protokolliert; Namen mit Steuerzeichen werden vorher abgelehnt. `TestTheKeyStaysOutOfTheLog` |
+| Bei gleicher Namensliste in hochgeladenem und geholtem Zertifikat wechselt Traefiks Wahl mit jedem Neuladen; ein Blick auf das Ausgelieferte bewies nichts. | Velydock fragt den Proxy beim Hochladen und merkt sich die Adresse, bis aufgeräumt ist. `TestWhatIsReallyServed`, `tls-modes.sh` |
+| Ein *Common Name*, der ein Hostname außerhalb der Namen des Zertifikats ist, übernahm diese Adresse (Traefik wertet ihn aus, Browser nicht). | Abgelehnt. `unit/test_certificates.py` |
+| Ein noch nicht gültiges Zertifikat wurde angenommen und sofort ausgeliefert; bei zwei Zertifikaten zum selben Schlüssel galt das erste statt des neueren. | Abgelehnt bzw. das neuere. `unit/test_certificates.py` |
+| Das Geheimnis, mit dem der Proxy seine Konfiguration abholt, stand in seinen Aufrufargumenten – lesbar für jeden Benutzer des Servers. | Traefiks statische Konfiguration steht in der Umgebung. `tls-modes.sh` prüft die Argumente. |
+| `velydock cert takeover` ließ den Proxy gestoppt, wenn es unterbrochen wurde. | Aufräumen bei jedem Ende des Befehls. `installer.sh` (unterbrochen mit HUP und TERM) |
+| `velydock update` tauschte Dateien, Version und Image-Zeile, bevor das neue Image geholt war; nach einem gescheiterten Abruf galt die Installation als aktuell. | Erst holen, dann tauschen; `VERSION` zuletzt; ein gescheitertes Ersetzen wird zurückgenommen. `installer.sh` |
+| Eine liegengebliebene Datei des Installers hätte Monate später alte Programmdateien eingespielt und das Passwort des Administrators zurückgesetzt. | Fortsetzung nur bei gleicher Version; kein Administrator, wenn es Konten gibt. `installer-system.sh` |
+| Ein vorhandenes Installationsverzeichnis wurde mit jedem Eigentümer und Modus übernommen, obwohl root daraus Programme ausführt. | Wird root übergeben und für andere geschlossen, sonst abgelehnt. `installer-system.sh` |
+| Die Aufbewahrung konnte das eben geschriebene Backup löschen (wenn ältere spätere Zeitstempel trugen). | Das neue bleibt immer. `installer.sh` |
+| Strg+C beendete den Installer, während sein Schritt weiterlief. | Die ganze Prozessgruppe des Schritts endet. `installer-system.sh` |
+| Ein Tag auf beliebigem Commit veröffentlichte Image und `latest`, bevor etwas geprüft war. | Das Release verlangt einen Versions-Tag auf `main` mit erfolgreicher CI. Im Ablauf selbst noch nicht gelaufen – es gab noch kein Release. |
 
 ## Fehler, die eine unabhängige Durchsicht gefunden hat
 
@@ -517,9 +539,22 @@ Als root mit echtem systemd, im Standardverzeichnis und auf den Ports 80 und 443
 `scripts/tests/installer.sh` nur im CI-Job „Installer“ (`INSTALLER_TEST_MODE=system`); auf einem
 Entwicklerrechner ist dieser Modus nicht vorgesehen.
 
-Nicht getestet: der Import eines eigenen Zertifikats in einen laufenden Stack, solange das Image
-den Befehl `velydock cert` nicht enthält (der Test überspringt den Schritt dann und sagt das),
-und die Ausstellung durch Let's Encrypt, die öffentliches DNS braucht.
+Eigene Zertifikate laufen in diesem Test zweimal durch den echten Stack: `velydock cert add` in
+die laufende Installation (ausgeliefert, von `doctor` erkannt, wieder entfernt) und zum Schluss
+eine frische Installation mit `--tls own`, nach der alle fünf Adressen – Velydock, Anmeldung,
+Sandbox, Apps-Host und eine App-Subdomain – mit dem übergebenen Zertifikat ausgeliefert werden
+(TLS-Handshake je Name) und der Schlüssel in keiner Datei des Installationsverzeichnisses steht.
+
+Gegen die Attrappe prüft das Skript außerdem, was schiefgehen kann: ein unterbrochenes
+`cert takeover` (der Proxy startet trotzdem wieder), ein Update, dessen Images sich nicht holen
+lassen (nichts verändert, wiederholbar), eines, das mitten im Ersetzen scheitert (zurückgenommen)
+oder hart abgebrochen wurde (gemeldet, vom nächsten Update beendet), Aufbewahrung bei Backups mit
+späteren Zeitstempeln, und eine Installation an einem Ort, der Schreibrechte vererbt (umask 000
+und eine Standard-ACL auf dem Verzeichnis darüber): Nichts unterhalb der Installation darf für
+andere schreibbar sein.
+
+Nicht getestet: die Ausstellung durch Let's Encrypt selbst, die öffentliches DNS braucht (der Weg
+dorthin läuft in `tls-modes.sh` gegen dessen Testserver).
 
 ## Continuous Integration
 

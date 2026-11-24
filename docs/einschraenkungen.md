@@ -150,5 +150,3 @@ Stand: Version 0.1. Was hier steht, ist nicht umgesetzt oder nur mit den genannt
   ([tests.md](tests.md#installer-und-verwaltungsbefehl)).
 - Die Einrichtung von Docker durch den Installer bis zum laufenden Daemon. Geprüft ist, dass die
   Pakete sich unter Debian 13 und Ubuntu 24.04 installieren lassen.
-- Der Import eines eigenen Zertifikats durch den Installer in einen laufenden Stack; geprüft sind
-  die Prüfungen vor dem Start und was der Befehl übergibt.
