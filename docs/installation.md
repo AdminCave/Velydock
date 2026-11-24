@@ -139,9 +139,19 @@ Weitere Optionen:
 - **Bricht eine Installation ab** – etwa, weil ein Image nicht geladen werden konnte –, nennt der
   Installer das Protokoll. Der nächste Lauf setzt sie mit den damaligen Antworten fort; die schon
   geschriebene `.env` bleibt. Wer stattdessen neu anfangen will:
-  `/opt/velydock/scripts/velydock uninstall --purge`.
+  `/opt/velydock/scripts/velydock uninstall --purge`. Eine alte Fortsetzung richtet keinen
+  Schaden an: Ist inzwischen eine andere Version installiert, verweigert der Installer sie, und
+  gibt es schon Konten, legt er keinen Administrator an und setzt keinen zurück (dafür ist
+  `velydock admin` da).
+- **Strg+C** beendet auch den laufenden Schritt (Images holen, Stack starten), nicht nur den
+  Installer, und nennt das Protokoll.
 - **Ein Verzeichnis, das nicht leer ist und keine Velydock-Installation enthält,** lehnt der
   Installer ab.
+- **Ein vorhandenes leeres Verzeichnis** übernimmt er als root nur als eigenes: Er sagt es
+  vorher, macht root zum Eigentümer und nimmt Gruppe und anderen das Schreibrecht – aus dem
+  Verzeichnis führt später root Programme aus. Ein symbolischer Link wird aufgelöst.
+- **Volumes einer früheren Installation** mit gleichem Projektnamen nennt er: eine alte Datenbank
+  verhindert die Installation, alte Zertifikatsspeicher des Proxys werden weiterverwendet.
 
 ## Installation von Hand
 

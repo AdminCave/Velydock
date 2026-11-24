@@ -65,20 +65,30 @@ Der Befehl
 1. ermittelt die Zielversion und fragt nach (`--yes` unterdrückt die Rückfrage);
 2. lädt das Paket des Releases und prüft es gegen dessen `SHA256SUMS` – passt die Prüfsumme
    nicht, ist nichts verändert;
-3. legt ein [Backup](#backup) an (`--no-backup` lässt es weg). Schlägt das Backup fehl, bricht
+3. holt die Images des neuen Releases, mit dessen Compose-Datei. Lassen sie sich nicht holen –
+   Registry nicht erreichbar, Netz weg –, bricht das Update ab: Nichts ist verändert, und es
+   lässt sich einfach wiederholen;
+4. legt ein [Backup](#backup) an (`--no-backup` lässt es weg). Schlägt das Backup fehl, bricht
    das Update ab, bevor etwas verändert ist;
-4. bewahrt die bisherigen Programmdateien in `.previous/<alte Version>/` auf und die bisherige
+5. bewahrt die bisherigen Programmdateien in `.previous/<alte Version>/` auf und die bisherige
    Zeile `VELYDOCK_IMAGE` in `.previous/<alte Version>.image`. Es bleibt immer nur der Stand vor
    dem letzten Update;
-5. ersetzt die Programmdateien an Ort und Stelle, Datei für Datei. Dateien, die das neue Release
-   nicht mehr enthält, entfernt er; alles, was nicht aus einem Release stammt, bleibt
-   unangetastet. Wurde eine Programmdatei auf dem Server geändert, nennt er sie – deine Fassung
-   liegt dann in `.previous/`;
-6. trägt das Image des neuen Releases in `.env` ein, holt die Images, startet
-   (`docker compose up -d --wait`), prüft, dass alle Container laufen, und meldet
-   „alte Version -> neue Version“.
+6. ersetzt die Programmdateien an Ort und Stelle, Datei für Datei, `VERSION` zuletzt. Dateien,
+   die das neue Release nicht mehr enthält, entfernt er; alles, was nicht aus einem Release
+   stammt, bleibt unangetastet. Wurde eine Programmdatei auf dem Server geändert, nennt er sie –
+   deine Fassung liegt dann in `.previous/`. Scheitert das Ersetzen oder wird es unterbrochen,
+   stellt er die bisherigen Dateien und die Image-Zeile wieder her;
+7. trägt das Image des neuen Releases in `.env` ein, startet (`docker compose up -d --wait`),
+   prüft, dass alle Container laufen, und meldet „alte Version -> neue Version“.
 
 Ist die gewünschte Version schon installiert, tut er nichts. Eine ältere Version lehnt er ab.
+
+Wird der Server mitten im Ersetzen hart abgeschaltet, bleibt eine Mischung aus alten und neuen
+Dateien zurück und eine Datei `.update-state`, die das festhält: `velydock status` und
+`velydock doctor` melden es, `start` und `restart` verweigern die Mischung, und `velydock update`
+bringt das Update zu Ende. Beide Befehle vergleichen außerdem das laufende Image mit dem in
+`.env` eingetragenen und melden einen Unterschied – etwa nach einer Änderung an `.env`, auf die
+noch kein `velydock start` folgte.
 
 **Zurück zur vorigen Version** führt über das Backup, nicht über die alten Programmdateien
 allein: Die neue Version hat beim Start womöglich die Datenbank verändert (Migrationen), und mit
@@ -195,7 +205,9 @@ Von Hand, im Git-Checkout oder im Installationsverzeichnis:
 
 `velydock backup` ruft dasselbe Skript auf. Ohne `--keep` gilt `VELYDOCK_BACKUP_KEEP` aus `.env`;
 steht auch dort nichts, wird nichts gelöscht. Aufgeräumt wird nur nach einem gelungenen Backup,
-und entfernt wird nur, was ein vollständiges Backup dieses Skripts ist: ein Verzeichnis
+das eben geschriebene bleibt in jedem Fall (auch wenn ältere wegen einer verstellten Uhr spätere
+Zeitstempel tragen; `velydock doctor` warnt dann), und entfernt wird nur, was ein vollständiges
+Backup dieses Skripts ist: ein Verzeichnis
 `velydock-<Zeitstempel>` mit `SHA256SUMS`, das nichts als die vier Dateien eines Backups enthält.
 Alles andere im Zielverzeichnis bleibt liegen, auch ein Backup, in das jemand eine eigene Datei
 gelegt hat.
@@ -405,6 +417,8 @@ Unterbrechung):
 ```bash
 velydock cert takeover
 ```
+
+Wird der Befehl unterbrochen, startet er den Proxy trotzdem wieder.
 
 Von Hand sind das drei Schritte:
 
