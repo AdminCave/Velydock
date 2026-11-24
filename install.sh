@@ -123,10 +123,10 @@ load_messages() {
   m chk_port_used "Port %s is already in use: %s" "Port %s ist bereits belegt: %s"
   m chk_port_hint "Velydock's proxy needs both ports. Stop the other service, or use --http-bind/--https-bind for other addresses." \
     "Velydocks Proxy braucht beide Ports. Beende den anderen Dienst oder nimm mit --http-bind/--https-bind andere Adressen."
-  m chk_project_exists "A Compose project named \"%s\" already runs on this server (it was not started from %s). Remove it first, or it and this installation would get in each other's way." \
-    "Auf diesem Server läuft bereits ein Compose-Projekt namens \"%s\" (nicht aus %s gestartet). Entferne es zuerst, sonst kommen es und diese Installation einander in die Quere."
-  m chk_volume_exists "The Docker volume %s of an earlier installation still exists. Its databases only work with the secrets they were created with: put the old .env back into %s and run the installer again, or remove the volume if the data is no longer needed (docker volume rm %s)." \
-    "Das Docker-Volume %s einer früheren Installation existiert noch. Seine Datenbanken funktionieren nur mit den Geheimnissen, mit denen sie angelegt wurden: Lege die alte .env wieder nach %s und starte den Installer erneut, oder entferne das Volume, wenn die Daten nicht mehr gebraucht werden (docker volume rm %s)."
+  m chk_project_exists "A Compose project named \"%s\" already has containers on this server, and %s holds no installation they could belong to. Remove them first; they and this installation would get in each other's way." \
+    "Ein Compose-Projekt namens \"%s\" hat auf diesem Server bereits Container, und %s enthält keine Installation, zu der sie gehören könnten. Entferne sie zuerst; sie und diese Installation kämen einander in die Quere."
+  m chk_volume_exists "The Docker volume %s of an earlier installation still exists. Its databases only work with the .env they were created with. If the data is still needed, put the old installation directory back to %s (program files and .env) and run the installer again; if not, remove the volume (docker volume rm %s)." \
+    "Das Docker-Volume %s einer früheren Installation existiert noch. Seine Datenbanken funktionieren nur mit der .env, mit der sie angelegt wurden. Werden die Daten noch gebraucht, lege das alte Installationsverzeichnis wieder nach %s (Programmdateien und .env) und starte den Installer erneut; wenn nicht, entferne das Volume (docker volume rm %s)."
   m chk_launcher_other "%s already belongs to another Velydock installation (%s)." \
     "%s gehört bereits zu einer anderen Velydock-Installation (%s)."
   m chk_release "release to install: %s" "Release, das installiert wird: %s"
