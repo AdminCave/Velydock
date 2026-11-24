@@ -4,6 +4,7 @@
 
 import type { AuditEntry } from '$lib/api/types';
 import { hasMessage, type Translate } from '$lib/i18n';
+import { shortFingerprint } from '$lib/certificates';
 import { builtinKey } from '$lib/proxy';
 
 // Turns an audit entry into readable text: what happened, and the details that matter.
@@ -35,6 +36,9 @@ export const AUDIT_ACTIONS = [
   'proxy.template.create',
   'proxy.template.update',
   'proxy.template.delete',
+  'certificate.add',
+  'certificate.replace',
+  'certificate.remove',
 ] as const;
 
 export function auditActionLabel(action: string, t: Translate): string {
@@ -125,6 +129,22 @@ function publicationParts(value: unknown, t: Translate): string[] {
   return parts;
 }
 
+/**
+ * What identifies a certificate in the log: the names it is valid for and the beginning of
+ * its fingerprint. The entry never holds more of it, and nothing of its key.
+ */
+function certificateParts(d: Record<string, unknown>, t: Translate): string[] {
+  const parts: string[] = [];
+  const names = Array.isArray(d.names)
+    ? d.names.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (names.length > 0) parts.push(t('audit.detail.certificateNames', { names: names.join(', ') }));
+  if (typeof d.fingerprint === 'string' && d.fingerprint) {
+    parts.push(t('audit.detail.fingerprint', { fingerprint: shortFingerprint(d.fingerprint) }));
+  }
+  return parts;
+}
+
 /** The noteworthy details of an entry as one short line; empty if there is nothing to add. */
 export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Translate): string {
   const d = entry.details ?? {};
@@ -177,6 +197,23 @@ export function auditDetail(entry: Pick<AuditEntry, 'action' | 'details'>, t: Tr
       // The organization is the entry's target; what was released for it is the detail.
       if (typeof d.value === 'string') parts.push(t('audit.detail.release', { value: d.value }));
       break;
+    case 'certificate.add':
+    case 'certificate.remove':
+      parts.push(...certificateParts(d, t));
+      break;
+    case 'certificate.replace': {
+      parts.push(...certificateParts(d, t));
+      // A renewal: the certificate that stood in this entry before.
+      const before = d.before as { fingerprint?: unknown } | null | undefined;
+      if (before && typeof before === 'object' && typeof before.fingerprint === 'string') {
+        parts.push(
+          t('audit.detail.fingerprintBefore', {
+            fingerprint: shortFingerprint(before.fingerprint),
+          }),
+        );
+      }
+      break;
+    }
     case 'proxy.template.update': {
       const names = fieldNames(d.fields, t);
       if (names) parts.push(t('audit.detail.fields', { fields: names }));

@@ -539,6 +539,7 @@ describe('SubNav', () => {
       'Organisationen',
       'Alle Benutzer',
       'Proxy-Vorlagen',
+      'Zertifikate',
       'Systemeinstellungen',
       'Systemprotokoll',
     ]);
@@ -554,6 +555,7 @@ describe('SubNav', () => {
       'Organisationen',
       'Alle Benutzer',
       'Proxy-Vorlagen',
+      'Zertifikate',
       'Systemeinstellungen',
       'Systemprotokoll',
     ]);

@@ -109,6 +109,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
       {required}
       {maxlength}
       {spellcheck}
+      {autocomplete}
       {autocapitalize}
       aria-label={ariaLabel}
       aria-invalid={bad || undefined}

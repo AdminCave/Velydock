@@ -132,6 +132,7 @@ describe('route table', () => {
       '/system/tenants',
       '/system/users',
       '/system/proxy-templates',
+      '/system/certificates',
       '/system/settings',
       '/system/audit',
     ]) {

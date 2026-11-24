@@ -14,6 +14,8 @@ export interface ConfirmOptions {
   detail?: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** `data-testid` of the confirming button, where a browser test has to find this one. */
+  confirmTestid?: string;
   /** "danger" for anything that deletes or locks out; "neutral" otherwise. */
   tone?: 'danger' | 'neutral';
 }

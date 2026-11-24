@@ -50,6 +50,13 @@ export type ProxyTemplate = S['ProxyTemplateOut'];
 export type ProxyTarget = S['ProxyTargetOut'];
 export type Publication = S['PublicationOut'];
 
+export type Certificate = S['CertificateOut'];
+export type CertificateHost = S['CertificateHost'];
+export type ServedCertificate = S['ServedCertificate'];
+export type CertificatesOverview = S['CertificatesOut'];
+export type CertificateUpload = S['CertificateIn'];
+export type CertificateReplacement = S['CertificateReplace'];
+
 export type TenantSettings = S['TenantSettingsOut'];
 export type TenantSettingsUpdate = S['TenantSettingsUpdate'];
 export type AuditEntry = S['AuditEntry'];

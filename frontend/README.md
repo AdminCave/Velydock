@@ -70,6 +70,8 @@ src/
     audit.ts            audit entries as readable text
     proxy.ts            publishing through the proxy: names, addresses and options as the
                         API checks them (pure); proxyText.ts names templates and settings
+    certificates.ts     own TLS certificates: what an upload must hold, where a refusal of
+                        the API belongs in the dialog, when the proxy serves what is stored
     embedDetail.ts      what the embedding check found, as text (codes of the API)
     appIcons.ts         the curated Lucide icons for apps
     stores/             session (me, session watch), workspace (apps, frames), toasts, media
@@ -78,8 +80,8 @@ src/
                         clipboard, storage
     components/
       ui/               Button, Input, Select, Switch, Checkbox, Modal, ConfirmDialog, Toast,
-                        Menu, Segmented, MultiPicker, Pagination, Callout, … (adapted from
-                        AdminHelper)
+                        Menu, Segmented, MultiPicker, Pagination, Callout, FileButton, …
+                        (adapted from AdminHelper)
       layout/           Shell, Dock, SubNav
       app/              AppStage (app view, kept-alive frames), AppFrame, AppIcon
       proxy/            ProxyOptionsEditor (the proxy settings of a publication or template),
@@ -366,6 +368,49 @@ The server stays the authority, and what it refuses is shown at the field it is 
   do they offer their controls without knowing, with the defaults mirrored in
   `lib/proxy.ts`.
 
+**Own certificates** (`lib/certificates.ts`, `pages/system/Certificates.svelte`,
+`CertificateModal.svelte`). A system administrator uploads a TLS certificate with its private
+key; the bundled proxy serves it for every address it is valid for. The rules are the API's
+(`backend/velydock/services/certificates.py`).
+
+- _The page_ reads `GET /api/v1/system/certificates` and shows two tables: what is stored, and
+  for every address of the installation what the proxy answered with when the API asked it
+  (`hosts[].served`). Where the installation cannot serve own certificates (`available:
+false`) it says why and offers neither adding nor replacing; removing stays possible.
+- _After a change_ the proxy needs a few seconds. The page reads the list at once, then every
+  three seconds, five times at most, until the proxy serves what is stored (`settled()`):
+  every address with a stored certificate gets it, and none still gets what was just removed
+  or replaced. Addresses the proxy did not answer for, or cannot be asked about, are not
+  waited for. Leaving the page and the next change end the asking; if the proxy is still
+  behind after the fifth time, the page says so (`certificate-hosts-stalled`).
+- _A stored certificate is meant for an address, and the proxy answers with another one_:
+  that means two things, and the page tells them apart. While it is asking again after a
+  change, the proxy has not caught up yet, and the row says that it takes the certificate
+  over within a few seconds (`certificate-host-pending`). At any other time (the asking has
+  ended, or the page was simply opened) an answer of `source: "other"` does not resolve
+  itself: the proxy holds a certificate it fetched itself (Let's Encrypt) for the name. It
+  keeps every one it fetched and, of two for one name, serves the one whose list of names
+  sorts later, so an uploaded wildcard always loses. The row then warns
+  (`certificate-host-shadowed`, `shadowed()`) that the fetched one has to be removed on the
+  server and names the section of the operations manual; it prints no command, because that
+  differs per installation. The proxy's stand-in (`default`) keeps the first wording: the
+  proxy has not taken the certificate over, or cannot read it.
+- _The dialog_ takes certificate and key as PEM (each chosen as a file, which is read as text
+  into its field, or pasted) or as one PKCS#12 file (read as bytes, sent as base64). Before
+  anything is sent it checks what it can: the sizes (64 KB per PEM field, 96 KB for the file),
+  that there is a certificate and exactly one key, and that a key which says it is protected
+  comes with a passphrase. Only the chosen format is sent, and a replacement sends the name
+  only when it was edited.
+- _What the API refuses_ stands at the field it is about, with a text of its own per code
+  (`certificates.error.<code>`, `UPLOAD_ERRORS`): never in a toast, never the server's text.
+  From a PKCS#12 file certificate and key come out of the one file, so what is about either
+  stands at the file. For `names_taken` the dialog offers to replace the certificate that
+  holds the names instead, with what was entered.
+- _The private key_ lives in the variables of the dialog and nowhere else. They are emptied
+  when the dialog closes and when the upload succeeded (`wipe()`); a file that is still being
+  read at that moment is not taken any more. The fields are `autocomplete="off"` and
+  `spellcheck="false"`, and nothing of an upload is logged or put into a message.
+
 **Translations.** Every key is one line with both languages:
 `'action.save': ['Speichern', 'Save']`. Unit tests check that every key used in the code
 exists, that none is dead, and that placeholders match. German microcopy addresses the user
@@ -545,3 +590,39 @@ pagination. A user dialog in which nothing can be changed has "Schließen" inste
 What the server refuses about a publication stands at the field it is about (the field is
 `aria-invalid`, the message is in its `.ui-field`), for the kind of address, the settings and
 the switch as a `role="alert"` next to them; never in a toast.
+
+### Own certificates (`/system/certificates`)
+
+| Hook                                                         | What                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `certificates-page`                                          | the page                                                                                                                                                                                                                                                                                                  |
+| `certificates-unavailable`                                   | notice where the installation cannot serve own certificates; `data-problem` is the reason of the API (`no_directory`, `no_secret`, `not_writable`)                                                                                                                                                        |
+| `certificate-add`                                            | "Zertifikat hinzufügen" in the header (one element; disabled where certificates are unavailable). The empty list repeats it as `certificate-add-empty`                                                                                                                                                    |
+| `certificates-table`                                         | the `<table>` of the stored certificates                                                                                                                                                                                                                                                                  |
+| `certificate`                                                | each stored certificate: a `<tbody>` of two rows (the columns, and below them warning and details), `data-id`, `data-name`, `data-status="valid\|expires_soon\|expired\|not_yet_valid"`                                                                                                                   |
+| `certificate-names`                                          | the list of the names it is valid for, one `<li>` each                                                                                                                                                                                                                                                    |
+| `certificate-warning`                                        | a warning of the API about it, `data-warning` (`no_intermediate`)                                                                                                                                                                                                                                         |
+| `certificate-details`                                        | `<details>` with subject, issuer, chain, serial number, fingerprint, validity, stored and changed; closed at first, a click on it (its `<summary>`) opens it                                                                                                                                              |
+| `certificate-fingerprint`                                    | the SHA-256 fingerprint inside the details; its text is the fingerprint as the API gives it (lower-case hex, no separators)                                                                                                                                                                               |
+| `certificate-replace`, `certificate-remove`                  | the buttons "Ersetzen" and "Entfernen" of a certificate, named "Zertifikat … ersetzen/entfernen"                                                                                                                                                                                                          |
+| `certificate-remove-confirm`                                 | the confirming button of the dialog "Zertifikat entfernen", which names the addresses that lose the certificate                                                                                                                                                                                           |
+| `certificate-hosts`                                          | the `<table>` "Adressen dieser Installation"                                                                                                                                                                                                                                                              |
+| `certificate-host`                                           | each row of it, `data-host`, `data-source="uploaded\|other\|default\|unreachable\|unknown"`, `data-certificate` = name of the stored certificate the proxy answers with (empty otherwise)                                                                                                                 |
+| `certificate-host-pending`                                   | in such a row: a stored certificate is meant for the address and the proxy does not answer with it (yet): "Der Proxy übernimmt … in wenigen Sekunden". While the page asks again after a change, and for the proxy's stand-in (`default`) at any time                                                     |
+| `certificate-host-shadowed`                                  | in such a row, instead of the former once nothing was just changed or the asking again has ended: the proxy keeps serving a certificate it fetched itself (`data-source="other"`) although a stored one is meant for the address. Names the stored certificate and the manual section "Zertifikate (TLS)" |
+| `certificate-host-expected`                                  | in such a row: the stored certificate meant for the address, where the proxy did not answer or cannot be asked                                                                                                                                                                                            |
+| `certificate-host-mismatch`                                  | in such a row: what is served is not valid for the address                                                                                                                                                                                                                                                |
+| `certificate-hosts-refresh`                                  | "Neu prüfen": reads the list again                                                                                                                                                                                                                                                                        |
+| `certificate-hosts-unreachable`, `certificate-hosts-stalled` | notices above that table: the bundled proxy does not answer (an own reverse proxy?); the proxy is still behind after the page asked five times                                                                                                                                                            |
+| `certificate-name`                                           | in the dialog: text field "Name"                                                                                                                                                                                                                                                                          |
+| `certificate-format`                                         | radio group "Format", `data-value`; inputs `value="pem"`, `value="pkcs12"`                                                                                                                                                                                                                                |
+| `certificate-file`, `certificate-text`                       | PEM: the file input and the text area of the certificate (a chosen file is read into the text area)                                                                                                                                                                                                       |
+| `certificate-key-file`, `certificate-key-text`               | PEM: the same for the private key                                                                                                                                                                                                                                                                         |
+| `certificate-pkcs12-file`                                    | PKCS#12: the file input; `certificate-pkcs12-chosen` names the chosen file                                                                                                                                                                                                                                |
+| `certificate-passphrase`                                     | password field "Passphrase", in both formats                                                                                                                                                                                                                                                              |
+| `certificate-save`                                           | "Zertifikat hinzufügen" / "Ersetzen"                                                                                                                                                                                                                                                                      |
+| `certificate-error`                                          | each message about the upload, `data-code` = error code of the API (or `not_pem`, `file_unreadable` for a file the dialog itself refuses). At the field it is about, inside its `.ui-field`; what is about no field stands above the buttons (`role="alert"` inside)                                      |
+| `certificate-replace-other`                                  | after `names_taken`: "Stattdessen „…“ ersetzen" turns the dialog into the one of that certificate                                                                                                                                                                                                         |
+
+The entry in the navigation is the link "Zertifikate", after "Proxy-Vorlagen". The dialogs are
+named "Zertifikat hinzufügen", "Zertifikat „…“ ersetzen" and "Zertifikat entfernen".

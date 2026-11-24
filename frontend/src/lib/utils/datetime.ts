@@ -17,6 +17,14 @@ export function formatDateTime(iso: string | null | undefined, lang: Language): 
   }).format(date);
 }
 
+/** The day alone, e.g. "20.11.2026": for a validity, where the minute says nothing. */
+export function formatDate(iso: string | null | undefined, lang: Language): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(LOCALES[lang] ?? LOCALES.de, { dateStyle: 'medium' }).format(date);
+}
+
 /** Which greeting fits the hour of the day. */
 export function dayPart(date: Date = new Date()): 'morning' | 'day' | 'evening' {
   const hour = date.getHours();

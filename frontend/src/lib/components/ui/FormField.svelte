@@ -20,6 +20,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     // `bind:error`, or say with `onedit` how the page forgets it.
     error?: string;
     onedit?: () => void;
+    // Attributes of the message while it is an error: a hook for tests, the code behind it.
+    errorAttrs?: Record<string, string | undefined>;
     children: Snippet;
   }
 
@@ -31,6 +33,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     hint,
     error = $bindable(),
     onedit,
+    errorAttrs,
     children,
   }: Props = $props();
 
@@ -83,7 +86,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   {/if}
   {@render children()}
   {#if error}
-    <span class="msg error" id={msgId}>{error}</span>
+    <span class="msg error" id={msgId} {...errorAttrs}>{error}</span>
   {:else if hint}
     <span class="msg" id={msgId}>{hint}</span>
   {/if}

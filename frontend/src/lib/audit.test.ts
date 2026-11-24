@@ -310,6 +310,68 @@ describe('audit log texts', () => {
     });
   });
 
+  describe('about own certificates', () => {
+    const en = (key: string, vars?: Record<string, string | number | null | undefined>) =>
+      translate('en', key, vars);
+    const fingerprint = '3f9a1c2b7d4e5f60a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718';
+    const details = {
+      names: ['*.example.com', 'example.com'],
+      fingerprint,
+      not_after: '2027-03-12T10:00:00+00:00',
+    };
+
+    it('knows the actions the backend records for them', () => {
+      expect(AUDIT_ACTIONS).toEqual(
+        expect.arrayContaining(['certificate.add', 'certificate.replace', 'certificate.remove']),
+      );
+      expect(auditActionLabel('certificate.add', de)).toBe('Zertifikat hinzugefügt');
+      expect(auditActionLabel('certificate.replace', de)).toBe('Zertifikat ersetzt');
+      expect(auditActionLabel('certificate.remove', de)).toBe('Zertifikat entfernt');
+      expect(auditActionLabel('certificate.add', en)).toBe('Certificate added');
+      expect(auditActionLabel('certificate.replace', en)).toBe('Certificate replaced');
+      expect(auditActionLabel('certificate.remove', en)).toBe('Certificate removed');
+    });
+
+    it('names the names a certificate is valid for and the beginning of its fingerprint', () => {
+      expect(auditDetail({ action: 'certificate.add', details }, de)).toBe(
+        'Gilt für: *.example.com, example.com · Fingerabdruck: 3f9a1c2b7d4e5f60…',
+      );
+      expect(auditDetail({ action: 'certificate.remove', details }, en)).toBe(
+        'Valid for: *.example.com, example.com · Fingerprint: 3f9a1c2b7d4e5f60…',
+      );
+    });
+
+    it('says which certificate a renewal took the place of', () => {
+      const before = { ...details, fingerprint: `9c1d${fingerprint.slice(4)}` };
+      expect(
+        auditDetail({ action: 'certificate.replace', details: { ...details, before } }, de),
+      ).toBe(
+        'Gilt für: *.example.com, example.com · Fingerabdruck: 3f9a1c2b7d4e5f60… · vorher: 9c1d1c2b7d4e5f60…',
+      );
+      expect(
+        auditDetail({ action: 'certificate.replace', details: { ...details, before } }, en),
+      ).toContain('previously: 9c1d1c2b7d4e5f60…');
+      // An entry without it says what it has.
+      expect(auditDetail({ action: 'certificate.replace', details }, de)).toBe(
+        'Gilt für: *.example.com, example.com · Fingerabdruck: 3f9a1c2b7d4e5f60…',
+      );
+    });
+
+    it('says what an entry holds and nothing it does not', () => {
+      expect(auditDetail({ action: 'certificate.add', details: {} }, de)).toBe('');
+      expect(auditDetail({ action: 'certificate.add', details: { names: [] } }, de)).toBe('');
+      expect(
+        auditDetail({ action: 'certificate.remove', details: { names: ['a.example'] } }, de),
+      ).toBe('Gilt für: a.example');
+      expect(
+        auditDetail(
+          { action: 'certificate.replace', details: { fingerprint, before: 'gone', names: 7 } },
+          de,
+        ),
+      ).toBe('Fingerabdruck: 3f9a1c2b7d4e5f60…');
+    });
+  });
+
   it('stay silent when there is nothing to add', () => {
     expect(auditDetail({ action: 'user.delete', details: {} }, de)).toBe('');
     expect(auditDetail({ action: 'unknown.action', details: { a: 1 } }, de)).toBe('');

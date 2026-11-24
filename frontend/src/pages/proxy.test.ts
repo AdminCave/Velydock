@@ -454,6 +454,7 @@ describe('System administration: proxy templates', () => {
       '/system/tenants',
       '/system/users',
       '/system/proxy-templates',
+      '/system/certificates',
       '/system/settings',
       '/system/audit',
     ]);

@@ -38,6 +38,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     /** A failure to report. Shown above the footer, where it stays in view however far
      *  the body is scrolled. */
     error?: string;
+    /** Attributes of that failure's box: a hook for tests, the code behind it. */
+    errorAttrs?: Record<string, string | undefined>;
     /** False: the dialog closes through its own buttons only. No X in the header, and
      *  neither Escape nor a click beside it does anything. For content that is shown
      *  once and must not vanish by accident. */
@@ -57,6 +59,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     description,
     width = '520px',
     error = '',
+    errorAttrs,
     dismissible = true,
     dirty = false,
     onClose,
@@ -253,7 +256,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         {@render children()}
       </div>
       {#if error}
-        <div class="modal-error">
+        <div class="modal-error" {...errorAttrs}>
           <Callout tone="danger" role="alert">{error}</Callout>
         </div>
       {/if}

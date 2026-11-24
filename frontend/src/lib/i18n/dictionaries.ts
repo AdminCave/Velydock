@@ -11,6 +11,7 @@ import { account } from './messages/account';
 import { admin } from './messages/admin';
 import { system } from './messages/system';
 import { proxy } from './messages/proxy';
+import { certificates } from './messages/certificates';
 
 export type Language = 'de' | 'en';
 
@@ -28,6 +29,7 @@ const sources: Messages[] = [
   system,
   icons,
   proxy,
+  certificates,
 ];
 
 function build(index: 0 | 1): Record<string, string> {

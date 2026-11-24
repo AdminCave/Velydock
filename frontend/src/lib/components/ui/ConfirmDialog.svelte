@@ -37,6 +37,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     </Button>
     <Button
       variant={request?.tone === 'neutral' ? 'primary' : 'danger'}
+      data-testid={request?.confirmTestid}
       onclick={() => settle(true)}
     >
       {request?.confirmLabel ?? $t('action.confirm')}

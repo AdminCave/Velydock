@@ -31,6 +31,7 @@ export const SYSTEM_NAV: readonly NavEntry[] = [
     label: 'nav.system.proxyTemplates',
     permission: 'system:admin',
   },
+  { path: '/system/certificates', label: 'nav.system.certificates', permission: 'system:admin' },
   { path: '/system/settings', label: 'nav.system.settings', permission: 'system:admin' },
   { path: '/system/audit', label: 'nav.system.audit', permission: 'system:admin' },
 ];

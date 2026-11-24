@@ -166,6 +166,12 @@ describe('dictionaries', () => {
       'proxy.mode.',
       'proxy.published.',
       'audit.publication.',
+      // lib/certificates.test.ts keeps these to the codes of the API, none more.
+      'certificates.error.',
+      'certificates.problem.',
+      'certificates.purpose.',
+      'certificates.status.',
+      'certificates.warning.',
     ];
     const dead = de.filter(
       (key) => !dynamic.some((prefix) => key.startsWith(prefix)) && !code.includes(`'${key}'`),
